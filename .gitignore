@@ -1,0 +1,24 @@
+# Local credentials and machine-specific files
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+.codex/
+.agents/
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated deployment files and tooling
+dist/
+node_modules/
+.wrangler/
+.tools/
+*.log
+*.tmp
+

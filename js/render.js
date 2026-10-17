@@ -1,0 +1,2012 @@
+'use strict';
+// 渲染：相机（平移/缩放/视图过渡）、地面与等距建筑分块缓存、分析图层、地铁网络、动态对象、标注
+(function (CM) {
+  const U = CM.U, CFG = CM.CFG, D = CM.DATA, LU = CM.LU;
+  const ISO = [0.70710678, -0.70710678, 0.35355339, 0.35355339];
+  const HSF = 0.82;                          // 高度屏幕系数
+  const EX = 2.0 / CFG.CELL_M;               // 米 → 世界单位（夸张）
+  const LEVELS = [8, 16, 32, 64];
+  const CHUNK_PX = 512;
+  const MAX_H = 5.0;                          // 世界单位（建筑最大高度，含广州塔天线）
+  const FONT = '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif';
+  const UNDER_DEPTH = 4;                      // 地下视图中地下线路的视觉下沉倍数
+
+  // 地图主题：浅色为「云雾淡彩」风格（浅蓝白底、柔和水面、水墨山峦、玻璃色楼宇）；深色为同风格夜景
+  const THEMES = {
+    light: {
+      night: false, bg: [234, 241, 247], bgUnder: [214, 225, 238],
+      fog: [238, 244, 250], cloud: [255, 255, 255],
+      ground: {
+        land: '#edf2f6', farm: ['#e6efe5', '#e9f1e8', '#e3ece3'], hill: ['#b4ccd0', '#adc7cc', '#bcd2d5'], park: '#d2e7cc',
+        urban: { 1: '#f0f4f8', 2: '#f0f4f8', 3: '#f0f3f7', 4: '#f0f4f8', 6: '#f0f4f7', 10: '#eef3f2', 0: '#f0f4f8' },
+        airport: '#e7ecf1', runway: '#c8d2dd', apron: '#dbe2ea', water: '#94c0e3', bank: '#bcd8ee', glint: 'rgba(255,255,255,0.4)', wood: 'rgba(170,205,180,0.42)', parkEdge: 'rgba(130,180,130,0.3)',
+      },
+      pal: {
+        1: [[216, 226, 239], [208, 220, 236], [224, 231, 242], [202, 215, 233]],
+        2: [[178, 199, 228], [190, 208, 233], [168, 191, 224]],
+        3: [[214, 221, 230], [206, 213, 224]],
+        4: [[206, 219, 237], [215, 225, 239]],
+        6: [[219, 228, 239], [226, 233, 242]],
+        0: [[226, 231, 237], [218, 225, 233]],
+      },
+      shadow2d: 'rgba(70,100,140,0.10)', bldStroke: 'rgba(100,130,170,0.16)', parkTree: 'rgba(125,180,125,0.5)',
+      road: { local: '#ffffff', localCase: '#dee5ee', coll: '#ffffff', collCase: '#d0dbe7', art: '#ffffff', artCase: '#bfccdc', exp: '#f8fafd', expCase: '#a9b9cd', expLine: 'rgba(170,186,208,0.55)', bridgeCase: '#93a3b9', tunnel: 'rgba(140,156,178,0.45)', rail: '#ffffff', railCase: '#a5b1c2' },
+      lockFill: 'rgba(226,233,241,0.62)', lockHatch: 'rgba(150,166,188,0.2)',
+      ink: '#1c2c45', halo: 'rgba(255,255,255,0.92)', district: '#58708f', landmarkInk: '#36557d', roadInk: '#7a8ca6', lockInk: '#7a889e',
+      stFill: '#ffffff', stInter: '#25334a', isoShadow: 'rgba(80,110,150,0.10)', roofOld: [[226, 232, 240], [214, 222, 232]], roofInd: [222, 228, 236],
+      tree: [[134, 188, 128], [112, 170, 112]], trunk: '#8f9c85', elevCase: 'rgba(90,112,145,0.45)', lineCase: 'rgba(255,255,255,0.96)', pier: '#a9b5c6',
+      lm2d: { fill: '#e5ebf2', stroke: '#9fb1c8' }, edgeLine: 'rgba(90,120,160,0.12)',
+      peak: { top: [78, 128, 140], base: [210, 228, 232], ridge: 'rgba(50,92,104,0.3)' },
+    },
+    dark: {
+      night: true, bg: [17, 25, 37], bgUnder: [9, 14, 22],
+      fog: [17, 26, 39], cloud: [58, 78, 106],
+      ground: {
+        land: '#192333', farm: ['#1a2633', '#192431', '#1c2836'], hill: ['#21393d', '#1f3639', '#253f42'], park: '#1c3530',
+        urban: { 1: '#1f2a3a', 2: '#1f2a3a', 3: '#1f2939', 4: '#1f2a3a', 6: '#1f2a39', 10: '#202c33', 0: '#1f2a3a' },
+        airport: '#212b38', runway: '#364254', apron: '#29333f', water: '#1c3f61', bank: '#284f73', glint: 'rgba(140,190,240,0.18)', wood: 'rgba(36,72,62,0.55)', parkEdge: 'rgba(70,130,100,0.35)',
+      },
+      pal: {
+        1: [[60, 76, 100], [56, 72, 96], [66, 80, 104], [58, 74, 100]],
+        2: [[52, 74, 110], [60, 82, 118], [48, 70, 106]],
+        3: [[62, 70, 84], [58, 66, 80]],
+        4: [[64, 78, 100], [58, 74, 98]],
+        6: [[66, 76, 94], [62, 72, 90]],
+        0: [[62, 68, 80], [58, 64, 76]],
+      },
+      shadow2d: 'rgba(0,0,0,0.32)', bldStroke: 'rgba(140,170,210,0.14)', parkTree: 'rgba(70,130,100,0.55)',
+      road: { local: '#2b384b', localCase: '#162030', coll: '#324157', collCase: '#131c2a', art: '#3d4f68', artCase: '#0f1723', exp: '#4b6080', expCase: '#0e1520', expLine: 'rgba(150,180,220,0.3)', bridgeCase: '#080d15', tunnel: 'rgba(110,130,160,0.4)', rail: '#5a6678', railCase: '#0c121b' },
+      lockFill: 'rgba(8,12,20,0.5)', lockHatch: 'rgba(110,128,156,0.16)',
+      ink: '#e6edf7', halo: 'rgba(12,18,28,0.88)', district: '#8ea2bd', landmarkInk: '#a9c4e8', roadInk: '#8d9db3', lockInk: '#95a3b7',
+      stFill: '#ffffff', stInter: '#0e1622', isoShadow: 'rgba(0,0,0,0.28)', roofOld: [[78, 90, 108], [70, 80, 98]], roofInd: [72, 82, 98],
+      tree: [[52, 108, 82], [42, 92, 70]], trunk: '#3e4a44', elevCase: 'rgba(0,0,0,0.6)', lineCase: 'rgba(10,16,26,0.92)', pier: '#4a566a',
+      lm2d: { fill: '#2c3646', stroke: '#7d93b4' }, edgeLine: 'rgba(160,185,220,0.10)',
+      peak: { top: [44, 78, 84], base: [24, 36, 48], ridge: 'rgba(150,200,210,0.18)' },
+    },
+  };  let TH = THEMES.light, GROUND = TH.ground, PAL = TH.pal;
+
+  function Renderer(canvas) {
+    this.cv = canvas; this.ctx = canvas.getContext('2d');
+    this.dpr = 1; this.w = 0; this.h = 0;
+    this.cam = { cx: 30, cy: 40, zoom: 13, tz: 13, anchor: null, view: 0, t: 0, under: 0, tu: 0, fly: null };
+    this.ground = new Map(); this.iso = new Map(); this.cachePx = 0;
+    this.overview = null; this.overviewStale = true; this.overviewAt = 0;
+    this.frame = 0; this.time = 0;
+    this.layer = 'none'; this.layerOpt = { flow: 'all', station: 'all' };
+    this.heat = null; this.heatKey = '';
+    this.bFade = 0; this.roadVer = -1;
+    this.labelsOn = true;
+    this.M = [1, 0, 0, 1]; this.z = 13; this.ox = 0; this.oy = 0; this.hs = 0; this.det = 1;
+    this.stats = { fps: 60, chunksDrawn: 0 };
+    this.linkGrid = null; this.linkGridVer = -1;
+    this.th = TH; this.themeName = 'light';
+    this.mapLabelsOn = true; this.agentsOn = true;
+    this.fx = [];
+  }
+  CM.Renderer = Renderer;
+
+  // ---------------- 氛围：边缘雾化与 2.5D 远处薄雾（按画面尺寸与主题缓存为一张图，每帧只贴图一次） ----------------
+  Renderer.prototype.drawAtmosphere = function (ctx) {
+    const W = this.w, H = this.h, t = Math.round(this.tEase * 10) / 10;
+    const key = W + 'x' + H + ':' + this.themeName + ':' + t;
+    if (this._atmoKey !== key) {
+      const cv = this._atmo || (this._atmo = makeCanvas(1, 1));
+      cv.width = Math.max(1, Math.round(W)); cv.height = Math.max(1, Math.round(H));
+      const g = cv.getContext('2d'), fog = TH.fog || TH.bg;
+      g.clearRect(0, 0, cv.width, cv.height);
+      if (t > 0.05) {
+        const lg = g.createLinearGradient(0, 0, 0, H * 0.4);
+        lg.addColorStop(0, U.rgb(fog, 0.6 * t)); lg.addColorStop(1, U.rgb(fog, 0));
+        g.fillStyle = lg; g.fillRect(0, 0, W, H * 0.4);
+      }
+      const R = Math.hypot(W, H) / 2, rg = g.createRadialGradient(W / 2, H / 2, R * 0.62, W / 2, H / 2, R * 1.04);
+      rg.addColorStop(0, U.rgb(fog, 0)); rg.addColorStop(1, U.rgb(fog, TH.night ? 0.7 : 0.78));
+      g.fillStyle = rg; g.fillRect(0, 0, W, H);
+      this._atmoKey = key;
+    }
+    ctx.drawImage(this._atmo, 0, 0, W, H);
+  };
+
+  // ---------------- 反馈特效（建站涟漪、建成绽放、轨道描绘、拆除烟尘、区域开放） ----------------
+  const FX_DUR = { ripple: 0.9, burst: 1.5, dust: 1.1, trace: 1.3, region: 2.6 };
+  Renderer.prototype.addFx = function (kind, x, y, o) {
+    if (this.game && this.game.preview) return;
+    o = o || {};
+    this.fx.push({ kind: kind, x: x, y: y, o: o, t: -(o.delay || 0), dur: o.dur || FX_DUR[kind] || 1, seed: Math.random() * 1000 });
+    if (this.fx.length > 160) this.fx.shift();
+  };
+  Renderer.prototype.fxRing = function (ctx, x, y, rw) {
+    const tmp = {};
+    ctx.beginPath();
+    for (let a = 0; a <= 24; a++) { const t = a / 24 * Math.PI * 2; this.P(x + Math.cos(t) * rw, y + Math.sin(t) * rw, 0, tmp); if (a) ctx.lineTo(tmp.x, tmp.y); else ctx.moveTo(tmp.x, tmp.y); }
+  };
+  Renderer.prototype.drawFx = function (ctx, dt) {
+    if (!this.fx.length) return;
+    const z = this.z, tmp = {};
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = this.fx.length - 1; i >= 0; i--) {
+      const f = this.fx[i];
+      f.t += dt;
+      if (f.t >= f.dur) { this.fx.splice(i, 1); continue; }
+      if (f.t < 0) continue;
+      const k = f.t / f.dur, e = 1 - Math.pow(1 - k, 3);
+      const col = f.o.color || '#2f6fb6';
+      switch (f.kind) {
+        case 'ripple': {
+          for (let r = 0; r < 2; r++) {
+            const kk = U.clamp(k * 1.3 - r * 0.3, 0, 1); if (kk <= 0 || kk >= 1) continue;
+            ctx.globalAlpha = (1 - kk) * 0.85; ctx.strokeStyle = col; ctx.lineWidth = 3.2 * (1 - kk) + 0.8;
+            this.fxRing(ctx, f.x, f.y, (6 + (1 - Math.pow(1 - kk, 3)) * 34) / z); ctx.stroke();
+          }
+          break;
+        }
+        case 'burst': {
+          const p = this.P(f.x, f.y, 0, tmp), px = p.x, py = p.y;
+          ctx.globalAlpha = (1 - k) * 0.9; ctx.strokeStyle = col; ctx.lineWidth = 3 * (1 - k) + 1;
+          this.fxRing(ctx, f.x, f.y, (8 + e * 46) / z); ctx.stroke();
+          ctx.globalAlpha = (1 - k) * 0.35; ctx.fillStyle = col; this.fxRing(ctx, f.x, f.y, (6 + e * 18) / z); ctx.fill();
+          // 光柱与粒子
+          if (k < 0.6) { const a = 1 - k / 0.6; const g = ctx.createLinearGradient(px, py, px, py - 70); g.addColorStop(0, 'rgba(255,255,255,' + (0.75 * a) + ')'); g.addColorStop(1, 'rgba(255,255,255,0)'); ctx.globalAlpha = 1; ctx.fillStyle = g; ctx.fillRect(px - 3, py - 70 * e, 6, 70 * e); }
+          for (let q = 0; q < 12; q++) {
+            const ang = (q / 12) * Math.PI * 2 + f.seed, d = 10 + e * (28 + 14 * Math.sin(f.seed + q * 3));
+            const x = px + Math.cos(ang) * d, y = py + Math.sin(ang) * d * 0.7 - e * 22 + k * k * 30;
+            ctx.globalAlpha = (1 - k); ctx.fillStyle = q % 3 === 0 ? '#ffffff' : col;
+            ctx.beginPath(); ctx.arc(x, y, 2.6 * (1 - k) + 0.8, 0, Math.PI * 2); ctx.fill();
+          }
+          break;
+        }
+        case 'dust': {
+          const p = this.P(f.x, f.y, 0, tmp), sc = f.o.small ? 0.6 : 1;
+          for (let q = 0; q < 7; q++) {
+            const ang = (q / 7) * Math.PI * 2 + f.seed, d = e * 22 * sc;
+            ctx.globalAlpha = (1 - k) * 0.5; ctx.fillStyle = this.th.night ? '#8b93a1' : '#a89f92';
+            ctx.beginPath(); ctx.arc(p.x + Math.cos(ang) * d, p.y + Math.sin(ang) * d * 0.6 - e * 14 * sc, (5 + e * 9) * sc, 0, Math.PI * 2); ctx.fill();
+          }
+          break;
+        }
+        case 'trace': {
+          const pts = f.o.pts; if (!pts || pts.length < 2) break;
+          const n = Math.max(2, Math.ceil(pts.length * Math.min(1, e * 1.4)));
+          ctx.beginPath();
+          for (let q = 0; q < n; q++) { this.P(pts[q][0], pts[q][1], 0, tmp); if (q) ctx.lineTo(tmp.x, tmp.y); else ctx.moveTo(tmp.x, tmp.y); }
+          const fade = k > 0.65 ? 1 - (k - 0.65) / 0.35 : 1;
+          ctx.globalAlpha = 0.55 * fade; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = this.lineWidthPx() + 9; ctx.stroke();
+          ctx.globalAlpha = 0.9 * fade; ctx.strokeStyle = col; ctx.lineWidth = this.lineWidthPx() + 3; ctx.stroke();
+          const hd = pts[n - 1]; this.P(hd[0], hd[1], 0, tmp);
+          ctx.globalAlpha = fade; ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(tmp.x, tmp.y, 5, 0, Math.PI * 2); ctx.fill();
+          break;
+        }
+        case 'region': {
+          const p = this.P(f.x, f.y, 0, tmp);
+          ctx.globalAlpha = (1 - k) * 0.5; ctx.strokeStyle = '#2fd1bf'; ctx.lineWidth = 6 * (1 - k) + 2;
+          this.fxRing(ctx, f.x, f.y, (30 + e * 160) / z); ctx.stroke();
+          const a = k < 0.15 ? k / 0.15 : (k > 0.75 ? (1 - k) / 0.25 : 1);
+          ctx.globalAlpha = a; ctx.font = '700 15px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.lineWidth = 4; ctx.strokeStyle = this.th.halo; ctx.fillStyle = this.th.night ? '#7ff0e2' : '#0d8a7e';
+          const txt = '新区域开放 · ' + String(f.o.name || '').replace(/（.*）/, '');
+          ctx.strokeText(txt, p.x, p.y - 8 * e); ctx.fillText(txt, p.x, p.y - 8 * e);
+          break;
+        }
+      }
+    }
+    ctx.restore();
+  };
+
+  Renderer.prototype.setGame = function (g) {
+    this.game = g;
+    this.ground.clear(); this.iso.clear(); this.cachePx = 0; this.overviewStale = true; this.heatKey = '';
+    this.roadVer = g ? g.city.roadVersion : -1;
+  };
+  // 切换主题：重建地面与建筑缓存（总览图立即重绘，避免空白）
+  Renderer.prototype.setTheme = function (name) {
+    TH = THEMES[name] || THEMES.light; GROUND = TH.ground; PAL = TH.pal;
+    this.th = TH; this.themeName = name;
+    this.ground.clear(); this.iso.clear(); this.cachePx = 0; this.heatKey = '';
+    if (this.game) this.renderOverview(); else this.overviewStale = true;
+  };
+  Renderer.prototype.resize = function () {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = window.innerWidth, h = window.innerHeight;
+    if (w === this.w && h === this.h && dpr === this.dpr) return;
+    this.dpr = dpr; this.w = w; this.h = h;
+    this.cv.width = Math.round(w * dpr); this.cv.height = Math.round(h * dpr);
+    this.cv.style.width = w + 'px'; this.cv.style.height = h + 'px';
+  };
+
+  // ---------------- 相机 ----------------
+  Renderer.prototype.computeTransform = function () {
+    const c = this.cam, t = U.easeInOut(c.t);
+    const m00 = U.lerp(1, ISO[0], t), m01 = U.lerp(0, ISO[1], t), m10 = U.lerp(0, ISO[2], t), m11 = U.lerp(1, ISO[3], t);
+    this.M = [m00, m01, m10, m11]; this.z = c.zoom;
+    this.det = m00 * m11 - m01 * m10;
+    this.ox = this.w / 2 - (m00 * c.cx + m01 * c.cy) * c.zoom;
+    this.oy = this.h / 2 - (m10 * c.cx + m11 * c.cy) * c.zoom;
+    this.hs = c.zoom * HSF * t;
+    this.tEase = t;
+  };
+  Renderer.prototype.P = function (x, y, h, out) {
+    const M = this.M, z = this.z;
+    out = out || {};
+    out.x = this.ox + (M[0] * x + M[1] * y) * z;
+    out.y = this.oy + (M[2] * x + M[3] * y) * z - (h || 0) * this.hs;
+    return out;
+  };
+  Renderer.prototype.unproject = function (sx, sy) {
+    const M = this.M, a = (sx - this.ox) / this.z, b = (sy - this.oy) / this.z;
+    return { x: (M[3] * a - M[1] * b) / this.det, y: (-M[2] * a + M[0] * b) / this.det };
+  };
+  Renderer.prototype.screenToWorldDelta = function (dx, dy) {
+    const M = this.M, a = dx / this.z, b = dy / this.z;
+    return { x: (M[3] * a - M[1] * b) / this.det, y: (-M[2] * a + M[0] * b) / this.det };
+  };
+  Renderer.prototype.panBy = function (dx, dy) {
+    const d = this.screenToWorldDelta(dx, dy);
+    this.cam.cx -= d.x; this.cam.cy -= d.y; this.cam.fly = null; this.clampCam(); this.computeTransform();
+  };
+  Renderer.prototype.zoomAt = function (sx, sy, factor) {
+    const c = this.cam;
+    c.tz = U.clamp(c.tz * factor, 5, 96);
+    const w = this.unproject(sx, sy);
+    c.anchor = { sx: sx, sy: sy, wx: w.x, wy: w.y };
+    c.fly = null;
+  };
+  Renderer.prototype.flyTo = function (x, y, zoom) {
+    const c = this.cam;
+    c.fly = { fx: c.cx, fy: c.cy, fz: c.zoom, tx: x, ty: y, tzm: zoom || Math.max(c.zoom, 20), t: 0 };
+    c.anchor = null;
+  };
+  Renderer.prototype.setView = function (iso) { this.cam.view = iso ? 1 : 0; };
+  Renderer.prototype.setUnder = function (on) { this.cam.tu = on ? 1 : 0; };
+  Renderer.prototype.clampCam = function () {
+    const c = this.cam;
+    c.cx = U.clamp(c.cx, -2, CFG.W + 2); c.cy = U.clamp(c.cy, -2, CFG.H + 2);
+  };
+  Renderer.prototype.updateCamera = function (dt) {
+    const c = this.cam;
+    if (c.fly) {
+      const f = c.fly; f.t = Math.min(1, f.t + dt / 0.65);
+      const e = U.easeInOut(f.t);
+      c.cx = U.lerp(f.fx, f.tx, e); c.cy = U.lerp(f.fy, f.ty, e);
+      c.zoom = Math.exp(U.lerp(Math.log(f.fz), Math.log(f.tzm), e)); c.tz = c.zoom;
+      if (f.t >= 1) c.fly = null;
+    } else if (Math.abs(c.zoom - c.tz) > 1e-3) {
+      const k = 1 - Math.exp(-dt * 14);
+      c.zoom = Math.exp(U.lerp(Math.log(c.zoom), Math.log(c.tz), k));
+      if (Math.abs(c.zoom - c.tz) / c.tz < 0.002) c.zoom = c.tz;
+      if (c.anchor) {
+        this.computeTransform();
+        const M = this.M, a = (c.anchor.sx - this.w / 2) / c.zoom, b = (c.anchor.sy - this.h / 2) / c.zoom;
+        const dx = (M[3] * a - M[1] * b) / this.det, dy = (-M[2] * a + M[0] * b) / this.det;
+        c.cx = c.anchor.wx - dx; c.cy = c.anchor.wy - dy;
+      }
+    }
+    const tv = c.view;
+    if (c.t !== tv) { const sp = dt / 0.5; c.t = tv > c.t ? Math.min(tv, c.t + sp) : Math.max(tv, c.t - sp); }
+    if (c.under !== c.tu) { const sp = dt / 0.35; c.under = c.tu > c.under ? Math.min(c.tu, c.under + sp) : Math.max(c.tu, c.under - sp); }
+    this.clampCam();
+    this.computeTransform();
+  };
+
+  Renderer.prototype.markDirty = function () {
+    const city = this.game.city;
+    if (city.roadVersion !== this.roadVer) {
+      this.roadVer = city.roadVersion;
+      this.ground.forEach(function (e) { e.stale = true; });
+      this.overviewStale = true;
+    }
+    if (!city.dirty.size) return;
+    const keys = new Set(), ikeys = new Set(), self = this;
+    city.dirty.forEach(function (c) {
+      const i = c % city.W, j = (c / city.W) | 0;
+      for (const lvl of LEVELS) {
+        const C = CHUNK_PX / lvl, Ci = self.isoChunkGeom(lvl);
+        for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+          keys.add(lvl + ':' + Math.floor((i + di * 0.6) / C) + ':' + Math.floor((j + dj * 0.6) / C));
+        }
+        ikeys.add('i' + lvl + ':' + Math.floor(i / Ci) + ':' + Math.floor(j / Ci));
+      }
+    });
+    city.dirty.clear();
+    const g = this.ground, iso = this.iso;
+    keys.forEach(function (k) { const a = g.get(k); if (a) a.stale = true; });
+    ikeys.forEach(function (k) { const b = iso.get(k); if (b) b.stale = true; });
+    this.overviewStale = true;
+    this.heatKey = '';
+  };
+  Renderer.prototype.evict = function () {
+    if (this.cachePx <= CFG.perf.cacheMaxPx) return;
+    const all = [];
+    this.ground.forEach(function (e, k) { all.push([e, k, 'g']); });
+    this.iso.forEach(function (e, k) { all.push([e, k, 'i']); });
+    all.sort(function (a, b) { return a[0].used - b[0].used; });
+    for (const it of all) {
+      if (this.cachePx <= CFG.perf.cacheMaxPx * 0.8) break;
+      if (it[0].used >= this.frame - 2) continue;
+      (it[2] === 'g' ? this.ground : this.iso).delete(it[1]);
+      this.cachePx -= it[0].px;
+    }
+  };
+  function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; }
+
+  // ---------------- 地面绘制（世界坐标） ----------------
+  // 格内单位坐标 (u,v) → 世界坐标
+  Renderer.prototype.quadPt = function (i, j, u, v) {
+    const city = this.game.city, VW = city.VW, vx = city.vx, vy = city.vy;
+    const a = j * VW + i, b = a + 1, c = a + VW + 1, d = a + VW;
+    const x = (vx[a] * (1 - u) + vx[b] * u) * (1 - v) + (vx[d] * (1 - u) + vx[c] * u) * v;
+    const y = (vy[a] * (1 - u) + vy[b] * u) * (1 - v) + (vy[d] * (1 - u) + vy[c] * u) * v;
+    return [x, y];
+  };
+  // 单格建筑（单位坐标 u,v ∈ [0,1]，高度为米）：在 4×4 子地块上稀疏布置，避开真实道路、铁路与水面。
+  // 风格上以少量玻璃塔楼与低层体量为主；coarse=true（远景）时只保留较高的建筑。
+  Renderer.prototype.cellBuildings = function (c, coarse) {
+    const city = this.game.city, L = city.lu[c];
+    if (!city.street[c] && L !== LU.RURAL) return null;
+    const h0 = city.bh[c];
+    if (h0 <= 0) return null;
+    const lf = city.landFrac[c] * (1 - city.taken[c]);
+    if (lf < 0.15) return null;
+    if (L === LU.RURAL && city.pop[c] < 12) return null;
+    if (L !== LU.RURAL && L !== LU.RES && L !== LU.MIX && L !== LU.COM && L !== LU.IND && L !== LU.INST) return null;
+    if (coarse && h0 < 22) return null;
+    const hs = function (k) { return U.hash2(c, k, 91); };
+    const W = city.W, i = c % W, j = (c / W) | 0, BS = city.BS, BW = city.BW, bm = city.bmask;
+    const free = this._free || (this._free = new Uint8Array(16));
+    let nFree = 0;
+    for (let v = 0; v < 4; v++) for (let u = 0; u < 4; u++) {
+      let maj = 0, mn = 0;
+      for (let y = 0; y < 2; y++) { const row = (j * BS + v * 2 + y) * BW + i * BS + u * 2; for (let x = 0; x < 2; x++) { const m = bm[row + x]; if (m >= 2) maj++; else if (m === 1) mn++; } }
+      const f = maj === 0 && mn <= 1 ? 1 : 0;
+      free[v * 4 + u] = f; nFree += f;
+    }
+    if (!nFree) return null;
+    const quadFree = function (qu, qv) { return free[qv * 8 + qu * 2] && free[qv * 8 + qu * 2 + 1] && free[qv * 8 + 4 + qu * 2] && free[qv * 8 + 4 + qu * 2 + 1]; };
+    const out = [];
+    const sub = function (u, v, size, h) { const cx = u * 0.25 + 0.125, cy = v * 0.25 + 0.125, r = size / 2; out.push([cx - r, cy - r, cx + r, cy + r, h, L]); };
+    const quad = function (qu, qv, size, h) { const cx = qu * 0.5 + 0.25, cy = qv * 0.5 + 0.25, r = size / 2; out.push([cx - r, cy - r, cx + r, cy + r, h, L]); };
+    const dens = U.clamp((city.pop[c] + city.jobs[c]) / 3000, 0.2, 1);
+    // 随机挑选可用子地块
+    const pickSubs = function (n, seed) { const got = []; for (let k = 0; k < 16 && got.length < n; k++) { const s2 = (k * 7 + Math.floor(hs(seed) * 16)) % 16; if (free[s2] && got.indexOf(s2) < 0) got.push(s2); } return got; };
+    switch (L) {
+      case LU.RURAL: {
+        if (hs(2) < 0.45) for (const s2 of pickSubs(1, 3)) sub(s2 & 3, s2 >> 2, 0.14, 4 + hs(11) * 4);
+        break;
+      }
+      case LU.RES: case LU.MIX: {
+        if (h0 > 40) {
+          // 高层住宅：1–2 座点式塔楼
+          let n = 0;
+          for (let q = 0; q < 4 && n < (dens > 0.6 ? 2 : 1); q++) { const qq = (q + Math.floor(hs(20) * 4)) % 4; if (quadFree(qq & 1, qq >> 1) && hs(21 + qq) < 0.75) { quad(qq & 1, qq >> 1, 0.22 + hs(24 + qq) * 0.06, h0 * (0.8 + 0.4 * hs(28 + qq))); n++; } }
+          if (!coarse) for (const s2 of pickSubs(1, 33)) sub(s2 & 3, s2 >> 2, 0.18, Math.min(h0, 20) * (0.6 + 0.4 * hs(34)));
+        } else if (!coarse) {
+          const n = Math.round(dens * 1.4 + hs(5) * 0.9);
+          for (const s2 of pickSubs(n, 6)) sub(s2 & 3, s2 >> 2, 0.16 + hs(40 + s2) * 0.05, h0 * (0.7 + 0.6 * hs(50 + s2)));
+        }
+        break;
+      }
+      case LU.COM: {
+        let tower = false;
+        for (let q = 0; q < 4 && !tower; q++) { const qq = (q + Math.floor(hs(60) * 4)) % 4; if (quadFree(qq & 1, qq >> 1)) { quad(qq & 1, qq >> 1, h0 > 50 ? 0.24 + hs(2) * 0.06 : 0.36, h0 * (0.85 + 0.3 * hs(3))); tower = true; } }
+        if (!coarse) for (const s2 of pickSubs(tower ? 1 : 2, 65)) sub(s2 & 3, s2 >> 2, 0.18, h0 * (0.35 + 0.35 * hs(66 + s2)));
+        break;
+      }
+      case LU.IND: {
+        if (coarse) break;
+        let n = 0;
+        for (let q = 0; q < 4 && n < 2; q++) if (quadFree(q & 1, q >> 1) && hs(70 + q) < 0.55) { quad(q & 1, q >> 1, 0.4, h0 * (0.8 + 0.3 * hs(74 + q))); n++; }
+        break;
+      }
+      case LU.INST: {
+        if (coarse) break;
+        for (let q = 0; q < 4; q++) if (quadFree(q & 1, q >> 1) && hs(80 + q) < 0.35) { const cx = (q & 1) * 0.5 + 0.25, cy = (q >> 1) * 0.5 + 0.25; out.push([cx - 0.19, cy - 0.11, cx + 0.19, cy + 0.11, h0 * (0.8 + 0.3 * hs(84 + q)), L]); }
+        break;
+      }
+    }
+    if (!out.length) return null;
+    if (city.taken[c] > 0.05) { const keep = Math.max(0, Math.round(out.length * (1 - city.taken[c]))); out.length = keep; }
+    return out.length ? out : null;
+  };
+
+  Renderer.prototype.drawGround = function (ctx, X0, Y0, X1, Y1, lvl) {
+    const g = this.game, city = g.city, W = city.W, H = city.H, Geo = CM.Geo;
+    const i0 = Math.max(0, Math.floor(X0)), j0 = Math.max(0, Math.floor(Y0)), i1 = Math.min(W, Math.ceil(X1)), j1 = Math.min(H, Math.ceil(Y1));
+    const px = 1 / lvl;
+    const inBox = function (b, m) { return b[2] >= X0 - m && b[0] <= X1 + m && b[3] >= Y0 - m && b[1] <= Y1 + m; };
+    ctx.fillStyle = GROUND.land; ctx.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+    // 地块底色（按颜色批量）
+    const paths = new Map();
+    const P = function (col) { let p = paths.get(col); if (!p) { p = new Path2D(); paths.set(col, p); } return p; };
+    for (let j = j0; j < j1; j++) {
+      for (let i = i0; i < i1; i++) {
+        const c = j * W + i, L = city.lu[c];
+        let col;
+        if (L === LU.WATER) col = GROUND.farm[0];
+        else if (L === LU.HILL) col = GROUND.hill[Math.floor(U.noise2(i * 0.35, j * 0.35, 5) * 3) % 3];
+        else if (L === LU.AIRPORT) col = GROUND.airport;
+        else if (city.street[c] && L !== LU.PARK) col = GROUND.urban[L] || GROUND.urban[0];
+        else col = GROUND.farm[Math.floor(U.hash2(i >> 1, j >> 1, 3) * 3)];
+        P(col).rect(i - px, j - px, 1 + 2 * px, 1 + 2 * px);
+      }
+    }
+    paths.forEach(function (p, col) { ctx.fillStyle = col; ctx.fill(p); });
+    // 林地（真实范围）
+    ctx.fillStyle = GROUND.wood;
+    const wp = new Path2D();
+    for (const f of Geo.woods) if (inBox(f.bbox, 0.5)) Geo.tracePoly(wp, f);
+    ctx.fill(wp, 'evenodd');
+    // 风景区山体：雾蓝绿色
+    const rp = new Path2D(); let anyR = false;
+    for (const f of Geo.reserves) if (inBox(f.bbox, 0.5)) { Geo.tracePoly(rp, f); anyR = true; }
+    if (anyR) { ctx.fillStyle = GROUND.hill[0]; ctx.globalAlpha = 0.85; ctx.fill(rp, 'evenodd'); ctx.globalAlpha = 1; }
+    // 公园（真实范围）
+    const pp = new Path2D();
+    for (const f of Geo.parks) if (inBox(f.bbox, 0.5)) Geo.tracePoly(pp, f);
+    ctx.fillStyle = GROUND.park; ctx.fill(pp, 'evenodd');
+    if (lvl >= 16) { ctx.strokeStyle = GROUND.parkEdge; ctx.lineWidth = px * 1.2; ctx.stroke(pp); }
+    // 旧机场跑道
+    const ab = city.airportBox;
+    if (ab && city.lu.indexOf(LU.AIRPORT) >= 0 && inBox(ab, 1)) {
+      const cx = (ab[0] + ab[2]) / 2, len = (ab[3] - ab[1]) * 0.78, y0 = (ab[1] + ab[3]) / 2 - len / 2;
+      ctx.fillStyle = GROUND.apron; ctx.fillRect(cx - 1.3, y0 + len * 0.3, 0.9, len * 0.32);
+      ctx.fillStyle = GROUND.runway; ctx.fillRect(cx - 0.12, y0, 0.24, len);
+      ctx.strokeStyle = '#f4f4f0'; ctx.lineWidth = Math.max(px, 0.02); ctx.setLineDash([0.3, 0.3]);
+      ctx.beginPath(); ctx.moveTo(cx, y0 + 0.2); ctx.lineTo(cx, y0 + len - 0.2); ctx.stroke(); ctx.setLineDash([]);
+    }
+    // 水系（真实岸线）
+    const wpth = new Path2D();
+    for (const f of Geo.water) if (inBox(f.bbox, 0.5)) Geo.tracePoly(wpth, f);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = GROUND.bank; ctx.lineWidth = Math.max(0.05, px * 2.4); ctx.stroke(wpth);
+    ctx.fillStyle = GROUND.water; ctx.fill(wpth, 'evenodd');
+    // 水面波纹（近景）
+    if (lvl >= 16) {
+      ctx.save(); ctx.clip(wpth, 'evenodd');
+      ctx.strokeStyle = GROUND.glint; ctx.lineWidth = px * 1.2;
+      ctx.beginPath();
+      for (let j = Math.floor(Y0); j < Y1; j += 0.7) for (let i = Math.floor(X0); i < X1; i += 1.3) {
+        const hx = U.hash2(Math.round(i * 10), Math.round(j * 10), 17); if (hx > 0.35) continue;
+        const x = i + hx * 1.5, y = j + U.hash2(Math.round(i * 10), Math.round(j * 10), 18) * 0.5;
+        ctx.moveTo(x, y); ctx.lineTo(x + 0.35, y - 0.06);
+      }
+      ctx.stroke(); ctx.restore();
+    }
+    for (const l of Geo.waterLines) {
+      if (!inBox(l.bbox, 0.5)) continue;
+      ctx.strokeStyle = GROUND.water; ctx.lineWidth = Math.max(l.w, px * 1.5);
+      ctx.beginPath(); Geo.traceLine(ctx, l.p); ctx.stroke();
+    }
+    // 2D 建筑占地（近景才显示，保持平面图简洁）
+    if (lvl >= 32) {
+      const shadow = new Path2D();
+      const fills = new Map();
+      for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+        const c = j * W + i;
+        if (this.isLmCenter(c)) continue;
+        const bl = this.cellBuildings(c);
+        if (!bl) continue;
+        for (let k = 0; k < bl.length; k++) {
+          const b = bl[k];
+          const x0 = i + b[0], y0 = j + b[1], x1 = i + b[2], y1 = j + b[3];
+          const off = Math.min(0.08, 0.008 + b[4] * 0.0005);
+          shadow.rect(x0 + off, y0 + off, x1 - x0, y1 - y0);
+          const pal = PAL[b[5]] || PAL[0];
+          const col = U.rgb(pal[Math.floor(U.hash2(c, k, 4) * pal.length)]);
+          let fp = fills.get(col); if (!fp) { fp = new Path2D(); fills.set(col, fp); }
+          fp.rect(x0, y0, x1 - x0, y1 - y0);
+        }
+      }
+      ctx.fillStyle = TH.shadow2d; ctx.fill(shadow);
+      ctx.strokeStyle = TH.bldStroke; ctx.lineWidth = px;
+      fills.forEach(function (p, col) { ctx.fillStyle = col; ctx.fill(p); if (lvl >= 32) ctx.stroke(p); });
+    }
+    // 公园树木（2D）
+    if (lvl >= 32) {
+      ctx.fillStyle = TH.parkTree;
+      ctx.beginPath();
+      for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+        const c = j * W + i, L = city.lu[c];
+        if (L !== LU.PARK && L !== LU.HILL && city.wood[c] < 0.5) continue;
+        for (let k = 0; k < 4; k++) {
+          const x = i + 0.12 + U.hash2(c, k, 61) * 0.76, y = j + 0.12 + U.hash2(c, k, 62) * 0.76;
+          if (city.waterAt(x, y) || city.bmask[Math.floor(y * city.BS) * city.BW + Math.floor(x * city.BS)] >= 2) continue;
+          ctx.moveTo(x + 0.06, y); ctx.arc(x, y, 0.06, 0, Math.PI * 2);
+        }
+      }
+      ctx.fill();
+    }
+    // 铁路
+    const RD = TH.road;
+    for (const r of Geo.rail) {
+      if (!inBox(r.bbox, 0.5) || (r.flags & 2)) continue;
+      if ((r.flags & 16) && g.clock.y < 2009) continue;
+      ctx.beginPath(); Geo.traceLine(ctx, r.p);
+      ctx.strokeStyle = RD.railCase; ctx.lineWidth = Math.max(0.05, px * 2.6); ctx.stroke();
+      ctx.strokeStyle = RD.rail; ctx.lineWidth = Math.max(0.025, px * 1.2);
+      if (lvl >= 32) ctx.setLineDash([0.06, 0.06]);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    // 支路：只在已开发的街区显示
+    const streets = Geo.streetBk && lvl >= 16 ? Geo.query(Geo.streetBk, X0 - 0.5, Y0 - 0.5, X1 + 0.5, Y1 + 0.5) : [];
+    const st = new Path2D();
+    for (const k of streets) {
+      const p = Geo.streets[k].p;
+      for (let q = 0; q + 3 < p.length; q += 2) {
+        const c = city.cellAt((p[q] + p[q + 2]) / 2, (p[q + 1] + p[q + 3]) / 2);
+        if (c < 0 || !city.street[c] || city.lu[c] === LU.PARK) continue;
+        st.moveTo(p[q], p[q + 1]); st.lineTo(p[q + 2], p[q + 3]);
+      }
+    }
+    // 主要道路（已通车）
+    const ways = city.roadWayBk ? Geo.query(city.roadWayBk, X0 - 0.5, Y0 - 0.5, X1 + 0.5, Y1 + 0.5) : [];
+    const lay = { 2: [], 3: [], 4: [] }, links = [], tunnels = [];
+    for (const k of ways) {
+      const w = city.roadWays[k];
+      if (!city.roadsBuilt[w.g]) continue;
+      const gr = city.roadGroups[w.g];
+      if (gr.flags & 2) tunnels.push(w); else if (gr.flags & 4) links.push(w); else lay[gr.cls].push(w);
+    }
+    const path = function (arr) { const p = new Path2D(); for (const w of arr) Geo.traceLine(p, w.p); return p; };
+    const bridgePath = function (arr) { const p = new Path2D(); for (const w of arr) if (city.roadGroups[w.g].flags & 1) Geo.traceLine(p, w.p); return p; };
+    const P2 = path(lay[2]), P3 = path(lay[3]), P4 = path(lay[4]), PL = path(links), PT = path(tunnels);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // 路缘（桥梁加深）
+    ctx.strokeStyle = RD.localCase; ctx.lineWidth = Math.max(0.05, px * 2.2); ctx.stroke(st);
+    ctx.strokeStyle = RD.collCase; ctx.lineWidth = Math.max(0.085, px * 2.8); ctx.stroke(P2);
+    ctx.strokeStyle = RD.artCase; ctx.lineWidth = Math.max(0.12, px * 3.4); ctx.stroke(P3);
+    ctx.strokeStyle = RD.expCase; ctx.lineWidth = Math.max(0.065, px * 2.4); ctx.stroke(PL);
+    ctx.lineWidth = Math.max(0.16, px * 4.2); ctx.stroke(P4);
+    ctx.strokeStyle = RD.bridgeCase;
+    ctx.lineWidth = Math.max(0.12, px * 3.6); ctx.stroke(bridgePath(lay[3])); ctx.stroke(bridgePath(lay[2]));
+    ctx.lineWidth = Math.max(0.17, px * 4.4); ctx.stroke(bridgePath(lay[4]));
+    // 路面
+    ctx.strokeStyle = RD.local; ctx.lineWidth = Math.max(0.03, px * 1.1); ctx.stroke(st);
+    ctx.strokeStyle = RD.coll; ctx.lineWidth = Math.max(0.055, px * 1.7); ctx.stroke(P2);
+    ctx.strokeStyle = RD.art; ctx.lineWidth = Math.max(0.085, px * 2.3); ctx.stroke(P3);
+    ctx.strokeStyle = RD.exp; ctx.lineWidth = Math.max(0.04, px * 1.4); ctx.stroke(PL);
+    ctx.lineWidth = Math.max(0.12, px * 3); ctx.stroke(P4);
+    if (tunnels.length) { ctx.strokeStyle = RD.tunnel; ctx.lineWidth = Math.max(0.05, px * 1.6); ctx.setLineDash([0.12, 0.08]); ctx.stroke(PT); ctx.setLineDash([]); }
+    if (lvl >= 32 && lay[4].length) { ctx.strokeStyle = RD.expLine; ctx.lineWidth = px; ctx.stroke(P4); }
+    // 地标占地（2D）
+    for (let k = 0; k < D.landmarks.length; k++) {
+      if (!city.landmarkOn[k]) continue;
+      const lm = D.landmarks[k], R = Math.max(lm.w, lm.d) / CFG.CELL_M;
+      if (lm.x < X0 - R || lm.x > X1 + R || lm.y < Y0 - R || lm.y > Y1 + R) continue;
+      this.drawLandmark2D(ctx, lm, lvl);
+    }
+    // 未开放区域
+    const lock = new Path2D(); let anyLock = false;
+    for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+      const c = j * W + i;
+      const rg = city.regions[city.region[c]];
+      if (city.regionOpen[city.region[c]] || rg.scenic || city.lu[c] === LU.WATER) continue;
+      lock.rect(i - px, j - px, 1 + 2 * px, 1 + 2 * px); anyLock = true;
+    }
+    if (anyLock) {
+      ctx.save();
+      ctx.clip(lock);
+      ctx.fillStyle = TH.lockFill; ctx.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+      ctx.strokeStyle = TH.lockHatch; ctx.lineWidth = Math.max(px, 0.04);
+      ctx.beginPath();
+      for (let k = Math.floor((X0 + Y0) / 0.6) * 0.6; k < X1 + Y1; k += 0.6) { ctx.moveTo(k - Y0, Y0); ctx.lineTo(k - Y1, Y1); }
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+  // 地标占地（2D 平面）：真实场地范围 + 主体建筑轮廓
+  Renderer.prototype.drawLandmark2D = function (ctx, lm, lvl) {
+    const F = TH.lm2d, N = TH.night, CMM = CFG.CELL_M;
+    const ang = (lm.rot || 0) * Math.PI / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+    const T = function (u, v) { return [lm.x + (u * ca - v * sa) / CMM, lm.y + (u * sa + v * ca) / CMM]; };
+    const hw = lm.w / 2, hd = lm.d / 2;
+    ctx.save();
+    ctx.lineWidth = Math.max(1 / lvl, 0.012); ctx.strokeStyle = F.stroke;
+    const poly = function (pts, fill, stroke) { ctx.beginPath(); pts.forEach(function (p, k) { if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath(); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke !== false) ctx.stroke(); };
+    const rect = function (u0, v0, u1, v1, fill, stroke) { poly([T(u0, v0), T(u1, v0), T(u1, v1), T(u0, v1)], fill, stroke); };
+    const ngon = function (cu, cv, r, n, rot, rv) { const o = []; for (let k = 0; k < n; k++) { const t = k / n * Math.PI * 2 + (rot || 0); o.push(T(cu + Math.cos(t) * r, cv + Math.sin(t) * (rv == null ? r : rv))); } return o; };
+    const lawn = N ? '#1f3a28' : '#cfe4bf', plaza = N ? '#2c3340' : '#ece6da', bld = F.fill;
+    switch (lm.kind) {
+      case 'campus': ctx.globalAlpha = 0.35; rect(-hw, -hd, hw, hd, lawn, false); ctx.globalAlpha = 1; break; // 校园内建筑由街区生成，此处只铺草地底色
+      case 'memorial': case 'hall':
+        rect(-hw, -hd, hw, hd, lawn, false);
+        rect(-12, -hd, 12, hd, plaza, false);
+        if (lm.kind === 'hall') { poly(ngon(0, 0, 31, 8, Math.PI / 8), '#4a83c4'); poly(ngon(0, 0, 14, 8, Math.PI / 8), '#7fb0e0', false); }
+        else rect(-18, -18, 18, 18, '#f2f2ee');
+        break;
+      case 'stadium':
+        rect(-hw, -hd, hw, hd, lm.w > 500 ? lawn : plaza, false);
+        if (lm.w > 500) {
+          poly(ngon(0, -70, 150, 36, 0, 125), N ? '#3b4250' : '#eceee9'); poly(ngon(0, -70, 108, 36, 0, 90), '#c8644a', false); poly(ngon(0, -70, 90, 36, 0, 75), '#7dbb62', false);
+          poly(ngon(-270, 170, 70, 20, 0, 52), N ? '#3b4250' : '#e2e5e9'); rect(200, 125, 340, 210, N ? '#33475c' : '#cfe2ef');
+        } else { poly(ngon(0, 0, hw * 0.95, 30, 0, hd * 0.95), N ? '#3b4250' : '#eceee9'); poly(ngon(0, 0, hw * 0.7, 30, 0, hd * 0.7), '#7dbb62', false); }
+        break;
+      case 'tvtower': poly(ngon(0, 0, 40, 24, 0, 30), N ? '#4a3f66' : '#b9bec6'); poly(ngon(0, 0, 26, 24, 0, 19), N ? '#2b2840' : '#d5d9df', false); poly(ngon(0, 0, 10, 12), N ? '#d07ae0' : '#646a74', false); break;
+      case 'pagoda': rect(-hw, -hd, hw, hd, plaza, false); rect(-77, -32, -23, -12, '#6f6d6a'); rect(-77, 2, -23, 22, '#6f6d6a'); poly(ngon(30, 0, 11, 8, Math.PI / 8), '#cfa96b'); break;
+      case 'minaret': rect(-hw, -hd, hw, hd, plaza, false); rect(-40, -20, 2, 18, '#9aa7ad'); poly(ngon(22, 0, 5, 12), '#e2dccd'); break;
+      case 'tower': rect(-18, -13, 18, 13, '#b5402f'); break;
+      case 'church': rect(-hw, -hd, hw, hd, plaza, false); rect(-50, -16, 20, 16, '#9a9890'); rect(20, -17, 32, -5, '#7a786f'); rect(20, 5, 32, 17, '#7a786f'); break;
+      case 'colonial':
+        rect(-hw, -hd, hw, hd, lm.w > 500 ? (N ? '#22382a' : '#d8e8c8') : plaza, false);
+        if (lm.w > 500) { for (let r = 0; r < 2; r++) for (let k = 0; k < 9; k++) { if (r === 1 && k === 0) continue; const u0 = -hw + 40 + k * (lm.w - 140) / 9, v0 = [-80, 50][r]; rect(u0, v0, u0 + 52, v0 + 46, '#e6c98a'); } rect(-hw + 10, 95, -hw + 150, 140, N ? '#5a6070' : '#f4f4f0'); }
+        else { rect(-60, -60, 60, -44, '#d9cfbb'); rect(-60, 44, 60, 60, '#d9cfbb'); rect(-60, -44, -44, 44, '#d9cfbb'); rect(44, -44, 60, 44, '#d9cfbb'); }
+        break;
+      case 'traditional': case 'temple': rect(-hw, -hd, hw, hd, plaza, false); rect(-hw + 4, -hd + 4, hw - 4, hd - 4, null); break;
+      case 'rail':
+        rect(-hw, -hd, hw, hd, plaza, false);
+        if (lm.w > 500) { for (let k = 0; k < 5; k++) rect(-hw + 40, -120 + k * 34, hw - 40, -102 + k * 34, N ? '#30363f' : '#c9cbd0', false); rect(-170, 60, 170, 110, N ? '#4a5263' : '#dcdde3'); }
+        else rect(-hw + 20, -hd + 30, hw - 20, hd - 50, N ? '#4a5263' : '#dcdde3');
+        break;
+      case 'expo': rect(-hw, -hd, hw, hd, plaza, false); for (let r = 0; r < 3; r++) { const v0 = -hd + 70 + r * (lm.d - 140) / 3; rect(-hw + 60, v0, hw - 60, v0 + (lm.d - 140) / 3 - 50, N ? '#3a4a5c' : '#d4e1ec'); } break;
+      case 'skyscraper':
+        rect(-hw, -hd, hw, hd, plaza, false);
+        if (lm.style === 'citic') { rect(-100, -100, 100, 100, N ? '#3a4152' : '#e2e0db'); rect(-24, -60, 24, -12, N ? '#4a6080' : '#c6d6e2'); }
+        else rect(-hw * 0.9, -hd * 0.9, hw * 0.9, hd * 0.9, N ? '#4a6080' : '#c6d6e2');
+        break;
+      case 'opera': rect(-hw, -hd, hw, hd, plaza, false); poly(ngon(-30, 0, 62, 7, 0.2, 48), N ? '#4c525e' : '#dcdcd8'); poly(ngon(62, 38, 32, 6, 0.6, 25), N ? '#4c525e' : '#dcdcd8'); break;
+      case 'box': rect(-hw, -hd, hw, hd, plaza, false); rect(-58, -58, 58, 58, N ? '#40424a' : '#8e8e94'); break;
+      case 'concert': poly([T(-58, -26), T(56, -38), T(48, 36), T(-52, 30)], N ? '#5a6474' : '#eef0f2'); break;
+      case 'gallery': poly(ngon(0, 0, 46, 5, -Math.PI / 2), N ? '#4a5262' : '#f4f4f2'); break;
+      default: rect(-hw * 0.8, -hd * 0.8, hw * 0.8, hd * 0.8, bld);
+    }
+    ctx.restore();
+  };
+  Renderer.prototype.renderGroundChunk = function (lvl, ci, cj) {
+    const C = CHUNK_PX / lvl, x0 = ci * C, y0 = cj * C;
+    const cv = makeCanvas(CHUNK_PX + 2, CHUNK_PX + 2), ctx = cv.getContext('2d');
+    ctx.setTransform(lvl, 0, 0, lvl, -x0 * lvl + 1, -y0 * lvl + 1);
+    this.drawGround(ctx, x0 - 1 / lvl, y0 - 1 / lvl, x0 + C + 1 / lvl, y0 + C + 1 / lvl, lvl);
+    return cv;
+  };
+  Renderer.prototype.renderOverview = function () {
+    const lvl = 4, cv = makeCanvas(CFG.W * lvl, CFG.H * lvl), ctx = cv.getContext('2d');
+    ctx.setTransform(lvl, 0, 0, lvl, 0, 0);
+    this.drawGround(ctx, 0, 0, CFG.W, CFG.H, lvl);
+    this.overview = cv; this.overviewStale = false; this.overviewAt = performance.now();
+  };
+
+  // ---------------- 等距建筑分块 ----------------
+  Renderer.prototype.isoChunkGeom = function (lvl, ci, cj) {
+    const C = CHUNK_PX / lvl / 1.41421356 | 0 || 1;
+    return C;
+  };
+  Renderer.prototype.renderIsoChunk = function (lvl, ci, cj, C) {
+    const city = this.game.city, W = city.W, H = city.H;
+    const i0 = ci * C, j0 = cj * C;
+    const s = lvl, coarse = s < 16;
+    let hasHill = false;
+    for (let j = j0; j < Math.min(H, j0 + C) && !hasHill; j++) for (let i = i0; i < Math.min(W, i0 + C); i++) if (city.lu[j * W + i] === LU.HILL) { hasHill = true; break; }
+    const pad = hasHill ? 2.8 * s : 4;   // 山峰会越出所在格
+    const minX = (i0 - (j0 + C)) * ISO[0] * s - pad, maxX = ((i0 + C) - j0) * ISO[0] * s + pad;
+    const minY = (i0 + j0) * ISO[2] * s - MAX_H * HSF * s - pad, maxY = (i0 + j0 + 2 * C) * ISO[2] * s + pad;
+    const cv = makeCanvas(maxX - minX, maxY - minY), ctx = cv.getContext('2d');
+    const ox = -minX, oy = -minY;
+    const pj = function (x, y, h) { return [(x - y) * ISO[0] * s + ox, (x + y) * ISO[2] * s + oy - h * HSF * s]; };
+    let drew = 0;
+    for (let sum = i0 + j0; sum <= i0 + j0 + 2 * C - 2; sum++) {
+      for (let i = Math.max(i0, sum - (j0 + C - 1)); i <= Math.min(i0 + C - 1, sum - j0); i++) {
+        const j = sum - i;
+        if (i >= W || j >= H || i < 0 || j < 0) continue;
+        const c = j * W + i, L = city.lu[c];
+        if (L === LU.WATER || L === LU.LANDMARK) continue;
+        if (L === LU.HILL) { drew += this.isoPeak(ctx, pj, c, i, j, s); continue; }
+        if (L === LU.PARK || (city.wood[c] > 0.5 && !city.street[c])) { drew += this.isoTrees(ctx, pj, c, i, j, coarse ? 1 : 3, s); continue; }
+        if (L === LU.RURAL && !city.street[c] && city.pop[c] < 12) { if (U.hash2(c, 1, 77) < 0.2) drew += this.isoTrees(ctx, pj, c, i, j, 1, s); }
+        if (this.isLmCenter(c)) continue;
+        const bl = this.cellBuildings(c, coarse);
+        if (!bl) continue;
+        for (let k = 0; k < bl.length; k++) { this.isoBox(ctx, pj, i, j, bl[k], c, k, s); drew++; }
+      }
+    }
+    return { cv: cv, ax: (i0 - j0) * ISO[0] * s + ox, ay: (i0 + j0) * ISO[2] * s + oy, px: cv.width * cv.height, empty: drew === 0 };
+  };
+  // 已建成地标中心所在的格不再放普通建筑（由地标模型占用）
+  Renderer.prototype.isLmCenter = function (c) {
+    const city = this.game.city;
+    if (!this._lmc || this._lmcCity !== city) { this._lmcCity = city; this._lmc = new Map(); D.landmarks.forEach((lm, k) => this._lmc.set(city.cellAt(lm.x, lm.y), k)); }
+    const k = this._lmc.get(c);
+    return k !== undefined && city.landmarkOn[k] === 1;
+  };
+  // 地标精灵：每个地标按缩放级别单独缓存（大型场地不受分块裁切），在其中心所在分块之后绘制
+  Renderer.prototype.landmarkSprite = function (k, lvl) {
+    const key = 'L' + lvl + ':' + k;
+    let e = this.iso.get(key);
+    if (e && !e.stale) { e.used = this.frame; return e; }
+    const lm = D.landmarks[k], s = lvl;
+    const R = Math.hypot(lm.w, lm.d) / 2 / CFG.CELL_M + 0.15;
+    const tall = lm.kind === 'tvtower' || lm.kind === 'skyscraper';
+    const hMax = (lm.h || (lm.kind === 'pagoda' ? 70 : (lm.kind === 'church' ? 62 : 55))) * EX * (tall ? 1.05 : 1.6) + 0.05;
+    const xs = [lm.x - R, lm.x + R], ys = [lm.y - R, lm.y + R];
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    for (const x of xs) for (const y of ys) { const px = (x - y) * ISO[0] * s, py = (x + y) * ISO[2] * s; minX = Math.min(minX, px); maxX = Math.max(maxX, px); minY = Math.min(minY, py); maxY = Math.max(maxY, py); }
+    minY -= hMax * HSF * s;
+    const padd = 6, cv = makeCanvas(maxX - minX + 2 * padd, maxY - minY + 2 * padd), ctx = cv.getContext('2d');
+    const ox = -minX + padd, oy = -minY + padd;
+    const pj = function (x, y, h) { return [(x - y) * ISO[0] * s + ox, (x + y) * ISO[2] * s + oy - h * HSF * s]; };
+    try { this.isoLandmark(ctx, pj, lm, s); } catch (err) { console.error(err); }
+    e = { cv: cv, ax: (lm.x - lm.y) * ISO[0] * s + ox, ay: (lm.x + lm.y) * ISO[2] * s + oy, px: cv.width * cv.height, used: this.frame, born: this.time, stale: false };
+    const old = this.iso.get(key); if (old) this.cachePx -= old.px;
+    this.iso.set(key, e); this.cachePx += e.px;
+    return e;
+  };
+  // ---------- 等距几何辅助：任意凸多边形棱柱、棱锥、椭圆 ----------
+  function polyRect(x0, y0, x1, y1) { return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]; }
+  function fillPts(ctx, pts, col) { ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); ctx.fill(); }
+  // 棱柱：底面多边形（世界坐标，任意方向），高度 h0→h1（世界单位）；可见侧面按远近排序并按朝向着色
+  function prism(ctx, pj, pts, h0, h1, wall, top, opt) {
+    opt = opt || {};
+    const n = pts.length;
+    let area = 0; for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+    const sgn = area > 0 ? 1 : -1;
+    const faces = [];
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      const ex = b[0] - a[0], ey = b[1] - a[1];
+      const nx = sgn * ey, ny = -sgn * ex, nl = Math.hypot(nx, ny) || 1;
+      const vx = nx / nl, vy = ny / nl;
+      if (vx + vy <= 0.001) continue;
+      faces.push({ a: a, b: b, d: a[0] + a[1] + b[0] + b[1], f: 0.72 + 0.17 * Math.max(0, vx) - 0.04 * Math.max(0, vy) });
+    }
+    faces.sort(function (p, q) { return p.d - q.d; });
+    for (const fc of faces) {
+      const q = [pj(fc.a[0], fc.a[1], h0), pj(fc.b[0], fc.b[1], h0), pj(fc.b[0], fc.b[1], h1), pj(fc.a[0], fc.a[1], h1)];
+      fillPts(ctx, q, U.rgb(U.shade(wall, fc.f)));
+      if (opt.lines) { opt.lines(fc, q); }
+    }
+    if (top) fillPts(ctx, pts.map(function (p) { return pj(p[0], p[1], h1); }), U.rgb(top));
+    return faces;
+  }
+  // 棱锥 / 坡顶：多边形底边 h0 收向顶点 (cx,cy,h1)
+  function pyramidN(ctx, pj, pts, cx, cy, h0, h1, col) {
+    const n = pts.length, tip = pj(cx, cy, h1);
+    const faces = [];
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      const mx = (a[0] + b[0]) / 2 - cx, my = (a[1] + b[1]) / 2 - cy;
+      faces.push({ a: a, b: b, d: mx + my, f: 0.78 + 0.16 * (mx > 0 ? 1 : 0) + 0.08 * (my > 0 ? -1 : 0) });
+    }
+    faces.sort(function (p, q) { return p.d - q.d; });
+    for (const fc of faces) fillPts(ctx, [pj(fc.a[0], fc.a[1], h0), pj(fc.b[0], fc.b[1], h0), tip], U.rgb(U.shade(col, fc.f)));
+  }
+
+  // 简洁玻璃体量：两个立面 + 顶面；高楼带一道高光，夜间少量暖色窗光（不画窗格，保证性能）
+  Renderer.prototype.isoBox = function (ctx, pj, i, j, b, c, k, s) {
+    const h = b[4] * EX;
+    const A = [i + b[0], j + b[1]], B = [i + b[2], j + b[1]], C = [i + b[2], j + b[3]], Dd = [i + b[0], j + b[3]];
+    const Bb = pj(B[0], B[1], 0), Cb = pj(C[0], C[1], 0), Db = pj(Dd[0], Dd[1], 0);
+    const At = pj(A[0], A[1], h), Bt = pj(B[0], B[1], h), Ct = pj(C[0], C[1], h), Dt = pj(Dd[0], Dd[1], h);
+    const pal = PAL[b[5]] || PAL[0];
+    const base = pal[Math.floor(U.hash2(c, k, 4) * pal.length)];
+    const tall = b[4] > 40;
+    if (s >= 16) {
+      const so = Math.min(1.0, h * 0.45);
+      const Cs = pj(C[0] + so, C[1] - so * 0.2, 0), Bs = pj(B[0] + so, B[1] - so * 0.2, 0);
+      fillPts(ctx, [Bb, Bs, Cs, Cb], TH.isoShadow);
+    }
+    if (tall && s >= 16) {
+      const gS = ctx.createLinearGradient(0, Dt[1], 0, Db[1]);
+      gS.addColorStop(0, U.rgb(U.shade(base, TH.night ? 0.9 : 0.97))); gS.addColorStop(1, U.rgb(U.shade(base, TH.night ? 0.62 : 0.8)));
+      const gE = ctx.createLinearGradient(0, Bt[1], 0, Bb[1]);
+      gE.addColorStop(0, U.rgb(U.shade(base, TH.night ? 1.05 : 1.08))); gE.addColorStop(1, U.rgb(U.shade(base, TH.night ? 0.75 : 0.9)));
+      fillPts(ctx, [Db, Cb, Ct, Dt], gS); fillPts(ctx, [Bb, Cb, Ct, Bt], gE);
+      ctx.strokeStyle = TH.night ? 'rgba(170,200,240,0.25)' : 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(Ct[0], Ct[1] + 1); ctx.lineTo(Cb[0], Cb[1]); ctx.stroke();
+    } else {
+      fillPts(ctx, [Db, Cb, Ct, Dt], U.rgb(U.shade(base, 0.82)));
+      fillPts(ctx, [Bb, Cb, Ct, Bt], U.rgb(U.shade(base, 0.93)));
+    }
+    fillPts(ctx, [At, Bt, Ct, Dt], U.rgb(U.shade(base, TH.night ? 1.12 : 1.07)));
+    // 夜景：少量亮窗
+    if (TH.night && s >= 16 && b[4] >= 10) {
+      const rows = Math.min(7, Math.floor(b[4] / 14) + 1);
+      ctx.fillStyle = 'rgba(255,214,140,0.85)';
+      for (let r = 0; r < rows; r++) for (let q = 0; q < 2; q++) {
+        if (U.hash2(c * 7 + k, r * 3 + q, 13) > 0.45) continue;
+        const t = 0.3 + q * 0.4, hh = (r + 0.6) / rows * h;
+        const fx = Dd[0] + (C[0] - Dd[0]) * t, fy = Dd[1] + (C[1] - Dd[1]) * t, p = pj(fx, fy, hh);
+        ctx.fillRect(p[0] - 1, p[1] - 0.8, 2, 1.6);
+      }
+    }
+  };
+  // 圆冠树
+  Renderer.prototype.isoTrees = function (ctx, pj, c, i, j, n, s) {
+    let cnt = 0;
+    const T = TH.tree[0];
+    for (let k = 0; k < n; k++) {
+      const x = i + 0.15 + U.hash2(c, k, 61) * 0.7, y = j + 0.15 + U.hash2(c, k, 62) * 0.7;
+      const r = (0.07 + U.hash2(c, k, 63) * 0.05) * s * 0.85;
+      const t = pj(x, y, 0.07 + U.hash2(c, k, 64) * 0.04);
+      const v = 0.92 + U.hash2(c, k, 65) * 0.16;
+      ctx.fillStyle = U.rgb(U.shade(T, v * 0.86)); ctx.beginPath(); ctx.arc(t[0], t[1], Math.max(1, r), 0, Math.PI * 2); ctx.fill();
+      if (s >= 16) { ctx.fillStyle = U.rgb(U.shade(T, v * 1.12)); ctx.beginPath(); ctx.arc(t[0] - r * 0.25, t[1] - r * 0.3, r * 0.55, 0, Math.PI * 2); ctx.fill(); }
+      cnt++;
+    }
+    return cnt;
+  };
+  // 山体深度（到山区边缘的格数），用于山峰高度
+  Renderer.prototype.hillDepth = function () {
+    const city = this.game.city;
+    if (this._hd && this._hdCity === city) return this._hd;
+    const W = city.W, H = city.H, N = city.N, d = new Float32Array(N).fill(1e9), q = [];
+    for (let c = 0; c < N; c++) if (city.lu[c] !== LU.HILL) { d[c] = 0; q.push(c); }
+    for (let h = 0; h < q.length; h++) {
+      const c = q[h], i = c % W, j = (c / W) | 0;
+      for (const o of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + o[0], jj = j + o[1]; if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue; const n2 = jj * W + ii; if (d[n2] > d[c] + 1) { d[n2] = d[c] + 1; q.push(n2); } }
+    }
+    this._hd = d; this._hdCity = city;
+    return d;
+  };
+  // 水墨山峰：渐变填充的山形剪影，山脚融入雾中
+  Renderer.prototype.isoPeak = function (ctx, pj, c, i, j, s) {
+    const depth = this.hillDepth()[c], pk = TH.peak;
+    const m = Math.min(1, depth / 5);
+    if (U.hash2(c, 3, 41) > 0.16 + 0.12 * m) return 0;
+    const cx = i + 0.2 + U.hash2(c, 1, 42) * 0.6, cy = j + 0.2 + U.hash2(c, 2, 43) * 0.6;
+    const hm = (60 + 320 * m) * (0.55 + 0.75 * U.hash2(c, 4, 44));
+    const r = (1.1 + 1.5 * m + U.hash2(c, 5, 45) * 0.7) * s;
+    const P0 = pj(cx, cy, 0), A0 = pj(cx, cy, hm * EX * 0.6), A = [A0[0] + (U.hash2(c, 8, 47) - 0.5) * r * 0.5, A0[1]];
+    const by = P0[1] + r * 0.18;
+    const g = ctx.createLinearGradient(0, A[1], 0, by);
+    g.addColorStop(0, U.rgb(pk.top, 0.95)); g.addColorStop(0.5, U.rgb(U.mixc(pk.top, pk.base, 0.55), 0.8)); g.addColorStop(1, U.rgb(pk.base, 0));
+    const jit = function (k) { return (U.hash2(c, k, 46) - 0.5); };
+    const pts = [[P0[0] - r, by]];
+    for (let k = 1; k <= 3; k++) { const t = k / 4; pts.push([P0[0] - r + (A[0] - P0[0] + r) * t + jit(k) * r * 0.22, by + (A[1] - by) * Math.pow(t, 0.8) + jit(k + 5) * r * 0.16]); }
+    pts.push([A[0], A[1]]);
+    for (let k = 1; k <= 3; k++) { const t = k / 4; pts.push([A[0] + (P0[0] + r - A[0]) * t + jit(k + 10) * r * 0.22, A[1] + (by - A[1]) * Math.pow(t, 1.25) + jit(k + 15) * r * 0.16]); }
+    pts.push([P0[0] + r, by]);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    ctx.quadraticCurveTo(P0[0], by + r * 0.12, pts[0][0], pts[0][1]); ctx.fill();
+    // 背光面
+    const g2 = ctx.createLinearGradient(0, A[1], 0, by);
+    g2.addColorStop(0, U.rgb(U.shade(pk.top, 0.72), 0.55)); g2.addColorStop(1, U.rgb(pk.top, 0));
+    ctx.fillStyle = g2; ctx.beginPath(); ctx.moveTo(A[0], A[1]);
+    for (let k = 5; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    ctx.lineTo(P0[0] + r * 0.15, by); ctx.closePath(); ctx.fill();
+    if (s >= 16) { ctx.strokeStyle = pk.ridge; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pts[1][0], pts[1][1]); for (let k = 2; k <= 4; k++) ctx.lineTo(pts[k][0], pts[k][1]); ctx.stroke(); }
+    // 山脚云雾
+    const mg = ctx.createRadialGradient(P0[0], by - r * 0.05, 0, P0[0], by - r * 0.05, r * 1.1);
+    mg.addColorStop(0, U.rgb(TH.fog, 0.55)); mg.addColorStop(1, U.rgb(TH.fog, 0));
+    ctx.fillStyle = mg; ctx.beginPath(); ctx.ellipse(P0[0], by - r * 0.05, r * 1.1, r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+    return 1;
+  };
+
+  // 截锥（两环之间的侧面 + 顶面），用于层檐、穹顶与塔身收分
+  function frustumRings(ctx, pj, b, t, h0, h1, col, cx, cy, noTop) {
+    const n = b.length, faces = [];
+    let rmax = 0; for (const p of b) rmax = Math.max(rmax, Math.hypot(p[0] - cx, p[1] - cy));
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; const mx = (b[i][0] + b[j][0]) / 2 - cx, my = (b[i][1] + b[j][1]) / 2 - cy; faces.push({ i: i, j: j, d: mx + my, f: 0.74 + 0.2 * U.clamp((mx - my * 0.3) / (rmax || 1), 0, 1) }); }
+    faces.sort(function (p, q) { return p.d - q.d; });
+    for (const fc of faces) fillPts(ctx, [pj(b[fc.i][0], b[fc.i][1], h0), pj(b[fc.j][0], b[fc.j][1], h0), pj(t[fc.j][0], t[fc.j][1], h1), pj(t[fc.i][0], t[fc.i][1], h1)], U.rgb(U.shade(col, fc.f)));
+    if (!noTop) fillPts(ctx, t.map(function (p) { return pj(p[0], p[1], h1); }), U.rgb(U.shade(col, 1.06)));
+  }
+
+  // 地标精细模型：局部坐标为米（u 向东、v 向南，绕场地中心旋转 rot 度），高度为米
+  Renderer.prototype.isoLandmark = function (ctx, pj, lm, s) {
+    const N = TH.night, CMM = CFG.CELL_M, kind = lm.kind, detail = true;
+    const ang = (lm.rot || 0) * Math.PI / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+    const T = function (u, v) { return [lm.x + (u * ca - v * sa) / CMM, lm.y + (u * sa + v * ca) / CMM]; };
+    const tall = kind === 'tvtower' || kind === 'skyscraper';
+    const E = EX * (tall ? 1 : 1.6);
+    const hw = lm.w / 2, hd = lm.d / 2;
+    const Rc = function (u0, v0, u1, v1) { return [T(u0, v0), T(u1, v0), T(u1, v1), T(u0, v1)]; };
+    const NG = function (cu, cv, r, n, rot, rv) { const o = []; for (let k = 0; k < n; k++) { const t = k / n * Math.PI * 2 + (rot || 0); o.push(T(cu + Math.cos(t) * r, cv + Math.sin(t) * (rv == null ? r : rv))); } return o; };
+    const box = function (u0, v0, u1, v1, h0, h1, wall, top, opt) { return prism(ctx, pj, Rc(u0, v0, u1, v1), h0 * E, h1 * E, wall, top === undefined ? U.shade(wall, 1.08) : top, opt); };
+    const poly = function (pts, h0, h1, wall, top, opt) { return prism(ctx, pj, pts, h0 * E, h1 * E, wall, top === undefined ? U.shade(wall, 1.06) : top, opt); };
+    const cyl = function (cu, cv, r, n, h0, h1, wall, top, rot, rv) { return poly(NG(cu, cv, r, n, rot, rv), h0, h1, wall, top); };
+    const hip = function (u0, v0, u1, v1, h0, h1, col) { const c = T((u0 + u1) / 2, (v0 + v1) / 2); pyramidN(ctx, pj, Rc(u0, v0, u1, v1), c[0], c[1], h0 * E, h1 * E, col); };
+    const cone = function (cu, cv, r, n, h0, h1, col, rot) { const c = T(cu, cv); pyramidN(ctx, pj, NG(cu, cv, r, n, rot), c[0], c[1], h0 * E, h1 * E, col); };
+    const eaveN = function (cu, cv, r0, r1, n, h0, h1, col, rot) { const c = T(cu, cv); frustumRings(ctx, pj, NG(cu, cv, r0, n, rot), NG(cu, cv, r1, n, rot), h0 * E, h1 * E, col, c[0], c[1]); };
+    const eaveR = function (u0, v0, u1, v1, over, h0, h1, col) { const c = T((u0 + u1) / 2, (v0 + v1) / 2); frustumRings(ctx, pj, Rc(u0 - over, v0 - over, u1 + over, v1 + over), Rc(u0 + over * 0.3, v0 + over * 0.3, u1 - over * 0.3, v1 - over * 0.3), h0 * E, h1 * E, col, c[0], c[1]); };
+    // 两坡顶：沿 u 方向的屋脊
+    const gable = function (u0, v0, u1, v1, h0, h1, col, ridge) {
+      const vm = (v0 + v1) / 2, A = T(u0, vm), B = T(u1, vm);
+      const RA = pj(A[0], A[1], h1 * E), RB = pj(B[0], B[1], h1 * E);
+      const p = function (u, v) { const w = T(u, v); return pj(w[0], w[1], h0 * E); };
+      fillPts(ctx, [p(u0, v0), p(u1, v0), RB, RA], U.rgb(U.shade(col, 0.78)));
+      fillPts(ctx, [p(u0, v1), p(u1, v1), RB, RA], U.rgb(col));
+      if (ridge && s >= 16) { ctx.strokeStyle = ridge; ctx.lineWidth = Math.max(1, s / 30); ctx.beginPath(); ctx.moveTo(RA[0], RA[1]); ctx.lineTo(RB[0], RB[1]); ctx.stroke(); }
+    };
+    const line = function (u0, v0, h0, u1, v1, h1, col, w) { const a = T(u0, v0), b = T(u1, v1), A = pj(a[0], a[1], h0 * E), B = pj(b[0], b[1], h1 * E); ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); };
+    const dot = function (u, v, h, r, col) { const a = T(u, v), A = pj(a[0], a[1], h * E); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(A[0], A[1], r, 0, Math.PI * 2); ctx.fill(); };
+    // 夜间亮窗：立面 (u0,v0)-(u1,v1)，高度 h0-h1（米）
+    const lit = function (u0, v0, u1, v1, h0, h1, rows, cols) {
+      if (!N || s < 16) return;
+      ctx.fillStyle = 'rgba(255,214,140,0.85)';
+      for (let rr = 0; rr < rows; rr++) for (let q = 0; q < cols; q++) {
+        const t = (q + 0.5) / cols, hh = h0 + (h1 - h0) * (rr + 0.5) / rows;
+        const w = T(u0 + (u1 - u0) * t, v0 + (v1 - v0) * t), p = pj(w[0], w[1], hh * E);
+        ctx.fillRect(p[0] - 0.8, p[1] - 0.8, 1.6, 1.6);
+      }
+    };
+    // 场地内的树
+    const trees = function (n, seed, avoid) {
+      const T0 = TH.tree[0], rr = Math.max(1.2, 9 / CMM * s * 0.8);
+      const list = [];
+      for (let k = 0; k < n; k++) {
+        const u = (U.hash2(k, seed, 3) - 0.5) * lm.w * 0.92, v = (U.hash2(k, seed, 4) - 0.5) * lm.d * 0.92;
+        if (avoid && avoid(u, v)) continue;
+        list.push([u, v]);
+      }
+      list.sort(function (a, b) { const A = T(a[0], a[1]), B = T(b[0], b[1]); return (A[0] + A[1]) - (B[0] + B[1]); });
+      for (const t of list) {
+        const w = T(t[0], t[1]), p = pj(w[0], w[1], 12 * EX);
+        const v2 = 0.85 + U.hash2(Math.round(t[0]), Math.round(t[1]), 7) * 0.3;
+        ctx.fillStyle = U.rgb(U.shade(T0, v2 * 0.82)); ctx.beginPath(); ctx.arc(p[0], p[1], rr, 0, Math.PI * 2); ctx.fill();
+        if (s >= 32) { ctx.fillStyle = U.rgb(U.shade(T0, v2 * 1.1)); ctx.beginPath(); ctx.arc(p[0] - rr * 0.25, p[1] - rr * 0.3, rr * 0.6, 0, Math.PI * 2); ctx.fill(); }
+      }
+    };
+    const glass = N ? [70, 96, 130] : [176, 205, 228], white = N ? [120, 126, 140] : [242, 242, 238], stone = N ? [112, 108, 104] : [214, 206, 192];
+    switch (kind) {
+      case 'hall': { // 中山纪念堂：八角形宝蓝琉璃瓦大屋顶、四面抱厦
+        const wall = [238, 228, 206], blue = [40, 96, 170], gold = [222, 176, 64];
+        if (detail) trees(26, 11, function (u, v) { return Math.abs(u) < 70 && Math.abs(v) < 70 || (Math.abs(u) < 16 && v > 0); });
+        box(-46, -46, 46, 46, 0, 3, [210, 204, 190]);
+        for (const d of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+          const pu = d[0] * 36, pv = d[1] * 36, w = 12;
+          box(pu - w, pv - w, pu + w, pv + w, 3, 15, wall, null);
+          hip(pu - w - 3, pv - w - 3, pu + w + 3, pv + w + 3, 15, 22, blue);
+        }
+        poly(NG(0, 0, 31, 8, Math.PI / 8), 3, 24, wall, null, { lines: function (fc, q) { if (s < 16) return; ctx.strokeStyle = 'rgba(176,48,40,0.85)'; ctx.lineWidth = Math.max(1, s / 40); ctx.beginPath(); for (let t = 0.2; t < 1; t += 0.3) { ctx.moveTo(q[0][0] + (q[1][0] - q[0][0]) * t, q[0][1] + (q[1][1] - q[0][1]) * t); ctx.lineTo(q[3][0] + (q[2][0] - q[3][0]) * t, q[3][1] + (q[2][1] - q[3][1]) * t); } ctx.stroke(); } });
+        eaveN(0, 0, 42, 28, 8, 24, 29, blue, Math.PI / 8);
+        cyl(0, 0, 23, 8, 29, 33, wall, null, Math.PI / 8);
+        cone(0, 0, 31, 8, 33, 46, blue, Math.PI / 8);
+        line(0, 0, 46, 0, 0, 52, U.rgb(gold), Math.max(1.5, s / 22));
+        break;
+      }
+      case 'tower': { // 镇海楼：红砂岩台基、五层红墙绿瓦
+        const red = [176, 58, 46], green = [64, 112, 92];
+        box(-18, -13, 18, 13, 0, 5, [160, 112, 96]);
+        for (let k = 0; k < 5; k++) {
+          const w = 15 - k * 1.1, d = 10.5 - k * 0.9, h0 = 5 + k * 4.6;
+          box(-w, -d, w, d, h0, h0 + 3.6, red, null);
+          lit(-w, d, w, d, h0, h0 + 3.6, 1, 4);
+          eaveR(-w, -d, w, d, 2.6, h0 + 3.6, h0 + 4.6, green);
+        }
+        hip(-11, -7, 11, 7, 28, 32, green);
+        break;
+      }
+      case 'pagoda': { // 六榕寺：岭南灰瓦殿宇 + 八角九层花塔（57 m）
+        const body = [236, 210, 160], eaveC = [168, 64, 46], tile = [98, 100, 104], wallT = [196, 186, 170];
+        if (detail) trees(10, 21, function (u, v) { return u > -20; });
+        for (let k = 0; k < 2; k++) { const v0 = -30 + k * 34; box(-75, v0, -25, v0 + 18, 0, 7, wallT, null); gable(-77, v0 - 2, -23, v0 + 20, 7, 11, tile, '#3aa37a'); }
+        const pu = 30, pv = 0;
+        cyl(pu, pv, 11, 8, 0, 2, stone, null, Math.PI / 8);
+        for (let k = 0; k < 9; k++) {
+          const r = 8.5 - k * 0.45, h0 = 2 + k * 6;
+          cyl(pu, pv, r, 8, h0, h0 + 5, body, null, Math.PI / 8);
+          lit(pu - r, pv + r * 0.7, pu + r, pv + r * 0.7, h0 + 1, h0 + 4, 1, 3);
+          eaveN(pu, pv, r + 2.6, r + 0.5, 8, h0 + 5, h0 + 6, eaveC, Math.PI / 8);
+        }
+        line(pu, pv, 56, pu, pv, 63, '#c9a03e', Math.max(1.5, s / 20));
+        break;
+      }
+      case 'minaret': { // 怀圣寺光塔：圆柱形光塔（36 m）与礼拜殿
+        box(-38, -18, 0, 16, 0, 9, white, null); gable(-40, -20, 2, 18, 9, 13, N ? [70, 80, 90] : [120, 140, 150]);
+        cyl(22, 0, 4.5, 14, 0, 33, N ? [150, 146, 138] : [226, 222, 210]);
+        cone(22, 0, 4.8, 14, 33, 38, N ? [140, 130, 110] : [200, 190, 160]);
+        break;
+      }
+      case 'temple': case 'traditional': { // 光孝寺 / 五仙观：沿中轴的殿宇；陈家祠 / 农讲所：三路三进岭南祠堂
+        const wall = kind === 'temple' ? [214, 172, 96] : [196, 186, 170];
+        const tile = kind === 'temple' ? [150, 92, 50] : [96, 98, 102];
+        const ridgeC = kind === 'temple' ? '#d9a33a' : '#3aa37a';
+        if (kind === 'temple' && lm.w > 150) {
+          if (detail) trees(30, 31, function (u, v) { return Math.abs(u) < 60; });
+          for (let k = 0; k < 4; k++) { const v0 = -hd + 30 + k * (lm.d - 60) / 4, w = k === 2 ? 34 : 26; box(-w, v0, w, v0 + 22, 0, 9 + (k === 2 ? 4 : 0), wall, null); gable(-w - 3, v0 - 3, w + 3, v0 + 25, 9 + (k === 2 ? 4 : 0), 15 + (k === 2 ? 6 : 0), tile, ridgeC); }
+        } else {
+          const rows = lm.d > 100 ? 3 : 2, cols = lm.w > 120 ? 3 : 1;
+          for (let r = 0; r < rows; r++) for (let q = 0; q < cols; q++) {
+            const v0 = -hd + 6 + r * (lm.d - 12) / rows, v1 = v0 + (lm.d - 12) / rows * 0.55;
+            const u0 = -hw + 6 + q * (lm.w - 12) / cols, u1 = u0 + (lm.w - 12) / cols - 6;
+            box(u0, v0, u1, v1, 0, 8, wall, null);
+            gable(u0 - 2, v0 - 2, u1 + 2, v1 + 2, 8, 12, tile, ridgeC);
+          }
+        }
+        break;
+      }
+      case 'church': { // 石室圣心大教堂：哥特式双尖塔（58 m）
+        const st = N ? [96, 96, 98] : [158, 156, 150], dark = N ? [70, 70, 74] : [112, 110, 106];
+        box(-48, -15, 20, 15, 0, 22, st, null);
+        gable(-50, -16, 20, 16, 22, 31, dark);
+        lit(-48, 15, 20, 15, 4, 18, 2, 8);
+        for (const dv of [-11, 11]) { box(20, dv - 6, 32, dv + 6, 0, 34, st, null); cone(26, dv, 7.5, 4, 34, 58, dark, Math.PI / 4); }
+        box(20, -5, 30, 5, 0, 24, st, U.shade(st, 1.1));
+        dot(31, 0, 15, Math.max(1.5, s / 18), N ? 'rgba(255,200,120,0.9)' : 'rgba(90,110,150,0.85)');
+        break;
+      }
+      case 'colonial': {
+        if (lm.w > 500) { // 沙面：欧式别墅街区、林荫大道与白天鹅宾馆
+          const wallC = [[236, 212, 156], [232, 220, 196], [214, 190, 160], [226, 200, 170]], roofC = [170, 86, 64];
+          const rowsV = [-80, 50];
+          for (let r = 0; r < 2; r++) {
+            for (let k = 0; k < 9; k++) {
+              const u0 = -hw + 40 + k * (lm.w - 140) / 9, v0 = rowsV[r], w = 52, d = 46;
+              if (r === 1 && k === 0) continue;
+              const col = wallC[(k + r) % 4], h = 10 + U.hash2(k, r, 5) * 9;
+              box(u0, v0, u0 + w, v0 + d, 0, h, col, null);
+              lit(u0, v0 + d, u0 + w, v0 + d, 2, h - 2, 2, 5);
+              hip(u0 - 2, v0 - 2, u0 + w + 2, v0 + d + 2, h, h + 4, roofC);
+            }
+          }
+          if (detail) trees(40, 41, function (u, v) { return !((v > -30 && v < 40) || v < -90 - 10 || v > 110); });
+          // 白天鹅宾馆（1983）：岛西南角的白色板楼
+          box(-hw + 10, 95, -hw + 150, 140, 0, 14, white, null);
+          box(-hw + 30, 100, -hw + 140, 128, 14, 100, white, U.shade(white, 1.05));
+          lit(-hw + 30, 128, -hw + 140, 128, 18, 96, 12, 10);
+        } else { // 黄埔军校：灰瓦合院
+          const wallC = [214, 206, 188], tile = [92, 96, 100];
+          if (detail) trees(18, 51, function (u, v) { return Math.abs(u) < 70 && Math.abs(v) < 70; });
+          box(-60, -60, 60, -44, 0, 9, wallC, null); gable(-62, -62, 62, -42, 9, 13, tile);
+          box(-60, 44, 60, 60, 0, 9, wallC, null); gable(-62, 42, 62, 62, 9, 13, tile);
+          box(-60, -44, -44, 44, 0, 9, wallC, null); box(44, -44, 60, 44, 0, 9, wallC, null);
+          lit(-60, 60, 60, 60, 2, 8, 2, 10);
+          box(-14, 60, 14, 74, 0, 11, [236, 232, 220], null); hip(-16, 58, 16, 76, 11, 15, tile);
+        }
+        break;
+      }
+      case 'museum': { // 南越王墓博物馆：红砂岩阶梯体量与覆斗形墓室
+        const st = [178, 98, 76];
+        if (detail) trees(10, 61, function (u, v) { return Math.abs(u) < 60 && Math.abs(v) < 50; });
+        box(-55, -40, 55, 40, 0, 10, st, U.shade(st, 1.1));
+        box(-35, -26, 35, 26, 10, 18, st, U.shade(st, 1.15));
+        hip(-24, -18, 24, 18, 18, 24, N ? [110, 140, 160] : [150, 196, 214]);
+        break;
+      }
+      case 'memorial': { // 陵园：中轴大道、纪念碑与林木
+        if (detail) trees(70, 71, function (u, v) { return Math.abs(u) < 34 || Math.hypot(u, v) < 60; });
+        const plat = [212, 210, 204];
+        box(-30, -30, 30, 30, 0, 2, plat, U.shade(plat, 1.06));
+        box(-18, -18, 18, 18, 2, 4, plat, U.shade(plat, 1.06));
+        box(-4, -4, 4, 4, 4, 40, [244, 244, 240], null);
+        hip(-4.5, -4.5, 4.5, 4.5, 40, 45, [230, 230, 226]);
+        break;
+      }
+      case 'stadium': { // 天河体育中心（主场 + 体育馆 + 游泳馆）/ 越秀山体育场
+        const big = lm.w > 500;
+        const bowl = function (cu, cv, rx, ry, H, roofOn) {
+          const n = 36;
+          const ringAt = function (sc) { const o = []; for (let k = 0; k < n; k++) { const t = k / n * Math.PI * 2; o.push(T(cu + Math.cos(t) * rx * sc, cv + Math.sin(t) * ry * sc)); } return o; };
+          fillPts(ctx, ringAt(0.72).map(function (p) { return pj(p[0], p[1], 0); }), '#c8644a');
+          fillPts(ctx, ringAt(0.6).map(function (p) { return pj(p[0], p[1], 0); }), '#79b85e');
+          prism(ctx, pj, ringAt(1), 0, H * E, N ? [92, 100, 116] : [206, 210, 216], null, { lines: function (fc, q) { if (!N || s < 16) return; ctx.fillStyle = 'rgba(255,214,140,0.7)'; ctx.fillRect((q[0][0] + q[1][0]) / 2 - 1, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4 - 1, 2, 2); } });
+          const top = ringAt(1).map(function (p) { return pj(p[0], p[1], H * E); }), inner = ringAt(0.76).map(function (p) { return pj(p[0], p[1], H * 0.3 * E); });
+          ctx.fillStyle = N ? '#5a6474' : '#b9c0c8'; ctx.beginPath(); top.forEach(function (p, k) { if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath(); inner.slice().reverse().forEach(function (p, k) { if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath(); ctx.fill('evenodd');
+          if (roofOn) {
+            const rin = ringAt(0.86).map(function (p) { return pj(p[0], p[1], H * 1.12 * E); });
+            ctx.fillStyle = N ? 'rgba(220,230,245,0.85)' : 'rgba(250,250,252,0.96)'; ctx.beginPath(); top.forEach(function (p, k) { if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath(); rin.slice().reverse().forEach(function (p, k) { if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath(); ctx.fill('evenodd');
+          }
+          if (N && s >= 16) for (const q of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { line(cu + q[0] * rx * 0.95, cv + q[1] * ry * 0.95, H, cu + q[0] * rx * 0.95, cv + q[1] * ry * 0.95, H + 18, '#9aa4b2', 1); dot(cu + q[0] * rx * 0.95, cv + q[1] * ry * 0.95, H + 18, 2.2, 'rgba(255,250,220,0.95)'); }
+        };
+        if (big) {
+          if (detail) trees(60, 81, function (u, v) { return Math.hypot(u / 180, (v + 70) / 150) < 1.1 || (Math.abs(u + 270) < 90 && Math.abs(v - 170) < 70) || (Math.abs(u - 270) < 90 && Math.abs(v - 170) < 60); });
+          bowl(0, -70, 150, 125, 30, true);
+          cyl(-270, 170, 70, 20, 0, 18, N ? [96, 104, 120] : [220, 222, 226], null, 0, 52);
+          eaveN(-270, 170, 74, 30, 20, 18, 30, N ? [130, 140, 160] : [196, 206, 220]);
+          box(200, 125, 340, 210, 0, 16, N ? [86, 108, 128] : [196, 220, 236]);
+        } else bowl(0, 0, lm.w / 2 * 0.95, lm.d / 2 * 0.95, 14, false);
+        break;
+      }
+      case 'campus': { // 校园标志建筑（其余校舍由街区建筑生成）
+        const brick = [180, 92, 70], tile = [80, 124, 98];
+        if (lm.id === 'sysu') { // 怀士堂：红砖钟楼礼堂
+          box(-24, -12, 24, 12, 0, 12, brick, null); hip(-26, -14, 26, 14, 12, 18, tile);
+          box(-6, -20, 6, -8, 0, 26, brick, null); hip(-7, -21, 7, -7, 26, 32, tile);
+          lit(-24, 12, 24, 12, 2, 10, 2, 6);
+        } else if (lm.id === 'scut') { // 华工一号楼：宫殿式教学楼
+          box(-40, -10, 40, 10, 0, 16, [214, 204, 180], null); hip(-43, -13, 43, 13, 16, 24, [70, 120, 96]);
+          box(-12, -14, 12, 14, 0, 20, [214, 204, 180], null); hip(-14, -16, 14, 16, 20, 28, [70, 120, 96]);
+          lit(-40, 10, 40, 10, 2, 14, 3, 10);
+        } else { // 暨南大学：现代礼堂与校门
+          box(-30, -22, 30, 22, 0, 14, white, U.shade(white, 1.04)); cyl(0, 0, 16, 16, 14, 20, N ? [110, 130, 160] : [170, 196, 222]);
+          lit(-30, 22, 30, 22, 2, 12, 2, 8);
+        }
+        break;
+      }
+      case 'rail': { // 广州站：长条站房 + 中央钟楼 + 站台雨棚；广州东站：大跨度方形站房
+        const body = N ? [86, 92, 104] : [226, 226, 230];
+        if (lm.w > 500) {
+          for (let k = 0; k < 5; k++) { const v0 = -120 + k * 34; box(-hw + 40, v0, hw - 40, v0 + 18, 6, 9, N ? [70, 76, 88] : [196, 200, 206], N ? [96, 104, 118] : [212, 216, 222]); }
+          box(-170, 60, 170, 110, 0, 22, body, U.shade(body, 1.04));
+          lit(-170, 110, 170, 110, 3, 20, 3, 16);
+          box(-12, 64, 12, 96, 22, 52, [214, 208, 196], null);
+          hip(-13, 63, 13, 97, 52, 58, [140, 60, 50]);
+          dot(0, 97, 45, Math.max(1.5, s / 22), N ? '#ffe08a' : '#ffffff');
+        } else {
+          box(-hw + 20, -hd + 30, hw - 20, hd - 50, 0, 36, body, null);
+          lit(-hw + 20, hd - 50, hw - 20, hd - 50, 4, 32, 4, 12);
+          const n = 12; ctx.fillStyle = N ? 'rgba(140,170,210,0.95)' : 'rgba(176,204,232,0.98)'; ctx.beginPath();
+          for (let k = 0; k <= n; k++) { const t = k / n, w = T(-hw + 20 + (lm.w - 40) * t, -hd + 30), p = pj(w[0], w[1], (36 + 10 * Math.sin(Math.PI * t)) * E); if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }
+          for (let k = n; k >= 0; k--) { const t = k / n, w = T(-hw + 20 + (lm.w - 40) * t, hd - 50), p = pj(w[0], w[1], (36 + 10 * Math.sin(Math.PI * t)) * E); ctx.lineTo(p[0], p[1]); }
+          ctx.fill();
+        }
+        break;
+      }
+      case 'expo': { // 琶洲会展中心：三排展馆的波浪形屋面
+        const n = 30;
+        for (let r = 0; r < 3; r++) {
+          const v0 = -hd + 70 + r * (lm.d - 140) / 3, v1 = v0 + (lm.d - 140) / 3 - 50;
+          box(-hw + 60, v0, hw - 60, v1, 0, 22, N ? [70, 84, 102] : [210, 222, 232], null);
+          lit(-hw + 60, v1, hw - 60, v1, 3, 18, 2, 24);
+          for (let side = 0; side < 2; side++) {
+            ctx.fillStyle = side ? (N ? '#8fa6c0' : '#eef3f7') : (N ? '#6e86a2' : '#cfdbe6');
+            ctx.beginPath();
+            const va = side ? (v0 + v1) / 2 : v0, vb = side ? v1 : (v0 + v1) / 2;
+            for (let k = 0; k <= n; k++) { const t = k / n, w = T(-hw + 60 + (lm.w - 120) * t, va), p = pj(w[0], w[1], (22 + 9 * Math.abs(Math.sin(t * Math.PI * 5))) * E); if (k) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }
+            for (let k = n; k >= 0; k--) { const t = k / n, w = T(-hw + 60 + (lm.w - 120) * t, vb), p = pj(w[0], w[1], (22 + 9 * Math.abs(Math.sin(t * Math.PI * 5))) * E); ctx.lineTo(p[0], p[1]); }
+            ctx.fill();
+          }
+        }
+        break;
+      }
+      case 'tvtower': { // 广州塔：扭转收腰的钢结构网格外筒（454 m）+ 天线桅杆（600 m）
+        // 白天：中灰立柱与斜撑、深灰圆环、深灰混凝土核心筒、灰色桅杆（顶部红色航空障碍灯）；夜间：结构内嵌的彩色 LED 灯光
+        const H = 454, rings = 26, nv = 24, tw = 280 / H;
+        // 双曲面外筒：底部椭圆约 80 × 60 m，280 m 处收腰约 27 × 21 m，顶部约 54 × 41 m
+        const radius = function (t) { const d = t - tw; return { rx: Math.sqrt(13.5 * 13.5 + 3692 * d * d), ry: Math.sqrt(10.5 * 10.5 + 2057 * d * d) }; };
+        const b = pj(lm.x, lm.y, 0), top = pj(lm.x, lm.y, H * E);
+        ctx.fillStyle = TH.isoShadow; ctx.beginPath(); ctx.ellipse(b[0], b[1], 70 / CMM * s, 30 / CMM * s, 0, 0, Math.PI * 2); ctx.fill();
+        cyl(0, 0, 7, 12, 0, H * 0.98, N ? [40, 38, 54] : [92, 98, 108], null, 0, 8.5);   // 椭圆核心筒约 14 × 17 m
+        let col, brace, ringCol;
+        if (N) {
+          const gr = ctx.createLinearGradient(b[0], b[1], top[0], top[1]);
+          gr.addColorStop(0, 'rgba(255,72,150,0.95)'); gr.addColorStop(0.45, 'rgba(196,92,255,0.95)'); gr.addColorStop(1, 'rgba(84,176,255,0.95)');
+          col = gr; brace = gr; ringCol = 'rgba(255,214,246,0.55)';
+        } else { col = 'rgba(128,135,146,0.95)'; brace = 'rgba(128,135,146,0.55)'; ringCol = 'rgba(88,95,106,0.85)'; }
+        const strand = function (a0, twist, style, lw) {
+          ctx.strokeStyle = style; ctx.lineWidth = lw; ctx.beginPath();
+          for (let q = 0; q <= rings; q++) {
+            const t = q / rings, a = a0 + t * twist, r = radius(t);
+            if (Math.cos(a) + Math.sin(a) < -0.3) { ctx.stroke(); ctx.beginPath(); continue; }
+            const w = T(Math.cos(a) * r.rx, Math.sin(a) * r.ry), p = pj(w[0], w[1], H * t * E);
+            if (q) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]);
+          }
+          ctx.stroke();
+        };
+        const lw = Math.max(1.1, s / 34);
+        for (let v = 0; v < nv; v++) strand(v / nv * Math.PI * 2, Math.PI * 0.9, col, lw);          // 24 根倾斜立柱
+        if (s >= 16) for (let v = 0; v < nv; v += 2) strand(v / nv * Math.PI * 2, -Math.PI * 0.55, brace, lw * 0.7); // 反向斜撑
+        ctx.strokeStyle = ringCol; ctx.lineWidth = lw;
+        for (let q = 1; q <= rings; q += 2) { const t = q / rings, r = radius(t); ctx.beginPath(); for (let a = -0.8; a <= 2.4; a += 0.2) { const w = T(Math.cos(a) * r.rx, Math.sin(a) * r.ry), p = pj(w[0], w[1], H * t * E); if (a > -0.8) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); } ctx.stroke(); }
+        // 顶部观光层圆环
+        { const r = radius(1); ctx.strokeStyle = N ? 'rgba(255,236,250,0.9)' : 'rgba(176,182,192,0.95)'; ctx.lineWidth = lw * 1.6; ctx.beginPath(); for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.25) { const w = T(Math.cos(a) * r.rx, Math.sin(a) * r.ry), p = pj(w[0], w[1], H * E); if (a > 0) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); } ctx.stroke(); }
+        line(0, 0, H, 0, 0, 600, N ? '#f4dcff' : '#8e949c', Math.max(1.2, s / 26));
+        line(0, 0, 540, 0, 0, 600, N ? '#ffffff' : '#a6acb4', Math.max(0.8, s / 40));
+        dot(0, 0, 600, Math.max(1.2, s / (N ? 24 : 34)), N ? '#ff4d6d' : '#e0403a');
+        break;
+      }
+      case 'skyscraper': {
+        const H = lm.h;
+        if (lm.style === 'citic') { // 中信广场：裙楼 + 两座公寓塔 + 主塔（双桅杆）
+          box(-100, -100, 100, 100, 0, 18, N ? [80, 88, 104] : [216, 214, 210], null);
+          for (const du of [-62, 62]) { box(du - 17, 30, du + 17, 64, 18, 120, N ? [96, 104, 122] : [224, 220, 210], null); lit(du - 17, 64, du + 17, 64, 22, 116, 14, 4); }
+          box(-24, -60, 24, -12, 18, 322, N ? [70, 92, 120] : [196, 210, 220], null, { lines: function (fc, q) { if (s < 16) return; ctx.strokeStyle = N ? 'rgba(255,214,140,0.45)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1; ctx.beginPath(); for (let t = 0.1; t < 1; t += 0.1) { ctx.moveTo(q[0][0] + (q[1][0] - q[0][0]) * t, q[0][1] + (q[1][1] - q[0][1]) * t); ctx.lineTo(q[3][0] + (q[2][0] - q[3][0]) * t, q[3][1] + (q[2][1] - q[3][1]) * t); } ctx.stroke(); } });
+          hip(-24, -60, 24, -12, 322, 340, N ? [120, 130, 150] : [176, 186, 196]);
+          for (const du of [-10, 10]) { line(du, -36, 330, du, -36, H, N ? '#c8d0dc' : '#8a929c', Math.max(1, s / 30)); if (N) dot(du, -36, H, 1.8, '#ff4d4d'); }
+        } else if (lm.style === 'west') { // 西塔：圆角三角形玻璃筒 + 斜交网格
+          const tri = function (sc) { const o = []; for (let k = 0; k < 18; k++) { const t = k / 18 * Math.PI * 2; const r = 33 * sc * (1 + 0.13 * Math.cos(3 * t)); o.push(T(Math.cos(t) * r, Math.sin(t) * r)); } return o; };
+          const segs = 6;
+          for (let k = 0; k < segs; k++) { const h0 = H * k / segs, h1 = H * (k + 1) / segs, sc0 = 1 - 0.12 * k / segs, sc1 = 1 - 0.12 * (k + 1) / segs; const c = T(0, 0); frustumRings(ctx, pj, tri(sc0), tri(sc1), h0 * E, h1 * E, N ? [60, 90, 130] : [168, 200, 226], c[0], c[1], k < segs - 1); }
+          if (s >= 16) { ctx.strokeStyle = N ? 'rgba(160,210,255,0.55)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; for (let k = 0; k < 10; k++) { const a0 = k / 10 * Math.PI * 2; ctx.beginPath(); for (let q = 0; q <= 20; q++) { const t = q / 20, a = a0 + t * 1.2 * (k % 2 ? 1 : -1); if (Math.cos(a) + Math.sin(a) < -0.2) continue; const r = 33 * (1 - 0.12 * t); const w = T(Math.cos(a) * r, Math.sin(a) * r), p = pj(w[0], w[1], H * t * E); if (q) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); } ctx.stroke(); } }
+          if (N) dot(0, 0, H, 2, '#ff4d4d');
+        } else { // 东塔：方形分段收分，白色竖向陶板
+          const tiers = [[38, 0, 160], [36, 160, 330], [33, 330, 470], [29, 470, 515]];
+          for (const t of tiers) box(-t[0], -t[0] * 0.9, t[0], t[0] * 0.9, t[1], t[2], N ? [80, 92, 112] : [214, 222, 230], null, { lines: function (fc, q) { if (s < 16) return; ctx.strokeStyle = N ? 'rgba(255,214,140,0.4)' : 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1; ctx.beginPath(); for (let k = 0.08; k < 1; k += 0.14) { ctx.moveTo(q[0][0] + (q[1][0] - q[0][0]) * k, q[0][1] + (q[1][1] - q[0][1]) * k); ctx.lineTo(q[3][0] + (q[2][0] - q[3][0]) * k, q[3][1] + (q[2][1] - q[3][1]) * k); } ctx.stroke(); } });
+          box(-22, -20, 22, 20, 515, H, N ? [110, 120, 140] : [196, 204, 214]);
+          if (N) dot(0, 0, H, 2, '#ff4d4d');
+        }
+        break;
+      }
+      case 'opera': { // 广州大剧院：两块“圆润双砾”
+        const facet = N ? [92, 98, 110] : [214, 214, 210];
+        const pebble = function (cu, cv, r0, h, n, rot) { const c = T(cu, cv); frustumRings(ctx, pj, NG(cu, cv, r0, n, rot, r0 * 0.78), NG(cu + 6, cv - 4, r0 * 0.62, n, rot + 0.3, r0 * 0.48), 0, h * 0.75 * E, facet, c[0], c[1], true); const top = NG(cu + 6, cv - 4, r0 * 0.62, n, rot + 0.3, r0 * 0.48); const t2 = T(cu + 10, cv - 6); pyramidN(ctx, pj, top, t2[0], t2[1], h * 0.75 * E, h * E, U.shade(facet, 1.05)); };
+        pebble(-30, 0, 62, 42, 7, 0.2);
+        pebble(62, 38, 32, 26, 6, 0.6);
+        lit(-80, 30, 20, 40, 3, 12, 1, 8);
+        break;
+      }
+      case 'box': { // 广东省博物馆：“宝盒”
+        box(-40, -40, 40, 40, 0, 7, N ? [60, 64, 72] : [120, 124, 130], null);
+        box(-58, -58, 58, 58, 7, 42, N ? [70, 72, 80] : [96, 96, 100], N ? [90, 92, 100] : [150, 150, 156], { lines: function (fc, q) { if (s < 16) return; ctx.strokeStyle = N ? 'rgba(220,180,90,0.35)' : 'rgba(220,200,160,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); for (let t = 0.12; t < 1; t += 0.18) { ctx.moveTo(q[0][0] + (q[3][0] - q[0][0]) * t, q[0][1] + (q[3][1] - q[0][1]) * t); ctx.lineTo(q[1][0] + (q[2][0] - q[1][0]) * t, q[1][1] + (q[2][1] - q[1][1]) * t); } ctx.stroke(); } });
+        break;
+      }
+      case 'library': { // 广州图书馆：“之”字形层叠
+        const c1 = N ? [96, 100, 112] : [206, 200, 188];
+        box(-62, -36, 10, 36, 0, 26, c1, null); box(-10, -36, 62, 36, 26, 50, c1);
+        box(-62, -36, 10, 36, 26, 28, U.shade(c1, 0.9)); lit(-62, 36, 10, 36, 3, 24, 4, 8); lit(-10, 36, 62, 36, 28, 48, 4, 8);
+        break;
+      }
+      case 'mall': { // 天河城：商业裙楼
+        box(-hw + 10, -hd + 10, hw - 10, hd - 10, 0, 32, N ? [86, 92, 110] : [224, 218, 206], null);
+        lit(-hw + 10, hd - 10, hw - 10, hd - 10, 3, 30, 6, 14);
+        box(-30, -30, 30, 30, 32, 40, N ? [110, 120, 140] : [196, 210, 224]);
+        break;
+      }
+      case 'conference': { // 白云国际会议中心：彩色竖向遮阳板
+        box(-hw + 20, -hd + 30, hw - 20, hd - 30, 0, 36, N ? [86, 92, 106] : [226, 226, 222], null, { lines: function (fc, q) { if (s < 16) return; const cols = ['#d94f3d', '#f0a72b', '#2f6fb6', '#16a085', '#8e44ad']; for (let k = 0; k < 14; k++) { const t = (k + 0.5) / 14; ctx.strokeStyle = cols[k % 5]; ctx.lineWidth = Math.max(1, s / 30); ctx.beginPath(); ctx.moveTo(q[0][0] + (q[1][0] - q[0][0]) * t, q[0][1] + (q[1][1] - q[0][1]) * t); ctx.lineTo(q[3][0] + (q[2][0] - q[3][0]) * t, q[3][1] + (q[2][1] - q[3][1]) * t); ctx.stroke(); } } });
+        break;
+      }
+      case 'concert': { // 星海音乐厅：双曲抛物面屋顶
+        poly([T(-58, -26), T(56, -38), T(48, 36), T(-52, 30)], 0, 8, N ? [88, 96, 110] : [236, 238, 240], null);
+        lit(-52, 30, 48, 36, 1, 7, 1, 8);
+        const P = [T(-58, -26), T(56, -38), T(48, 36), T(-52, 30)].map(function (p, k) { return pj(p[0], p[1], [8, 32, 8, 24][k] * E); });
+        fillPts(ctx, [P[0], P[1], P[2]], N ? '#9fb2c8' : '#f7f8fa');
+        fillPts(ctx, [P[0], P[2], P[3]], N ? '#7d90a8' : '#dfe4ea');
+        break;
+      }
+      case 'gallery': { // 广东美术馆：白色多面体
+        poly(NG(0, 0, 46, 5, -Math.PI / 2), 0, 14, white, U.shade(white, 0.96));
+        poly(NG(6, -4, 22, 4, Math.PI / 4), 14, 22, white, U.shade(white, 1.02));
+        break;
+      }
+      default: box(-hw * 0.6, -hd * 0.6, hw * 0.6, hd * 0.6, 0, 12, [214, 196, 172]); break;
+    }
+  };
+  // ---------------- 分析图层（热力格） ----------------
+  Renderer.prototype.buildHeat = function () {
+    const g = this.game, city = g.city, model = g.model, W = city.W, H = city.H;
+    const key = this.layer + ':' + city.version + ':' + model.version + ':' + (this.layer === 'cover' ? g.netVersion : '');
+    if (key === this.heatKey && this.heat) return;
+    this.heatKey = key;
+    if (!this.heat) this.heat = makeCanvas(W, H);
+    const ctx = this.heat.getContext('2d');
+    const img = ctx.createImageData(W, H), d = img.data;
+    const acc = model.net ? model.net.acc : null;
+    for (let c = 0; c < W * H; c++) {
+      let col = null, a = 0;
+      const p = city.pop[c] / 0.0625, jb = city.jobs[c] / 0.0625;
+      if (this.layer === 'pop') {
+        if (p > 200) { col = U.ramp([[0, [255, 240, 190]], [0.35, [253, 174, 97]], [0.7, [227, 74, 51]], [1, [140, 20, 40]]], Math.sqrt(p / 60000)); a = U.clamp(0.25 + p / 30000, 0, 0.85); }
+      } else if (this.layer === 'jobs') {
+        const t = p + jb;
+        if (t > 300) { const sh = p / t; col = U.mixc([52, 104, 214], [240, 150, 60], sh); a = U.clamp(0.2 + Math.sqrt(t / 90000), 0, 0.85); }
+      } else if (this.layer === 'cover') {
+        const w = acc ? acc.cellWalk[c] : Infinity;
+        const m = w / CFG.walk.mPerMin;
+        if (m <= 5) { col = [27, 120, 55]; a = 0.65; }
+        else if (m <= 10) { col = [90, 174, 97]; a = 0.55; }
+        else if (m <= 15) { col = [172, 220, 140]; a = 0.5; }
+        else if (p > 4000) { col = [215, 48, 39]; a = U.clamp(0.15 + p / 80000, 0, 0.5); }
+      } else if (this.layer === 'region') {
+        const rg = city.regions[city.region[c]];
+        if (rg.scenic) { col = [120, 170, 110]; a = 0.25; }
+        else if (!city.regionOpen[city.region[c]]) { col = [150, 150, 150]; a = 0.25; }
+      }
+      if (col) { const o = c * 4; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = a * 255; }
+    }
+    ctx.putImageData(img, 0, 0);
+  };
+
+  // ---------------- 每帧绘制 ----------------
+  Renderer.prototype.render = function (dt, ui) {
+    this.frame++; this.time += dt; this.dt = dt;
+    this.resize();
+    const ctx = this.ctx, dpr = this.dpr, g = this.game;
+    if (!g) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = U.rgb(TH.bg); ctx.fillRect(0, 0, this.cv.width, this.cv.height); return; }
+    this.updateCamera(dt);
+    this.markDirty();
+    const cam = this.cam, under = U.smooth(cam.under), t = this.tEase;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = U.rgb(U.mixc(TH.fog || TH.bg, TH.bgUnder, under));
+    ctx.fillRect(0, 0, this.cv.width, this.cv.height);
+    const M = this.M, z = this.z;
+    // 可见范围
+    const corners = [this.unproject(0, 0), this.unproject(this.w, 0), this.unproject(0, this.h + (t > 0 ? MAX_H * this.hs : 0)), this.unproject(this.w, this.h + (t > 0 ? MAX_H * this.hs : 0))];
+    let wx0 = 1e9, wy0 = 1e9, wx1 = -1e9, wy1 = -1e9;
+    for (const p of corners) { wx0 = Math.min(wx0, p.x); wx1 = Math.max(wx1, p.x); wy0 = Math.min(wy0, p.y); wy1 = Math.max(wy1, p.y); }
+    this.view = { x0: wx0 - 1, y0: wy0 - 1, x1: wx1 + 1, y1: wy1 + 1 };
+    const tStart = performance.now();
+    // ---- 地面 ----
+    if (this.overviewStale && (!this.overview || performance.now() - this.overviewAt > 600)) this.renderOverview();
+    const groundAlpha = 1 - 0.68 * under;
+    ctx.globalAlpha = groundAlpha;
+    ctx.imageSmoothingEnabled = true;
+    const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
+    const eff = z * Math.min(dpr, 1.5) * (1 - 0.28 * t);
+    let lvl = 0;
+    if (eff > 5) { lvl = 64; for (const L of LEVELS) if (L >= eff * 0.85) { lvl = L; break; } }
+    setWorld();
+    const queue = [];
+    if (this.overview) {
+      ctx.drawImage(this.overview, 0, 0, CFG.W, CFG.H);
+    }
+    if (lvl) {
+      const C = CHUNK_PX / lvl;
+      const ci0 = Math.max(0, Math.floor(wx0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(wx1 / C));
+      const cj0 = Math.max(0, Math.floor(wy0 / C)), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(wy1 / C));
+      for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) {
+        const key = lvl + ':' + ci + ':' + cj;
+        let e = this.ground.get(key);
+        if (!e || e.stale) {
+          queue.push({ kind: 'g', key: key, lvl: lvl, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) });
+          if (!e) {
+            // 退而使用较低分辨率的块
+            for (const L2 of LEVELS) {
+              if (L2 >= lvl) continue;
+              const C2 = CHUNK_PX / L2, k2 = L2 + ':' + Math.floor(ci * C / C2) + ':' + Math.floor(cj * C / C2);
+              const e2 = this.ground.get(k2);
+              if (e2) { e = e2; break; }
+            }
+            if (!e) continue;
+          }
+        }
+        e.used = this.frame;
+        const C2 = CHUNK_PX / e.lvl;
+        const k = e.key.split(':');
+        const x0 = +k[1] * C2, y0 = +k[2] * C2;
+        ctx.drawImage(e.cv, 0, 0, CHUNK_PX + 2, CHUNK_PX + 2, x0 - 1 / e.lvl, y0 - 1 / e.lvl, C2 + 2 / e.lvl, C2 + 2 / e.lvl);
+      }
+    }
+    ctx.globalAlpha = 1;
+    // ---- 图层（地面） ----
+    const layerOn = this.layer !== 'none';
+    if (layerOn && ['pop', 'jobs', 'cover', 'region'].indexOf(this.layer) >= 0) {
+      this.buildHeat();
+      setWorld();
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(this.heat, 0, 0, CFG.W, CFG.H);
+      ctx.globalAlpha = 1;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // 分析图层开启时：地面加一层浅色蒙版，隐藏建筑与车辆，让图层本身清楚可读（渐变过渡）
+    this.layerFade = U.clamp((this.layerFade || 0) + (layerOn ? dt : -dt) / 0.25, 0, 1);
+    if (this.layerFade > 0.01 && (this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station' || !layerOn)) {
+      ctx.fillStyle = U.rgb(TH.fog || TH.bg, 0.5 * this.layerFade); ctx.fillRect(0, 0, this.w, this.h);
+    }
+    // ---- 建筑与动态对象 ----
+    const agents = this.agentsOn && this.layerFade < 0.5 ? CM.agents : null;
+    if (t >= 0.999 && cam.view === 1) this.bFade = Math.min(1, this.bFade + dt / 0.3); else this.bFade = Math.max(0, this.bFade - dt / 0.15);
+    const bAlpha = this.bFade * (1 - under) * (1 - this.layerFade);
+    const agentAlpha = (1 - under) * (1 - this.layerFade);
+    if (bAlpha > 0.01 && lvl) {
+      const ilvl = lvl;
+      const C = this.isoChunkGeom(ilvl);
+      const ci0 = Math.max(0, Math.floor(wx0 / C) - 1), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(wx1 / C) + 1);
+      const cj0 = Math.max(0, Math.floor(wy0 / C) - 1), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(wy1 / C) + 1);
+      const list = [];
+      for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) list.push([ci, cj]);
+      list.sort(function (a, b) { return (a[0] + a[1]) - (b[0] + b[1]) || a[0] - b[0]; });
+      const buckets = agents && agentAlpha > 0 ? agents.bucket(C) : null;
+      const sc = z / ilvl;
+      // 地标按其中心所在分块归组，在该分块之后绘制（与前后建筑正确遮挡）
+      const city = this.game.city, lmBy = new Map();
+      for (let k = 0; k < D.landmarks.length; k++) {
+        if (!city.landmarkOn[k]) continue;
+        const lm = D.landmarks[k], kk = Math.floor(lm.x / C) + ':' + Math.floor(lm.y / C);
+        let l = lmBy.get(kk); if (!l) { l = []; lmBy.set(kk, l); } l.push(k);
+      }
+      for (const it of list) {
+        const ci = it[0], cj = it[1];
+        if (buckets) { const bk = buckets.get(ci + ':' + cj); if (bk) agents.drawList(ctx, this, bk, agentAlpha); }
+        const key = 'i' + ilvl + ':' + ci + ':' + cj;
+        let e = this.iso.get(key);
+        if (!e || e.stale) queue.push({ kind: 'i', key: key, lvl: ilvl, ci: ci, cj: cj, C: C, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) - 0.5 });
+        if (e && !e.empty) {
+          e.used = this.frame;
+          const a = this.P(ci * C, cj * C, 0);
+          const fade = Math.min(1, (this.time - e.born) / 0.25);
+          ctx.globalAlpha = bAlpha * fade;
+          ctx.drawImage(e.cv, a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc);
+        } else if (e) e.used = this.frame;
+        const lks = lmBy.get(ci + ':' + cj);
+        if (lks) for (const k of lks) {
+          const sp = this.landmarkSprite(k, ilvl), lm = D.landmarks[k], a = this.P(lm.x, lm.y, 0);
+          ctx.globalAlpha = bAlpha * Math.min(1, (this.time - sp.born) / 0.25);
+          ctx.drawImage(sp.cv, a.x - sp.ax * sc, a.y - sp.ay * sc, sp.cv.width * sc, sp.cv.height * sc);
+        }
+      }
+      ctx.globalAlpha = 1;
+    } else if (agents && agentAlpha > 0) {
+      agents.drawAll(ctx, this, agentAlpha);
+    }
+    // ---- 图层（线状） ----
+    if (this.layer === 'cong') this.drawCongestion(ctx);
+    if (this.layer === 'flow') this.drawDesire(ctx);
+    // ---- 地铁 ----
+    this.drawMetro(ctx, ui);
+    if (agents) agents.drawTrains(ctx, this, ui);
+    if (this.layer === 'station') this.drawStationFlows(ctx);
+    if (this.fx.length) this.drawFx(ctx, dt);
+    if (under < 0.5) this.drawAtmosphere(ctx);
+    // ---- 标注 ----
+    this.drawLabels(ctx, ui);
+    if (ui && ui.drawOverlay) ui.drawOverlay(ctx, this);
+    // ---- 缓存渲染队列 ----
+    queue.sort(function (a, b) { return a.d - b.d; });
+    const budget = CFG.perf.chunkBudgetMs;
+    let n = 0;
+    for (const q of queue) {
+      if (performance.now() - tStart > (this.game.preview ? 6 : 14) && n > 0) break;   // 开始界面背景每帧少画一些，保持流畅
+      const t1 = performance.now();
+      if (q.kind === 'g') {
+        const cv = this.renderGroundChunk(q.lvl, q.ci, q.cj);
+        const old = this.ground.get(q.key); if (old) this.cachePx -= old.px;
+        this.ground.set(q.key, { cv: cv, lvl: q.lvl, key: q.key, used: this.frame, px: cv.width * cv.height, stale: false });
+        this.cachePx += cv.width * cv.height;
+      } else {
+        const r = this.renderIsoChunk(q.lvl, q.ci, q.cj, q.C);
+        const old = this.iso.get(q.key); if (old) this.cachePx -= old.px;
+        r.used = this.frame; r.born = old ? this.time - 1 : this.time; r.stale = false;
+        this.iso.set(q.key, r);
+        this.cachePx += r.px;
+      }
+      n++;
+      if (performance.now() - t1 > budget) break;
+    }
+    this.stats.chunksDrawn = n;
+    this.evict();
+  };
+
+  // ---------------- 地铁绘制 ----------------
+  Renderer.prototype.lineWidthPx = function () { return U.clamp(this.z * 0.1, 2.8, 9); };
+  Renderer.prototype.segScreen = function (cs, under, out) {
+    const pts = cs.g.pts, hs = cs.h, n = pts.length;
+    const arr = out || new Float32Array(n * 2);
+    const uw = U.smooth(under);
+    const ty = cs.seg.type;
+    for (let i = 0; i < n; i++) {
+      let h = hs[i];
+      if (h < 0) h = h * uw * UNDER_DEPTH;
+      const M = this.M, z = this.z;
+      arr[i * 2] = this.ox + (M[0] * pts[i][0] + M[1] * pts[i][1]) * z;
+      arr[i * 2 + 1] = this.oy + (M[2] * pts[i][0] + M[3] * pts[i][1]) * z - h * this.hs;
+    }
+    return arr;
+  };
+  Renderer.prototype.drawMetro = function (ctx, ui) {
+    const g = this.game;
+    const draft = g.draft ? g.draftCompiled() : null;
+    const C = draft || g.compiled;
+    const under = U.smooth(this.cam.under), t = this.tEase;
+    const lw = this.lineWidthPx();
+    const v = this.view;
+    const sel = ui ? ui.selection : null;
+    const hlLine = ui && ui.highlightLine;
+    const lyrDim = this.layer === 'cong' || this.layer === 'flow' ? 1 - 0.65 * (this.layerFade || 0) : 1;   // 拥堵、出行方向图层下淡化地铁
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    this.segPx = new Map();
+    // 草案中被删除的正式轨道（虚影）
+    if (draft) {
+      g.compiled.segs.forEach((cs, id) => {
+        if (draft.segs.has(id)) return;
+        let inBase = false;
+        draft.segs.forEach(function (d) { if (d.seg.base && d.seg.base.indexOf(id) >= 0) inBase = true; });
+        if (inBase) return;
+        const arr = this.segScreen(cs, under);
+        ctx.strokeStyle = 'rgba(214,48,49,0.55)'; ctx.lineWidth = lw; ctx.setLineDash([lw * 1.2, lw * 1.2]);
+        this.strokeArr(ctx, arr); ctx.setLineDash([]);
+      });
+    }
+    const order = [];
+    C.segs.forEach(function (cs, id) { order.push(cs); });
+    // 地下 → 地面 → 高架
+    const rank = { underground: 0, surface: 1, elevated: 2 };
+    order.sort(function (a, b) { return rank[a.seg.type] - rank[b.seg.type]; });
+    for (const cs of order) {
+      const s = cs.seg;
+      const b = cs.g;
+      const line = C.net.lines[s.line];
+      if (!line) continue;
+      // 粗略裁剪
+      const A = C.net.stations[s.a], B = C.net.stations[s.b];
+      if (Math.max(A.x, B.x) < v.x0 - 6 || Math.min(A.x, B.x) > v.x1 + 6 || Math.max(A.y, B.y) < v.y0 - 6 || Math.min(A.y, B.y) > v.y1 + 6) {
+        let inside = false;
+        for (const p of (s.pts || [])) if (p[0] > v.x0 && p[0] < v.x1 && p[1] > v.y0 && p[1] < v.y1) inside = true;
+        if (!inside) continue;
+      }
+      const arr = this.segScreen(cs, under);
+      this.segPx.set(s.id, arr);
+      const col = line.color;
+      let alpha = 1, width = lw;
+      if (s.type === 'underground') { alpha = U.lerp(0.92, 1, under); width = lw * U.lerp(0.95, 1.05, under); }
+      else if (under > 0) alpha = U.lerp(1, 0.35, under);
+      if (hlLine && hlLine !== s.line) alpha *= 0.3;
+      alpha *= lyrDim;
+      // 高架：阴影与桥墩
+      if (s.type === 'elevated' && t > 0.05) {
+        ctx.globalAlpha = (TH.night ? 0.4 : 0.18) * alpha * t; ctx.strokeStyle = TH.night ? '#000' : '#3a3a3a'; ctx.lineWidth = width;
+        ctx.beginPath();
+        for (let i = 0; i < b.pts.length; i++) { const p = this.P(b.pts[i][0], b.pts[i][1], 0); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); }
+        ctx.stroke();
+        ctx.globalAlpha = 0.55 * alpha * t; ctx.strokeStyle = TH.pier; ctx.lineWidth = Math.max(1, width * 0.35);
+        ctx.beginPath();
+        const step = Math.max(2, Math.round(0.45 / 0.12));
+        for (let i = step; i < b.pts.length - 1; i += step) { const p = this.P(b.pts[i][0], b.pts[i][1], 0); ctx.moveTo(p.x, p.y); ctx.lineTo(arr[i * 2], arr[i * 2 + 1]); }
+        ctx.stroke();
+      }
+      // 地下视图中的竖井
+      ctx.globalAlpha = alpha;
+      // 白色衬边
+      if (s.type !== 'underground' || under > 0.5) {
+        ctx.strokeStyle = s.type === 'elevated' ? TH.elevCase : TH.lineCase;
+        ctx.lineWidth = width + 2.5;
+        this.strokeArr(ctx, arr);
+      }
+      ctx.strokeStyle = col; ctx.lineWidth = width;
+      this.strokeArr(ctx, arr);
+      if (s.type === 'surface') { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
+      if (s.type === 'underground' && under < 0.5 && !g.preview) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
+      // 草案标记
+      if (draft) {
+        const o = g.net.segments[s.id];
+        const changed = !o || o.type !== s.type || JSON.stringify(o.pts) !== JSON.stringify(s.pts) || g.net.stations[s.a].x !== A.x || g.net.stations[s.a].y !== A.y || !g.net.stations[s.b] || g.net.stations[s.b].x !== B.x || g.net.stations[s.b].y !== B.y;
+        if (changed) {
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = Math.max(1.2, width * 0.3); ctx.setLineDash([5, 5]);
+          ctx.lineDashOffset = -this.time * 12;
+          this.strokeArr(ctx, arr); ctx.setLineDash([]); ctx.lineDashOffset = 0;
+        }
+      }
+      if (sel && sel.kind === 'seg' && sel.id === s.id) {
+        ctx.globalAlpha = 0.35; ctx.strokeStyle = col; ctx.lineWidth = width + 8; this.strokeArr(ctx, arr);
+      }
+      ctx.globalAlpha = 1;
+    }
+    // 站外换乘：两座不同线路的运营车站之间可步行换乘（虚线连接，两站都按换乘站标示）
+    const xfer = new Set(), xLinks = [];
+    const mnet = g.model && g.model.net;
+    if (mnet && mnet.acc) {
+      const MC = mnet.C;
+      for (const tr of mnet.acc.transfers) {
+        if (tr.a > tr.b) continue;
+        const ia = C.sIndex.get(MC.stations[tr.a].id), ib = C.sIndex.get(MC.stations[tr.b].id);
+        if (ia === undefined || ib === undefined) continue;
+        const la = C.stationLines[ia], lb = C.stationLines[ib];
+        if (!la.size || !lb.size) continue;
+        let share = false; la.forEach(function (l) { if (lb.has(l)) share = true; });
+        if (share) continue;
+        xfer.add(ia); xfer.add(ib); xLinks.push([ia, ib]);
+      }
+    }
+    const stH = function (s) { let hh = CFG.metro.height[s.type]; if (hh < 0) hh = hh * under * UNDER_DEPTH; return hh; };
+    if (xLinks.length) {
+      ctx.strokeStyle = TH.stInter; ctx.globalAlpha = 0.55; ctx.lineWidth = Math.max(2, lw * 0.45); ctx.setLineDash([3, 4]); ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const l of xLinks) { const A = C.stations[l[0]], B = C.stations[l[1]], pa = this.P(A.x, A.y, stH(A)), pb = this.P(B.x, B.y, stH(B)); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); }
+      ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    // 车站
+    this.stPx = [];
+    const R0 = U.clamp(this.z * 0.11, 3.2, 9);
+    const mult = { S: 0.8, M: 1, L: 1.3 };
+    for (let i = 0; i < C.stations.length; i++) {
+      const s = C.stations[i];
+      if (s.x < v.x0 - 1 || s.x > v.x1 + 1 || s.y < v.y0 - 1 || s.y > v.y1 + 1) { this.stPx.push(null); continue; }
+      const h = stH(s);
+      const p = this.P(s.x, s.y, h);
+      const lines = C.stationLines[i];
+      const inter = lines.size > 1 || xfer.has(i);
+      const r = R0 * mult[s.size] * (inter ? 1.4 : 1);
+      this.stPx.push({ x: p.x, y: p.y, r: r, id: s.id });
+      const serviced = C.serviced[i];
+      let alpha = 1;
+      if (hlLine && !lines.has(hlLine)) alpha = 0.35;
+      alpha *= lyrDim;
+      ctx.globalAlpha = alpha;
+      if (s.type === 'underground' && under > 0.05) {
+        const gp = this.P(s.x, s.y, 0);
+        ctx.strokeStyle = 'rgba(90,100,120,0.6)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(gp.x, gp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      }
+      if (s.type === 'elevated' && this.tEase > 0.05) {
+        const gp = this.P(s.x, s.y, 0);
+        ctx.strokeStyle = 'rgba(120,124,130,0.7)'; ctx.lineWidth = Math.max(2, r * 0.6); ctx.beginPath(); ctx.moveTo(gp.x, gp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = TH.stFill; ctx.fill();
+      if (!serviced) { ctx.setLineDash([3, 2]); ctx.strokeStyle = '#8a8f98'; }
+      else if (inter) ctx.strokeStyle = TH.stInter;
+      else { const lid = lines.values().next().value; ctx.strokeStyle = C.net.lines[lid] ? C.net.lines[lid].color : '#444'; }
+      const ow = inter ? Math.max(2.2, r * 0.3) : Math.max(1.8, r * 0.36);
+      ctx.lineWidth = ow;
+      ctx.stroke(); ctx.setLineDash([]);
+      // 换乘标志：深色外环 + 各线路颜色分段内环 + 换乘箭头
+      if (inter && serviced) {
+        const ls = Array.from(lines), n = ls.length;
+        if (n >= 1) {
+          const rr = r - ow * 0.5 - Math.max(1.1, r * 0.13), gap = n > 1 ? 0.22 : 0;
+          ctx.lineWidth = Math.max(1.5, r * 0.2); ctx.lineCap = 'butt';
+          for (let k = 0; k < n; k++) {
+            const L = C.net.lines[ls[k]]; if (!L) continue;
+            const a0 = -Math.PI / 2 + k * Math.PI * 2 / n + gap / 2, a1 = -Math.PI / 2 + (k + 1) * Math.PI * 2 / n - gap / 2;
+            ctx.strokeStyle = L.color; ctx.beginPath(); ctx.arc(p.x, p.y, rr, a0, a1); ctx.stroke();
+          }
+          ctx.lineCap = 'round';
+        }
+        if (r >= 6.5) xferGlyph(ctx, p.x, p.y, r * 0.36, TH.stInter);
+      }
+      if (draft && !g.net.stations[s.id]) {
+        ctx.strokeStyle = 'rgba(30,136,229,0.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.lineDashOffset = -this.time * 10;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      }
+      if (sel && sel.kind === 'station' && sel.id === s.id) {
+        const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
+        ctx.strokeStyle = 'rgba(30,136,229,' + (0.5 + 0.4 * pulse) + ')'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r + 5 + pulse * 2, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    this.drawnC = C;
+  };
+  // 换乘箭头（⇄）：上箭头向右、下箭头向左
+  function xferGlyph(ctx, x, y, s, col) {
+    const a = s * 0.42, hd = s * 0.5;
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.2, s * 0.3); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - s, y - a); ctx.lineTo(x + s, y - a); ctx.lineTo(x + s - hd, y - a - hd);
+    ctx.moveTo(x + s, y + a); ctx.lineTo(x - s, y + a); ctx.lineTo(x - s + hd, y + a + hd);
+    ctx.stroke();
+  }
+  Renderer.prototype.strokeArr = function (ctx, arr) {
+    ctx.beginPath();
+    ctx.moveTo(arr[0], arr[1]);
+    for (let i = 2; i < arr.length; i += 2) ctx.lineTo(arr[i], arr[i + 1]);
+    ctx.stroke();
+  };
+
+  // 道路拥堵图层：沿真实道路线形着色（连续不断开）。快速路与主干道的折线约每 100 m 取一个样点，
+  // 样点对应同名的模拟路段，取其当前时刻的饱和度；相邻同档样点合并为一段，按道路等级定粗细
+  const CONG_COLS = ['#4fb07a', '#f2bf3a', '#f27a24', '#d3203a'];
+  Renderer.CONG_COLS = CONG_COLS;
+  Renderer.prototype.congIndex = function () {
+    const city = this.game.city, car = city.car;
+    if (this._cgIdx && this._cgIdx.city === city && this._cgIdx.ver === city.roadVersion) return this._cgIdx;
+    const byName = new Map();
+    for (const L of car.links) { if (L.cls < 2 || !L.name) continue; let a = byName.get(L.name); if (!a) { a = []; byName.set(L.name, a); } a.push(L); }
+    const ways = [], STEP = 0.4;
+    for (const w of city.roadWays) {
+      const gr = city.roadGroups[w.g];
+      if (gr.cls < 3 || (gr.flags & 4)) continue;   // 匝道不画
+      const p = w.p, xs = [], ys = [];
+      for (let k = 0; k + 3 < p.length; k += 2) {
+        const ax = p[k], ay = p[k + 1], bx = p[k + 2], by = p[k + 3], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / STEP));
+        for (let q = k === 0 ? 0 : 1; q <= n; q++) { xs.push(ax + (bx - ax) * q / n); ys.push(ay + (by - ay) * q / n); }
+      }
+      const near = byName.get(w.g + 1) || [], lk = new Int32Array(xs.length);
+      for (let i = 0; i < xs.length; i++) {
+        let best = -1, bd = 1.0;
+        for (const L of near) {
+          const b = L.bbox; if (xs[i] < b[0] - 1 || xs[i] > b[2] + 1 || ys[i] < b[1] - 1 || ys[i] > b[3] + 1) continue;
+          const d = U.distToPoly(xs[i], ys[i], L.pts); if (d < bd) { bd = d; best = L.id; }
+        }
+        if (best < 0) { const L = this.pickLink(xs[i], ys[i], 0.6); if (L && L.cls >= 3) best = L.id; }
+        lk[i] = best;
+      }
+      ways.push({ g: w.g, cls: gr.cls, bbox: w.bbox, xs: Float32Array.from(xs), ys: Float32Array.from(ys), lk: lk });
+    }
+    this._cgIdx = { city: city, ver: city.roadVersion, ways: ways };
+    this._cgRuns = null;
+    return this._cgIdx;
+  };
+  // 按当前时刻（5 分钟一档）把各条道路分成不同拥堵档的连续段
+  Renderer.prototype.congRuns = function () {
+    const g = this.game, model = g.model, city = g.city, idx = this.congIndex();
+    const key = model.version + ':' + Math.floor(g.clock.minute / 5) + ':' + city.roadVersion;
+    if (this._cgRuns && this._cgRunsKey === key) return this._cgRuns;
+    const W = model.weights(g.clock.minute), sat = new Map();
+    const satOf = function (id) {
+      let v = sat.get(id);
+      if (v === undefined) { v = Math.max(model.arcVolAt(2 * id, W), model.arcVolAt(2 * id + 1, W)) / model.cap(2 * id); sat.set(id, v); }
+      return v;
+    };
+    const lvl = function (x) { return x < 0.6 ? 0 : (x < 0.85 ? 1 : (x < 1.05 ? 2 : 3)); };
+    const runs = [[], [], [], []];
+    for (const w of idx.ways) {
+      if (!city.roadsBuilt[w.g]) continue;
+      const n = w.xs.length; if (n < 2) continue;
+      let first = 0; for (let i = 0; i < n; i++) if (w.lk[i] >= 0) { first = lvl(satOf(w.lk[i])); break; }
+      let cur = first, start = 0;
+      const push = function (a, b, k) { if (b > a) runs[k].push({ w: w, a: a, b: b }); };
+      for (let i = 1; i < n; i++) {
+        const k = w.lk[i] >= 0 ? lvl(satOf(w.lk[i])) : cur;
+        if (k !== cur) { push(start, i, cur); start = i; cur = k; }
+      }
+      push(start, n - 1, cur);
+    }
+    this._cgRuns = runs; this._cgRunsKey = key;
+    return runs;
+  };
+  Renderer.prototype.drawCongestion = function (ctx) {
+    const v = this.view, runs = this.congRuns();
+    const lw = U.clamp(this.z * 0.07, 1.6, 7);
+    const tmp = {};
+    const trace = (list, cls) => {
+      ctx.beginPath();
+      for (const r of list) {
+        const w = r.w, b = w.bbox;
+        if (w.cls !== cls || b[2] < v.x0 || b[0] > v.x1 || b[3] < v.y0 || b[1] > v.y1) continue;
+        for (let i = r.a; i <= r.b; i++) { this.P(w.xs[i], w.ys[i], 0, tmp); if (i === r.a) ctx.moveTo(tmp.x, tmp.y); else ctx.lineTo(tmp.x, tmp.y); }
+      }
+    };
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // 先画全部衬边，再按拥堵程度从轻到重画颜色
+    for (let pass = 0; pass < 2; pass++) {
+      for (let k = 0; k < 4; k++) {
+        for (const cls of [3, 4]) {
+          trace(runs[k], cls);
+          const w = lw * (cls === 4 ? 1.45 : 1) * (k >= 2 ? 1.15 : 1);
+          if (pass === 0) { ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 3; } else { ctx.strokeStyle = CONG_COLS[k]; ctx.lineWidth = w; }
+          ctx.stroke();
+        }
+      }
+    }
+  };
+  // 出行方向图层：按行政区汇总当前时段的出行，只画区与区之间最主要的几条流向。
+  // 结果按「模型版本 + 时段 + 方式」缓存，不随每帧的分钟权重变化（不闪烁）；箭头统一向右侧弯曲，往返两个方向互不重叠
+  Renderer.prototype.flowDistricts = function () {
+    const g = this.game, city = g.city, model = g.model;
+    if (this._fd && this._fd.city === city && this._fd.ver === city.version) return this._fd;
+    const W = city.W, H = city.H, N = W * H, Geo = CM.Geo;
+    const dist = new Int16Array(N).fill(-1), names = [];
+    const feats = Geo.admin.filter(function (f) { return f.level === 6; });
+    feats.forEach(function (f, k) {
+      const tmp = new Uint8Array(N); Geo.fill(tmp, W, H, 1, [f]);
+      let any = false; for (let c = 0; c < N; c++) if (tmp[c] && dist[c] < 0) { dist[c] = names.length; any = true; }
+      if (any) names.push(String(f.name || '').replace(/区$/, ''));
+    });
+    // 每个区的活动中心（人口 + 岗位加权），作为流向的端点
+    const sx = new Float64Array(names.length), sy = new Float64Array(names.length), sw = new Float64Array(names.length);
+    for (let c = 0; c < N; c++) { const d = dist[c]; if (d < 0) continue; const w = city.pop[c] + city.jobs[c] + 1; sx[d] += (c % W + 0.5) * w; sy[d] += (((c / W) | 0) + 0.5) * w; sw[d] += w; }
+    // 交通区块（2×2 小区）→ 所属区
+    const B = model.B, BW = model.BW, blkD = new Int16Array(B).fill(-1);
+    for (let b = 0; b < B; b++) {
+      const bi = b % BW, bj = (b / BW) | 0, Z = CFG.ZONE * 2;
+      const cnt = new Map();
+      for (let j = bj * Z; j < Math.min(H, bj * Z + Z); j++) for (let i = bi * Z; i < Math.min(W, bi * Z + Z); i++) { const d = dist[j * W + i]; if (d >= 0) cnt.set(d, (cnt.get(d) || 0) + 1); }
+      let best = -1, bn = 0; cnt.forEach(function (n, d) { if (n > bn) { bn = n; best = d; } }); blkD[b] = best;
+    }
+    this._fd = { city: city, ver: city.version, names: names, x: Array.from(sx).map(function (v, k) { return sw[k] ? v / sw[k] : 0; }), y: Array.from(sy).map(function (v, k) { return sw[k] ? v / sw[k] : 0; }), blk: blkD };
+    this._fl = null;
+    return this._fd;
+  };
+  Renderer.prototype.flowList = function () {
+    const g = this.game, model = g.model, fd = this.flowDistricts();
+    const p = model.weights(g.clock.minute).p0, mode = this.layerOpt.flow;
+    const key = model.version + ':' + p + ':' + mode + ':' + fd.ver;
+    if (this._fl && this._flKey === key) return this._fl;
+    const P = model.live.per[p], B = model.B, n = fd.names.length;
+    const tot = new Float64Array(n * n), met = new Float64Array(n * n), node = new Float64Array(n);
+    for (let a = 0; a < B; a++) {
+      const da = fd.blk[a]; if (da < 0) continue;
+      for (let b = 0; b < B; b++) {
+        const db = fd.blk[b]; if (db < 0) continue;
+        const k = a * B + b, t = P.desTot[k]; if (!(t > 0)) continue;
+        const m = P.desMetro[k], f = mode === 'metro' ? m : (mode === 'car' ? t - m : t);
+        node[da] += f;
+        if (da === db) continue;
+        tot[da * n + db] += f; met[da * n + db] += m;
+      }
+    }
+    const list = [];
+    for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) if (a !== b && tot[a * n + b] > 0) list.push({ a: a, b: b, f: tot[a * n + b], share: met[a * n + b] / Math.max(1e-9, (mode === 'all' ? tot[a * n + b] : met[a * n + b] + 1e-9)) });
+    list.sort(function (x, y) { return y.f - x.f; });
+    const mx = list.length ? list[0].f : 1;
+    const top = list.filter(function (e) { return e.f >= mx * 0.2; }).slice(0, 10);
+    const used = new Set(); for (const e of top) { used.add(e.a); used.add(e.b); }
+    this._fl = { top: top, mx: mx, node: node, used: used }; this._flKey = key;
+    return this._fl;
+  };
+  Renderer.prototype.drawDesire = function (ctx) {
+    const fd = this.flowDistricts(), fl = this.flowList(), mode = this.layerOpt.flow;
+    const metroCol = [33, 102, 204], carCol = [222, 112, 46], grey = [120, 126, 140];
+    const pos = (d) => this.P(fd.x[d], fd.y[d], 0);
+    let nodeMax = 1; fl.used.forEach(function (k) { nodeMax = Math.max(nodeMax, fl.node[k]); });
+    const rad = (d) => 7 + 9 * Math.sqrt(fl.node[d] / nodeMax);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let q = fl.top.length - 1; q >= 0; q--) {
+      const e = fl.top[q], pa = pos(e.a), pb = pos(e.b);
+      const dx = pb.x - pa.x, dy = pb.y - pa.y, len = Math.hypot(dx, dy);
+      if (len < 24) continue;
+      const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+      // 起止点留出节点圆的距离；统一向行进方向右侧弯曲，往返两条分开
+      const ra = rad(e.a) + 3, rb = rad(e.b) + 6;
+      const sx = pa.x + ux * ra + nx * 4, sy = pa.y + uy * ra + ny * 4, ex = pb.x - ux * rb + nx * 4, ey = pb.y - uy * rb + ny * 4;
+      const bend = Math.min(60, len * 0.16), cx = (sx + ex) / 2 + nx * bend, cy = (sy + ey) / 2 + ny * bend;
+      const w = 2 + 9 * (e.f / fl.mx);
+      const col = mode === 'metro' ? metroCol : (mode === 'car' ? carCol : U.mixc(grey, metroCol, U.clamp(e.share * 2.5, 0, 1)));
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(cx, cy, ex, ey);
+      ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 4; ctx.stroke();
+      ctx.strokeStyle = U.rgb(col, 0.9); ctx.lineWidth = w; ctx.stroke();
+      // 终点箭头（沿曲线末端切线）
+      const tx = ex - cx, ty = ey - cy, tl = Math.hypot(tx, ty) || 1, ah = 6 + w * 0.9, ang = Math.atan2(ty / tl, tx / tl);
+      ctx.fillStyle = U.rgb(col, 1);
+      ctx.beginPath(); ctx.moveTo(ex + Math.cos(ang) * ah * 0.6, ey + Math.sin(ang) * ah * 0.6); ctx.lineTo(ex + Math.cos(ang + 2.45) * ah, ey + Math.sin(ang + 2.45) * ah); ctx.lineTo(ex + Math.cos(ang - 2.45) * ah, ey + Math.sin(ang - 2.45) * ah); ctx.closePath();
+      ctx.strokeStyle = TH.halo; ctx.lineWidth = 2; ctx.stroke(); ctx.fill();
+    }
+    // 区节点与名称
+    ctx.font = '600 12px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    fl.used.forEach((d) => {
+      const p = pos(d), r = rad(d);
+      ctx.fillStyle = TH.stFill; ctx.strokeStyle = TH.stInter; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.lineWidth = 3.5; ctx.strokeStyle = TH.halo; ctx.strokeText(fd.names[d], p.x, p.y + r + 11); ctx.fillStyle = TH.ink; ctx.fillText(fd.names[d], p.x, p.y + r + 11);
+    });
+  };
+  // 车站客流图层
+  Renderer.prototype.drawStationFlows = function (ctx) {
+    const g = this.game, model = g.model, net = model.net;
+    if (!net || !this.stPx) return;
+    const W = model.weights(g.clock.minute);
+    const kind = this.layerOpt.station;
+    // 断面客流
+    const lw = this.lineWidthPx();
+    for (let r = 0; r < net.R; r++) {
+      const rt = net.C.routes[r], re = net.rideEdge[r];
+      for (let k = 0; k < rt.segRefs.length; k++) {
+        const ld = model.edgeLoadAt(re[2 * k], W) + model.edgeLoadAt(re[2 * k + 1], W);
+        if (ld < 50) continue;
+        const arr = this.segPx && this.segPx.get(rt.segRefs[k].id);
+        if (!arr) continue;
+        ctx.strokeStyle = U.rgb(U.hex2rgb(rt.color), 0.35);
+        ctx.lineWidth = lw + U.clamp(Math.sqrt(ld) / 6, 0, 26);
+        this.strokeArr(ctx, arr);
+      }
+    }
+    ctx.font = '11px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let i = 0; i < net.N; i++) {
+      const sp = this.stPx[i]; if (!sp) continue;
+      let f = 0;
+      if (kind === 'in') f = model.stFlowAt(i, W, 'stIn'); else if (kind === 'out') f = model.stFlowAt(i, W, 'stOut'); else if (kind === 'xfer') f = model.stFlowAt(i, W, 'stXfer');
+      else f = model.stFlowAt(i, W, 'stIn') + model.stFlowAt(i, W, 'stOut') + model.stFlowAt(i, W, 'stXfer');
+      if (f < 1) continue;
+      const cap = CFG.metro.stationCap[net.C.stations[i].size];
+      const ratio = (model.stFlowAt(i, W, 'stIn') + model.stFlowAt(i, W, 'stOut') + model.stFlowAt(i, W, 'stXfer')) / cap;
+      const r = 4 + Math.sqrt(f) / 4;
+      ctx.fillStyle = ratio > 1 ? 'rgba(214,48,49,0.45)' : (ratio > 0.8 ? 'rgba(242,153,74,0.45)' : 'rgba(33,102,204,0.35)');
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2); ctx.fill();
+      if (this.z > 16 && r > 9) { ctx.fillStyle = TH.ink; ctx.fillText(U.fmtPeople(f), sp.x, sp.y - r - 7); }
+    }
+  };
+
+  // ---------------- 标注 ----------------
+  Renderer.prototype.drawLabels = function (ctx, ui) {
+    const g = this.game, z = this.z, v = this.view, city = g.city;
+    if (g.preview) return;   // 开始界面背景不显示标注
+    // 标注开关渐隐渐现（不闪切）
+    const step = (this.dt || 0.016) / 0.25;
+    this.labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
+    this.mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
+    const placed = [];
+    const fits = function (x0, y0, x1, y1) {
+      for (const r of placed) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false;
+      placed.push([x0, y0, x1, y1]); return true;
+    };
+    const halo = function (text, x, y, font, fill, align) {
+      ctx.font = font; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo; ctx.lineJoin = 'round';
+      ctx.strokeText(text, x, y); ctx.fillStyle = fill; ctx.fillText(text, x, y);
+    };
+    // 车站名
+    const C = this.drawnC;
+    const busyLayer = this.layer === 'cong' || this.layer === 'flow';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
+    if (C && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
+      ctx.globalAlpha = this.labA;
+      const fs = z >= 22 ? 12.5 : 11.5;
+      ctx.font = fs + 'px ' + FONT;
+      const order = this.stPx.map(function (p, i) { return [p, i]; }).filter(function (a) { return a[0]; });
+      order.sort(function (a, b) { return (C.stationLines[b[1]].size - C.stationLines[a[1]].size) || ({ L: 2, M: 1, S: 0 }[C.stations[b[1]].size] - { L: 2, M: 1, S: 0 }[C.stations[a[1]].size]); });
+      for (const it of order) {
+        const p = it[0], s = C.stations[it[1]];
+        const w = ctx.measureText(s.name).width;
+        const x = p.x + p.r + 4, y = p.y;
+        if (!fits(x - 2, y - fs / 2 - 2, x + w + 2, y + fs / 2 + 2)) continue;
+        halo(s.name, x, y, (C.stationLines[it[1]].size > 1 ? '600 ' : '') + fs + 'px ' + FONT, TH.ink);
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = this.mapLabA;
+    // 地标
+    if (z >= 13 && this.mapLabA > 0.01 && this.layer === 'none') {
+      for (let k = 0; k < D.landmarks.length; k++) {
+        if (!city.landmarkOn[k]) continue;
+        const lm = D.landmarks[k];
+        if (lm.x < v.x0 || lm.x > v.x1 || lm.y < v.y0 || lm.y > v.y1) continue;
+        const h = this.tEase > 0.5 && this.bFade > 0.5 ? (lm.h ? lm.h * EX : 34 * EX * 1.6) : 0;
+        const p = this.P(lm.x, lm.y, h);
+        ctx.font = '11px ' + FONT;
+        const text = '◆ ' + lm.name;
+        const w = ctx.measureText(text).width;
+        if (!fits(p.x - w / 2, p.y - 18, p.x + w / 2, p.y - 6)) continue;
+        halo(text, p.x, p.y - 12, '11px ' + FONT, TH.landmarkInk, 'center');
+      }
+    }
+    // 道路名
+    if (z >= 22 && this.layer === 'none' && this.mapLabA > 0.01) {
+      ctx.font = '10.5px ' + FONT;
+      const seen = new Set();
+      for (const k of CM.Geo.query(city.roadWayBk, v.x0, v.y0, v.x1, v.y1)) {
+        const w = city.roadWays[k], gr = city.roadGroups[w.g];
+        if (gr.cls < 3 || !gr.name || (gr.flags & 6) || !city.roadsBuilt[w.g] || seen.has(gr.name)) continue;
+        const p = w.p; let len = 0;
+        for (let q = 2; q < p.length; q += 2) len += Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]);
+        if (len < 2.4) continue;
+        let acc = 0, mx = p[0], my = p[1];
+        for (let q = 2; q < p.length; q += 2) { const d = Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]); if (acc + d >= len / 2) { const t = (len / 2 - acc) / (d || 1); mx = p[q - 2] + (p[q] - p[q - 2]) * t; my = p[q - 1] + (p[q + 1] - p[q - 1]) * t; break; } acc += d; }
+        const pt = this.P(mx, my, 0);
+        if (pt.x < 0 || pt.y < 0 || pt.x > this.w || pt.y > this.h) continue;
+        const text = gr.name;
+        const tw = ctx.measureText(text).width;
+        if (!fits(pt.x - tw / 2, pt.y - 7, pt.x + tw / 2, pt.y + 7)) continue;
+        seen.add(gr.name);
+        halo(text, pt.x, pt.y, '10.5px ' + FONT, TH.roadInk, 'center');
+      }
+    }    // 区名
+    if (z < 16 && this.mapLabA > 0.01 && this.layer !== 'flow') {
+      const a = U.clamp((16 - z) / 5, 0, 1) * 0.75;
+      for (const dl of (city.districtLabels || [])) {
+        const p = this.P(dl[1], dl[2], 0);
+        ctx.globalAlpha = a * this.mapLabA;
+        halo(dl[0], p.x, p.y, '600 ' + (z < 9 ? 15 : 17) + 'px ' + FONT, TH.district, 'center');
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = 1;
+    // 未开放区域标签
+    if (z < 24 && !busyLayer) {
+      const shown = new Set();
+      for (let k = 0; k < city.regions.length; k++) {
+        const rg = city.regions[k];
+        if (city.regionOpen[k] || rg.scenic || rg.cx == null || !rg.cells || shown.has(k)) continue;
+        const cx = rg.cx, cy = rg.cy;
+        if (cx < v.x0 || cx > v.x1 || cy < v.y0 || cy > v.y1) continue;
+        const p = this.P(cx, cy, 0);
+        const text = '🔒 ' + rg.name.replace(/（.*）/, '') + ' · 参考 ' + rg.open + ' 年开放';
+        ctx.font = '11px ' + FONT;
+        const w = ctx.measureText(text).width;
+        if (!fits(p.x - w / 2, p.y - 8, p.x + w / 2, p.y + 8)) continue;
+        halo(text, p.x, p.y, '11px ' + FONT, TH.lockInk, 'center');
+        shown.add(k);
+      }
+    }
+  };
+
+  // ---------------- 拾取 ----------------
+  Renderer.prototype.pickStation = function (sx, sy) {
+    if (!this.stPx) return null;
+    let best = null, bd = 1e9;
+    for (const p of this.stPx) {
+      if (!p) continue;
+      const d = Math.hypot(p.x - sx, p.y - sy);
+      if (d < p.r + 7 && d < bd) { bd = d; best = p.id; }
+    }
+    return best;
+  };
+  Renderer.prototype.pickSegment = function (sx, sy, tol) {
+    if (!this.segPx) return null;
+    tol = tol || 7;
+    let best = null, bd = tol;
+    this.segPx.forEach(function (arr, id) {
+      for (let i = 0; i + 3 < arr.length; i += 2) {
+        const d = U.distToSeg(sx, sy, arr[i], arr[i + 1], arr[i + 2], arr[i + 3]);
+        if (d < bd) { bd = d; best = id; }
+      }
+    });
+    return best;
+  };
+  Renderer.prototype.buildLinkGrid = function () {
+    const city = this.game.city;
+    if (this.linkGridVer === city.roadVersion) return;
+    const G = new Map();
+    for (const L of city.car.links) {
+      const b = L.bbox;
+      for (let j = Math.floor(b[1] / 4); j <= Math.floor(b[3] / 4); j++) for (let i = Math.floor(b[0] / 4); i <= Math.floor(b[2] / 4); i++) {
+        const k = i + ':' + j; if (!G.has(k)) G.set(k, []); G.get(k).push(L);
+      }
+    }
+    this.linkGrid = G; this.linkGridVer = city.roadVersion;
+  };
+  Renderer.prototype.pickLink = function (wx, wy, tol) {
+    this.buildLinkGrid();
+    const arr = this.linkGrid.get(Math.floor(wx / 4) + ':' + Math.floor(wy / 4));
+    if (!arr) return null;
+    let best = null, bd = tol || 0.25;
+    for (const L of arr) { const d = U.distToPoly(wx, wy, L.pts); if (d < bd) { bd = d; best = L; } }
+    return best;
+  };
+  Renderer.prototype.fitAll = function () {
+    const zx = this.w / (CFG.W + 4), zy = this.h / (CFG.H + 4);
+    this.cam.tz = this.cam.zoom = U.clamp(Math.min(zx, zy) * 1.05, 5, 96);
+    this.cam.cx = CFG.W / 2; this.cam.cy = CFG.H / 2;
+  };
+  CM.RENDER_CONST = { EX: EX, HSF: HSF, ISO: ISO, UNDER_DEPTH: UNDER_DEPTH };
+})(window.CM);

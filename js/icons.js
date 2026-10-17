@@ -1,0 +1,108 @@
+'use strict';
+// 图标集（24×24 线性图标，currentColor 着色）
+(function (CM) {
+  const S = function (body, extra) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"' + (extra || '') + '>' + body + '</svg>';
+  };
+  const F = function (body) { return '<svg viewBox="0 0 24 24" fill="currentColor">' + body + '</svg>'; };
+  const I = {
+    // 通用
+    menu: S('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+    close: S('<path d="M6 6l12 12M18 6L6 18"/>'),
+    back: S('<path d="M15 5l-7 7 7 7"/>'),
+    chev: S('<path d="M9 6l6 6-6 6"/>'),
+    check: S('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+    plus: S('<path d="M12 5v14M5 12h14"/>'),
+    minus: S('<path d="M5 12h14"/>'),
+    power: S('<path d="M12 3v8"/><path d="M7.1 6.3a7.5 7.5 0 1 0 9.8 0"/>'),
+    expand: S('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+    info: S('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/>'),
+    warn: S('<path d="M12 3.5L2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17v.4"/>'),
+    error: S('<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>'),
+    good: S('<circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16.5 9"/>'),
+    locate: S('<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'),
+    undo: S('<path d="M9 7L4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 0 12"/>', ' style="overflow:visible"'),
+    redo: S('<path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 0 0 0 12"/>', ' style="overflow:visible"'),
+    gear: S('<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M4.2 7.5l2 1.2M17.8 15.3l2 1.2M4.2 16.5l2-1.2M17.8 8.7l2-1.2"/><circle cx="12" cy="12" r="7"/>'),
+    help: S('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8M12 17v.4"/>'),
+    sun: S('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>'),
+    moon: S('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
+    sound: S('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>'),
+    mute: S('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>'),
+    chart: S('<path d="M4 20V4M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>'),
+    save: S('<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>'),
+    folder: S('<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
+    export: S('<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 14v5h14v-5"/>'),
+    import: S('<path d="M12 15V3M7 10l5 5 5-5"/><path d="M5 14v5h14v-5"/>'),
+    trash: S('<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>'),
+    home: S('<path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/>'),
+    // 指标
+    clock: S('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+    coin: S('<ellipse cx="12" cy="7" rx="7" ry="3"/><path d="M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7"/><path d="M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"/>'),
+    people: S('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.4a4.6 4.6 0 0 1 5.5 4.6"/>'),
+    metro: S('<rect x="5" y="3.5" width="14" height="14" rx="4"/><path d="M5 11h14"/><circle cx="9" cy="14.3" r="0.9"/><circle cx="15" cy="14.3" r="0.9"/><path d="M8 21l2-3.5M16 21l-2-3.5M9 7h6"/>'),
+    car: S('<path d="M5 16.5V12l1.8-4.6a2 2 0 0 1 1.9-1.4h6.6a2 2 0 0 1 1.9 1.4L19 12v4.5"/><path d="M4 12h16v4.5H4z"/><circle cx="7.5" cy="14.3" r="0.6"/><circle cx="16.5" cy="14.3" r="0.6"/><path d="M6 16.5v2M18 16.5v2"/>'),
+    timer: S('<circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.5 1.5M9.5 2.5h5M19 6l1.5-1.5"/>'),
+    smile: S('<circle cx="12" cy="12" r="9"/><path d="M8 14.2a4.8 4.8 0 0 0 8 0"/><path d="M9 9.5v.5M15 9.5v.5"/>'),
+    meh: S('<circle cx="12" cy="12" r="9"/><path d="M8.5 15h7"/><path d="M9 9.5v.5M15 9.5v.5"/>'),
+    frown: S('<circle cx="12" cy="12" r="9"/><path d="M8 16.2a4.8 4.8 0 0 1 8 0"/><path d="M9 9.5v.5M15 9.5v.5"/>'),
+    flag: S('<path d="M5 21V4"/><path d="M5 4.5h11l-2 3.5 2 3.5H5"/>'),
+    trophy: S('<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H4.5a3 3 0 0 0 3.5 4M16 6h3.5a3 3 0 0 1-3.5 4M12 13v4M8.5 20h7M10 17h4"/>'),
+    // 图层
+    layers: S('<path d="M12 3.5l9 4.8-9 4.8-9-4.8z"/><path d="M3 12.5l9 4.8 9-4.8"/><path d="M3 16.5l9 4.8 9-4.8"/>'),
+    eyeOff: S('<path d="M3 3l18 18"/><path d="M10.6 6.1A9.6 9.6 0 0 1 12 6c5.5 0 9 6 9 6a15.6 15.6 0 0 1-2.6 3.3M6.6 6.6C4.2 8.2 3 12 3 12s3.5 6 9 6a8.6 8.6 0 0 0 4.1-1"/>'),
+    density: S('<rect x="3.5" y="13" width="4" height="7" rx="1"/><rect x="10" y="8" width="4" height="12" rx="1"/><rect x="16.5" y="4" width="4" height="16" rx="1"/>'),
+    briefcase: S('<rect x="3.5" y="7.5" width="17" height="12" rx="2"/><path d="M9 7.5V5.5h6v2M3.5 12.5h17"/>'),
+    traffic: S('<rect x="8" y="2.5" width="8" height="19" rx="3"/><circle cx="12" cy="7" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="17" r="1.5"/>'),
+    flow: S('<path d="M4 17c4-8 8-8 16-10"/><path d="M16 4l4 3-3.5 3.5"/><circle cx="4" cy="17" r="1.6"/>'),
+    radar: S('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>'),
+    stationflow: S('<circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/>'),
+    map: S('<path d="M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2z"/><path d="M9 4.5v13M15 6.5v13"/>'),
+    lock: S('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>'),
+    // 工具
+    cursor: S('<path d="M5.5 3.5l13 7.4-6 1.6-2.6 5.8z"/>'),
+    station: S('<circle cx="12" cy="10" r="5.5"/><circle cx="12" cy="10" r="2"/><path d="M12 15.5V21"/>'),
+    route: S('<circle cx="5" cy="18.5" r="2.2"/><circle cx="19" cy="5.5" r="2.2"/><path d="M6.8 17C11 13.5 9.5 9.5 13 8s3.5-1 4.3-1.4"/>'),
+    pencil: S('<path d="M4 20h4L19.2 8.8a2 2 0 0 0 0-2.8l-1.2-1.2a2 2 0 0 0-2.8 0L4 16z"/><path d="M14 6l4 4"/>'),
+    bulldozer: S('<path d="M3 15.5h11v-5H8l-2 2.5H3z"/><path d="M14 13h3l3.5-4.5M20.5 8.5L22 15h-5"/><rect x="2.5" y="15.5" width="12" height="4" rx="2"/><circle cx="5.5" cy="17.5" r="0.7"/><circle cx="11.5" cy="17.5" r="0.7"/>'),
+    // 时间
+    pause: F('<rect x="6.5" y="5" width="4" height="14" rx="1.3"/><rect x="13.5" y="5" width="4" height="14" rx="1.3"/>'),
+    play: F('<path d="M7.5 5.2v13.6a1 1 0 0 0 1.5.9l10.6-6.8a1 1 0 0 0 0-1.7L9 4.3a1 1 0 0 0-1.5.9z"/>'),
+    fast: F('<path d="M3.5 6.3v11.4a.8.8 0 0 0 1.3.7l7.7-5.7a.8.8 0 0 0 0-1.3L4.8 5.7a.8.8 0 0 0-1.3.6z"/><path d="M12 6.3v11.4a.8.8 0 0 0 1.3.7l7.7-5.7a.8.8 0 0 0 0-1.3l-7.7-5.7a.8.8 0 0 0-1.3.6z"/>'),
+    faster: F('<path d="M1.5 7v10a.7.7 0 0 0 1.1.6l6.2-5a.7.7 0 0 0 0-1.2L2.6 6.4A.7.7 0 0 0 1.5 7z"/><path d="M8.8 7v10a.7.7 0 0 0 1.1.6l6.2-5a.7.7 0 0 0 0-1.2L9.9 6.4A.7.7 0 0 0 8.8 7z"/><path d="M16.1 7v10a.7.7 0 0 0 1.1.6l5-4.2a.7.7 0 0 0 0-1.2l-5-4.2a.7.7 0 0 0-1.1.6z"/>'),
+    calMonth: S('<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M12 12.5v5M9.5 15h5"/>'),
+    calYear: S('<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9 13.5l3-1.5v6M14.5 18h-5"/>'),
+    // 视图
+    view2d: S('<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 12h17M12 3.5v17"/>'),
+    view3d: S('<path d="M12 2.8l8 4.6v9.2l-8 4.6-8-4.6V7.4z"/><path d="M12 12l8-4.6M12 12v9.2M12 12L4 7.4"/>'),
+    under: S('<path d="M2.5 9h19"/><path d="M5 13.5h14M7.5 18h9" stroke-dasharray="2.2 2.2"/><path d="M12 9V3.5M9.5 6L12 3.5 14.5 6"/>'),
+    label: S('<path d="M4 6h16M4 12h10M4 18h13"/>'),
+    // 其他
+    hammer: S('<path d="M13.5 6.5l4 4M3.5 20.5l9.5-9.5"/><path d="M11 4.5l3.5-1 6 6-1 3.5-3-3-2.5 1-1.5-1.5 1-2.5z"/>'),
+    sparkle: S('<path d="M12 3l2 5.5L19.5 10 14 12l-2 5.5L10 12 4.5 10 10 8.5z"/>'),
+    building: S('<path d="M4 20.5h16M6 20.5V8l6-4 6 4v12.5"/><path d="M10 20.5v-4h4v4M9.5 10h.01M14.5 10h.01M9.5 13h.01M14.5 13h.01"/>'),
+    train: S('<rect x="6" y="3" width="12" height="14" rx="3"/><path d="M6 11h12M9 21l1.5-4M15 21l-1.5-4M9.5 6.5h5"/>'),
+    ticket: S('<path d="M3.5 8a2 2 0 0 0 0 4v4.5h17V12a2 2 0 0 1 0-4V3.5h-17z" transform="translate(0 2)"/><path d="M14 5.5v13" stroke-dasharray="2 2"/>'),
+    wallet: S('<path d="M4 7.5h14.5a1.5 1.5 0 0 1 1.5 1.5v9.5a1.5 1.5 0 0 1-1.5 1.5H5.5A1.5 1.5 0 0 1 4 18.5V6a2 2 0 0 1 2-2h11"/><path d="M16 13.5h.01"/>'),
+    tasks: S('<path d="M9 6h11M9 12h11M9 18h11"/><path d="M3.5 6l1.3 1.3L7 5M3.5 12l1.3 1.3L7 11M3.5 18l1.3 1.3L7 17"/>'),
+    search: S('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20.5 20.5"/>'),
+    // 分析图层
+    lyPop: S('<circle cx="12" cy="7" r="2.6"/><path d="M7.5 15.5a4.5 4.5 0 0 1 9 0"/><circle cx="5.3" cy="10.2" r="2"/><circle cx="18.7" cy="10.2" r="2"/><path d="M2.3 17.6a3.2 3.2 0 0 1 5-2.7M21.7 17.6a3.2 3.2 0 0 0-5-2.7"/><path d="M3.5 20.5h17"/>'),
+    lyJobs: S('<path d="M2.5 20.5h19"/><path d="M4 20.5v-8l4.5-3.5 4.5 3.5v8"/><path d="M7 20.5v-4h3v4"/><path d="M14.8 20.5V4.5h5.7v16"/><path d="M16.9 8h1.5M16.9 11h1.5M16.9 14h1.5"/>'),
+    lyCong: S('<path d="M9 3.5L5 20.5M15 3.5l4 17"/><path d="M12 4.5v2.4M12 10v2.6M12 16v3.4"/>'),
+    lyFlow: S('<circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="6" r="2.2"/><path d="M7 16.4C10 12 13.4 9.4 16.7 7.5"/><path d="M13.4 6.7l3.5.5-1 3.3"/>'),
+    lyCover: S('<circle cx="12" cy="12" r="2.4"/><circle cx="12" cy="12" r="5.8"/><circle cx="12" cy="12" r="9.2" stroke-dasharray="2.2 2.4"/>'),
+    lyStation: S('<circle cx="10" cy="14" r="3.4"/><path d="M10 3v6M7.6 6.8L10 9.2l2.4-2.4"/><path d="M14.5 14H21M18.6 11.6L21 14l-2.4 2.4"/>'),
+    star: S('<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>'),
+    starOn: F('<path d="M12 2.9l2.8 5.6 6.2.9-4.5 4.4 1.1 6.2L12 17.1 6.4 20l1.1-6.2L3 9.4l6.2-.9z"/>'),
+    network: S('<circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="12" r="2.4"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M6.6 7.2l3.6 3.4M17.4 7.2l-3.6 3.4M6.6 16.8l3.6-3.4M17.4 16.8l-3.6-3.4"/>'),
+  };
+  CM.ICON = I;
+  CM.icon = function (name, size, cls) {
+    const span = document.createElement('span');
+    span.className = 'ico' + (cls ? ' ' + cls : '');
+    if (size) { span.style.width = size + 'px'; span.style.height = size + 'px'; }
+    span.innerHTML = I[name] || '';
+    return span;
+  };
+})(window.CM);
