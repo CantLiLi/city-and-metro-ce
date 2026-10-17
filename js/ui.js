@@ -244,6 +244,13 @@
     g.on('jumpProgress', function (p) { self.updateJump(p); });
     g.on('jumpDone', function (r) { snd('chime'); self.showJumpResult(r); self.scheduleAutosave(); if (r.failed) self.showFailure(r.failed); });
     g.on('speed', function () { self.renderToolbar(); });
+    // 里程碑：消息提示；重大节点弹出庆祝横幅（跳月 / 跳年期间只记录）
+    g.on('milestone', function (r) {
+      if (g.jumping) return;
+      const c = CM.Milestones.CAT[r.cat] || {};
+      if (r.big) { snd('fanfare'); self.celebrate('里程碑：' + r.title, r.desc || '', c.color); }
+      else self.toast('里程碑：' + r.title, 'good');
+    });
     g.on('event', function (e) {
       if (e.tag === '任务' && e.title.indexOf('任务完成') === 0) { snd('fanfare'); if (!g.jumping) self.celebrate(e.title.replace(/^任务完成[:：]?\s*/, '任务完成：'), e.desc || '', '#f0a72b'); }
       else if (e.title.indexOf('新区域开放') === 0) {
@@ -495,7 +502,7 @@
     }
   };
   UI.prototype.toggleSound = function () { CM.Settings.set('sound', !CM.Settings.get('sound')); if (CM.Settings.get('sound')) snd('toggle'); this.toast(CM.Settings.get('sound') ? '音效已开启' : '音效已关闭', 'info'); };
-  UI.prototype.openStats = function () { if (CM.Stats && this.g()) { snd('open'); CM.Stats.open(this); } };
+  UI.prototype.openStats = function (tab) { if (CM.Stats && this.g()) { snd('open'); CM.Stats.open(this, typeof tab === 'string' ? tab : null); } };
   UI.prototype.openNetMap = function () {
     if (!CM.NetMap || !this.g()) return;
     if (CM.NetMap.isOpen()) { CM.NetMap.close(); return; }
@@ -752,7 +759,7 @@
     switch (id) {
       case 'pop': grad(['#ffe296', '#f99e4c', '#de5434'], '0', '6 万人/km²'); note = '每个街区的常住人口密度（每月更新）。'; break;
       case 'jobs': li('#f0963c', '以住宅为主'); li('#9aa0b0', '职住混合'); li('#3468d6', '以就业岗位为主'); note = '颜色越深，人口与岗位越密集。'; break;
-      case 'cong': li(CC[0], '畅通', 'line'); li(CC[1], '缓行', 'line'); li(CC[2], '拥堵', 'line'); li(CC[3], '严重拥堵', 'line'); note = '各条干道当前时刻的拥堵程度（流量 ÷ 通行能力），随早晚高峰实时变化，夜间与平峰多为畅通；线越粗道路等级越高。'; break;
+      case 'cong': li(CC[0], '畅通', 'line'); li(CC[1], '缓行', 'line'); li(CC[2], '拥堵', 'line'); li(CC[3], '严重拥堵', 'line'); note = '主要道路（快速路与主干道）当前时刻的拥堵程度（流量 ÷ 通行能力），随早晚高峰实时变化，夜间与平峰多为畅通；线越粗道路等级越高。'; break;
       case 'flow': opts('flow', [['all', '全部'], ['car', '汽车'], ['metro', '地铁']]); if (R.layerOpt.flow === 'all') { li('#80869a', '汽车出行', 'line'); li('#2166cc', '其中乘地铁（箭头中间的蓝色部分）', 'line'); } note = '每个片区当前时段最主要的出行方向（第二方向接近时也画出）：箭头从片区指向目的地，尖端标出目的地名称；两个片区互为主要方向时画成双向箭头。线越粗出行越多，新区域开放、修建地铁后会随之变化。'; break;
       case 'cover': li('#1b7837', '步行 5 分钟内'); li('#5aae61', '步行 10 分钟内'); li('#acdc8c', '步行 15 分钟内'); li('#d73027', '人口密集但无地铁'); note = '沿实际道路计算，河流与断路会阻隔。'; break;
       case 'station': opts('station', [['all', '合计'], ['in', '进站'], ['out', '出站'], ['xfer', '换乘']]); li('rgba(31,143,191,0.8)', '高峰负荷正常（< 60%）'); li('rgba(240,160,32,0.85)', '负荷较高（60%–100%）'); li('rgba(217,58,58,0.85)', '超过车站能力'); note = (self.g() && self.g().model.stDaily && self.g().compiled.routes.length ? '' : '还没有运营线路或客流仍在计算。') + '典型工作日全天：圆越大客流越大，颜色为高峰小时负荷；线路下方的色带为区间断面客流。'; break;
@@ -1135,7 +1142,7 @@
     const geo = [];
     city.regions.forEach(function (rg, k) {
       if (!rg.name || !rg.cells || !rg.bbox) return;
-      geo.push({ kind: 'region', id: k, name: rg.name, sub: '区域 · ' + (rg.scenic ? '风景区' : city.regionOpen[k] ? '已开放' : '尚未开放（参考 ' + rg.open + ' 年）'), icon: 'map' });
+      geo.push({ kind: 'region', id: k, name: rg.name, sub: '区域 · ' + (rg.scenic ? '风景区' : city.regionOpen[k] ? '已开放' : '尚未开放（' + U.regionLock(rg) + '）'), icon: 'map' });
     });
     for (const d of city.districtLabels || []) geo.push({ kind: 'district', name: d[0], sub: '城区', x: d[1], y: d[2], icon: 'map' });
     D.landmarks.forEach(function (lm, k) { geo.push({ kind: 'landmark', name: lm.name, sub: '地标' + (city.landmarkOn[k] ? '' : ' · 尚未建成（' + lm.year + ' 年）'), x: lm.x, y: lm.y, icon: 'building' }); });
@@ -1352,7 +1359,7 @@
       const news = h('div', { class: 'map-actions' });
       if (mp.tutorial) news.appendChild(modeBtn('free', 'play', 'b-teal', '开始教程', '从头开始 12 个引导任务（不限资金）', true));
       else {
-        news.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '新游戏 · 经营挑战', '初始资金 ' + U.fmtMoney(CFG.economy.startFunds) + '，历史与动态任务，亏损或满意度过低会失败', true));
+        news.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '新游戏 · 经营挑战', '初始资金 ' + U.fmtMoney(mp.cfg.economy.startFunds, undefined, mp.cfg.money) + '，历史与动态任务，亏损或满意度过低会失败', true));
         news.appendChild(modeBtn('free', 'sparkle', 'b-teal', '新游戏 · 自由建造', '资金不限，任务仅供参考，专注规划与观察', false));
       }
       const cont = h('button', { class: 'map-mode', disabled: latest ? null : true, onclick: function () { if (latest) self.loadSlot(latest.slotId); } },

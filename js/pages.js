@@ -41,7 +41,7 @@
       x = dlt(B.commute, Dr.commute, 1, ' 分钟', false); g1.appendChild(this.stat('平均通勤时间', U.fmtNum(Dr.commute, 1) + ' 分钟', x[0], x[1]));
       x = dlt(B.cong, Dr.cong, 3, '', false); g1.appendChild(this.stat('道路拥堵指数（全日）', Dr.cong.toFixed(3), x[0], x[1]));
       x = dlt(B.car, Dr.car, 0, '', false); g1.appendChild(this.stat('汽车出行（人次/日）', U.fmtPeople(Dr.car), '转移 ' + U.fmtPeople(Math.max(0, B.car - Dr.car)) + ' 人次', x[1]));
-      x = dlt(B.fare, Dr.fare, 0, '', true); g1.appendChild(this.stat('票务收入（日）', U.fmtMoney(Dr.fare / 10000), U.fmtSigned((Dr.fare - B.fare) / 10000, 1, ' 万元'), x[1]));
+      x = dlt(B.fare, Dr.fare, 0, '', true); g1.appendChild(this.stat('票务收入（日）', U.fmtMoney(Dr.fare / 10000), U.fmtSigned((Dr.fare - B.fare) / 10000, 1, ' ' + CFG.money.wan), x[1]));
       wrap.appendChild(g1);
       if (res.lines.length) {
         wrap.appendChild(this.sec('pr-lines', '相关线路客流（日上车人次）', '', function () {
@@ -59,7 +59,7 @@
       }, true));
     }
     const c = res.conditions;
-    const fare = '全网统一票价 ' + c.fare.flat + ' 元/次';
+    const fare = '全网统一票价 ' + c.fare.flat + ' ' + CFG.money.unit + '/次';
     wrap.appendChild(this.sec('pr-cond', '预测条件与说明', '', function () {
       return h('div', { class: 'note' }, '比较对象：当前正式网络 vs 草案网络；城市状态：' + c.y + '年' + c.m + '月（相同人口、岗位与出行需求）；时间范围：典型工作日全天（早高峰、平峰、晚高峰、夜间）；票价：' + fare + '；运力：系统按预测客流自动调整。预测仅供参考，不扣费、不改变正式客流；投运后的实际结果由模拟产生，并在车站与线路详情中单独显示。');
     }));
@@ -476,7 +476,7 @@
     ]));
     const x = model.zCx[z], y = model.zCy[z];
     const rg = g.city.regionAt(x, y);
-    if (rg) el.appendChild(h('div', { class: 'note', style: { marginTop: '8px' } }, '所属区域：' + rg.name + (g.city.regionOpen[g.city.regions.indexOf(rg)] ? '（已开放）' : '（尚未开放，参考 ' + rg.open + ' 年）')));
+    if (rg) el.appendChild(h('div', { class: 'note', style: { marginTop: '8px' } }, '所属区域：' + rg.name + (g.city.regionOpen[g.city.regions.indexOf(rg)] ? '（已开放）' : '（尚未开放，' + U.regionLock(rg) + '）')));
     el.appendChild(h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(z); } }, '定位')));
     return { title: g.zoneName(z), el: el };
   };
@@ -497,7 +497,7 @@
     if (!def) return null;
     el.appendChild(h('div', { style: { fontSize: '22px', fontWeight: 700, margin: '4px 0 8px' } }, this.liveText(def.val)));
     if (key === 'share' && d.ready) {
-      el.appendChild(this.kv([['日均出行（汽车+地铁）', U.fmtPeople(d.trips) + ' 人次'], ['其中地铁', U.fmtPeople(d.metro) + ' 人次'], ['步行 15 分钟可达地铁的人口', U.fmtPct(d.coverage)], ['平均票价', d.metro > 0 ? U.fmtNum(d.avgFare, 2) + ' 元' : '—']]));
+      el.appendChild(this.kv([['日均出行（汽车+地铁）', U.fmtPeople(d.trips) + ' 人次'], ['其中地铁', U.fmtPeople(d.metro) + ' 人次'], ['步行 15 分钟可达地铁的人口', U.fmtPct(d.coverage)], ['平均票价', d.metro > 0 ? U.fmtNum(d.avgFare, 2) + ' ' + CFG.money.unit : '—']]));
     }
     if (key === 'cong') {
       const W = g.model.weights(g.clock.minute);
@@ -546,36 +546,23 @@
     el.appendChild(this.sec('dt-time', '时间与时段', '', function () {
       return h('div', { class: 'note' }, '1× 速度下游戏中一天约 ' + Math.round(CFG.time.secPerHour * 24) + ' 秒。时段：早高峰 7–9 时、日间平峰、晚高峰 17–19 时、夜间；地铁运营 06:00–24:00。暂停时可以建设、预测和调整票价（默认规则，待确认）。跳月/跳年会逐日结算票款与运营费用，并处理每月的拨款、城市发展、区域开放与任务。');
     }));
-    el.appendChild(this.sec('dt-regions', '区域开放', '', function () {
-      const b = h('div');
-      city.regions.forEach(function (rg, k) {
-        if (rg.scenic) return;
-        const open = city.regionOpen[k], dt = city.regionOpenDate[k];
-        const cx = rg.cx != null ? rg.cx : 60, cy = rg.cy != null ? rg.cy : 48;
-        b.appendChild(h('div', { class: 'list-item clickable', onclick: function () { self.locateRegion(k); } },
-          h('span', { class: 'tag ' + (open ? 'good' : '') }, open ? '已开放' : '未开放'),
-          h('div', { class: 'grow small' }, rg.name, h('div', { class: 'tiny muted' }, open ? (dt ? dt[0] + '年' + dt[1] + '月开放' : '') : '参考 ' + rg.open + ' 年' + (rg.pop ? '；人口达 ' + U.fmtPeople(rg.pop) + ' 时可提前 3 年内开放' : '')))));
-      });
-      return b;
-    }));
-    el.appendChild(this.sec('dt-events', '城市发展记录', g.events.length + ' 条', function () {
-      const b = h('div');
-      const tagCls = { '史实': 'hist', '估算': 'est', '模拟': 'sim', '任务': 'info', '建设': 'good', '经营': 'bad' };
-      for (const e of g.events.slice().reverse().slice(0, 120)) b.appendChild(h('div', { class: 'list-item' }, h('span', { class: 'tag ' + (tagCls[e.tag] || '') }, e.tag), h('div', { class: 'grow small' }, h('div', null, e.title), e.desc ? h('div', { class: 'tiny muted' }, e.desc) : null), h('span', { class: 'tiny faint' }, e.y + '.' + e.m)));
-      return b;
-    }, true));
+    // 城市发展的关键节点见统计面板的「里程碑」（区域开放与逐条发展记录不在这里重复列出）
+    const ms = CM.Milestones ? CM.Milestones.state(g).list.filter(function (r) { return r.id !== 'start'; }) : [];
+    const last = ms[ms.length - 1];
+    el.appendChild(h('button', { class: 'ms-link', onclick: function () { self.openStats('milestones'); } },
+      h('span', { class: 'ms-medal sm' }, CM.icon('trophy', 18)),
+      h('div', { class: 'grow' }, h('b', null, '城市里程碑 · ' + ms.length + ' 个'), h('small', null, last ? '最近：' + last.title + '（' + last.y + '年' + last.m + '月）' : '首条地铁开通、人口与客流跨越关口等关键节点会记录在这里')),
+      CM.icon('chev', 16)));
     el.appendChild(this.sec('dt-data', '数据来源与真实性', '', function () { return self.dataNote(); }));
     return { title: '日期与城市发展', el: el };
   };
+  // 数据来源与真实性：由各地图的场景数据提供（[标签, 样式, 说明]），没有时给出通用说明
   UI.prototype.dataNote = function () {
-    return h('div', { class: 'note' },
-      h('div', null, h('span', { class: 'tag hist' }, '真实地理'), ' 珠江水系与湖泊、道路与桥梁、铁路、公园与山林、行政区（街道）边界、地名与地标场地均来自 OpenStreetMap（© OpenStreetMap 贡献者，ODbL），按 250 m 网格投影。'),
-      h('div', { style: { marginTop: '6px' } }, h('span', { class: 'tag hist' }, '史实参考'), ' 主要道路与桥梁的通车年份、地标落成年份、区域开发年份、历史参考任务（参考广州地铁各线开通年份）。未列出年份的道路随所在区域开放出现。'),
-      h('div', { style: { marginTop: '6px' } }, h('span', { class: 'tag est' }, '估算'), ' 1990 年人口与就业分布、1990–2020 年人口增长曲线、出行率、时间价值、汽车拥有水平、造价与运营费用。'),
-      h('div', { style: { marginTop: '6px' } }, h('span', { class: 'tag sim' }, '模拟'), ' 2020 年之后的人口增长、新道路与区域开发、居民出行选择、道路拥堵、客流与财政结果。'),
-      h('div', { style: { marginTop: '6px' } }, '本游戏仅模拟汽车与地铁等已约定内容，不包含完整现实交通系统，模拟结果不得作为真实广州交通规划预测。'));
+    const rows = D.dataNote || [['模拟', 'sim', '城市与交通数据为游戏模拟结果。']];
+    return h('div', { class: 'note' }, rows.map(function (r, i) {
+      return h('div', { style: { marginTop: i ? '6px' : '0' } }, r[0] ? h('span', { class: 'tag ' + (r[1] || '') }, r[0]) : null, (r[0] ? ' ' : '') + r[2]);
+    }));
   };
-
   // ======================== 页面：财政 ========================
   UI.prototype.page_finance = function () {
     const g = this.g(), E = g.econ, self = this;
@@ -602,7 +589,7 @@
       if (E.ledger.length) {
         const t = h('table', { class: 'tbl', style: { marginTop: '8px' } }, h('tr', null, h('th', null, '月份'), h('th', null, '收入'), h('th', null, '支出'), h('th', null, '期末')));
         for (const r of E.ledger.slice(-12).reverse()) t.appendChild(h('tr', null, h('td', null, r.y + '.' + r.m), h('td', null, U.fmtYi(r.grant + r.fare + r.reward, 2)), h('td', null, U.fmtYi(r.construction + r.demolition + r.upgrade + r.relocation + r.ops, 2)), h('td', { class: r.end < 0 ? 'bad' : '' }, free ? '—' : U.fmtYi(r.end, 1))));
-        box.append(h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, '最近 12 个月（亿元）'), t);
+        box.append(h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, '最近 12 个月（' + CFG.money.yi + '）'), t);
       }
       return box;
     }, false, 'coin'));
@@ -620,7 +607,7 @@
     return { title: '财政与票价', el: el };
   };
   // 票价：全网统一票价，单个滑块。拖动时更新金额与影响估算，松手后应用并重新计算客流
-  UI.fmtFare = function (v) { return '¥' + (v % 1 ? v.toFixed(1) : String(v)) + '/次'; };
+  UI.fmtFare = function (v) { return CFG.money.sym + (v % 1 ? (v * 10 % 1 ? v.toFixed(2) : v.toFixed(1)) : String(v)) + '/次'; };
   UI.prototype.fareEditor = function () {
     const g = this.g(), E = g.econ, self = this, R = CFG.fareRange;
     const box = h('div', { class: 'fare-ed' });
@@ -644,16 +631,16 @@
       const v = +slider.value;
       if (v === E.fare.flat) return;
       E.fare = { mode: 'flat', flat: v }; g.model.fare = E.fare; g.model.sinceChange = 0; g.touch();
-      g.logEvent({ tag: '经营', title: '调整票价', desc: '全网统一票价 ' + v + ' 元/次' });
+      g.logEvent({ tag: '经营', title: '调整票价', desc: '全网统一票价 ' + v + ' ' + CFG.money.unit + '/次' });
       self.toast('票价已调整为 ' + UI.fmtFare(v) + '，居民出行选择正在重新计算', 'good');
       self.markUnsaved();
       show(v);
     });
     show(E.fare.flat);
     box.append(h('div', { class: 'fare-top' }, val, h('span', { class: 'tiny muted' }, '全网统一 · 换乘不另收费')),
-      h('div', { class: 'fare-slider' }, h('span', { class: 'tiny muted' }, '¥' + R.min), slider, h('span', { class: 'tiny muted' }, '¥' + R.max)),
+      h('div', { class: 'fare-slider' }, h('span', { class: 'tiny muted' }, CFG.money.sym + R.min), slider, h('span', { class: 'tiny muted' }, CFG.money.sym + R.max)),
       this.sec('fi-fare-fx', '票务收入与满意度影响', '', function () {
-        return h('div', null, effect, h('div', { class: 'note', style: { marginTop: '6px' } }, '票价越高，乘车意愿越低、票务收入与满意度负担越高。' + g.clock.y + ' 年居民时间价值约 ' + vot.toFixed(1) + ' 元/小时（估算）。松手后居民出行选择将在数秒内重新计算。'));
+        return h('div', null, effect, h('div', { class: 'note', style: { marginTop: '6px' } }, '票价越高，乘车意愿越低、票务收入与满意度负担越高。' + g.clock.y + ' 年居民时间价值约 ' + vot.toFixed(1) + ' ' + CFG.money.unit + '/小时（估算）。松手后居民出行选择将在数秒内重新计算。'));
       }, false, 'info'));
     return box;
   };
@@ -689,7 +676,7 @@
     for (const t of T.active) el.appendChild(card(t, false));
     el.appendChild(this.sec('tk-done', '已完成', T.done.length + ' 项', function () { const b = h('div'); for (const t of T.done.slice().reverse()) b.appendChild(card(t, true)); if (!T.done.length) b.appendChild(h('div', { class: 'note' }, '暂无')); return b; }));
     el.appendChild(this.sec('tk-failed', '未完成', T.failed.length + ' 项', function () { const b = h('div'); for (const t of T.failed.slice().reverse()) b.appendChild(card(t, true)); if (!T.failed.length) b.appendChild(h('div', { class: 'note' }, '暂无')); return b; }));
-    el.appendChild(this.sec('tk-rule', '任务说明', '', function () { return h('div', { class: 'note' }, '历史参考任务参考广州地铁的实际发展时间，但不要求按真实线路走向建设，只需满足目标描述。动态任务根据当前拥堵、覆盖、车站拥挤与客流情况生成。单个任务失败不会直接结束游戏。'); }));
+    el.appendChild(this.sec('tk-rule', '任务说明', '', function () { return h('div', { class: 'note' }, (D.taskNote || '历史参考任务参考本城的发展需求，但不要求按真实线路走向建设，只需满足目标描述。') + '动态任务根据当前拥堵、覆盖、车站拥挤与客流情况生成。单个任务失败不会直接结束游戏。'); }));
     return { title: '任务', el: el };
   };
 

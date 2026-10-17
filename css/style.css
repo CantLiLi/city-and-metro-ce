@@ -849,3 +849,46 @@ body.cinema #followCard .fc-dir, body.cinema #followCard .fc-hint { color: rgba(
 #followCard .fc-hint { display: none; font-size: 11.5px; }
 body.cinema #followCard .fc-hint { display: block; }
 @media (max-width: 640px) { #followCard .fc-grid { grid-template-columns: 1fr 1fr; } }
+/* ---------------- 统计：里程碑 ---------------- */
+.ms-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 18px; border-radius: 16px; background: linear-gradient(120deg, rgba(240, 167, 43, 0.16), rgba(30, 111, 217, 0.08)); border: 1px solid rgba(240, 167, 43, 0.3); }
+.ms-medal { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: radial-gradient(circle at 35% 30%, #ffd66b, #e89a12 70%); box-shadow: 0 6px 16px rgba(232, 154, 18, 0.4), inset 0 -3px 6px rgba(0, 0, 0, 0.12); flex: none; }
+.ms-count { font-size: 15px; color: var(--muted); }
+.ms-count b { font-size: 30px; color: var(--text); margin-right: 2px; }
+.ms-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.ms-cats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+.ms-cats span, .ms-chips button { display: inline-flex; align-items: center; gap: 5px; }
+.ms-cats i, .ms-chips i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.ms-cats b { color: var(--text); }
+.ms-sec { font-size: 13px; font-weight: 800; margin: 18px 0 8px; color: var(--text); }
+.ms-next { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.ms-goal { padding: 11px 13px; border-radius: 13px; background: var(--surface-solid); border: 1px solid var(--line); }
+.ms-gh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ms-gi { display: inline-grid; }
+.ms-gt { font-size: 15px; font-weight: 700; margin: 4px 0 7px; font-variant-numeric: tabular-nums; }
+.ms-bar { height: 7px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.ms-bar i { display: block; height: 100%; border-radius: 5px; transition: width .6s var(--ease); }
+.ms-chips { display: flex; flex-wrap: wrap; gap: 6px; font-weight: 600; }
+.ms-chips button { border: 1px solid var(--line-strong); background: var(--surface-solid); color: var(--text); border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; }
+.ms-chips button.on { border-color: var(--accent); box-shadow: var(--ring); }
+.ms-tl { display: flex; flex-direction: column; gap: 4px; }
+.ms-year { display: flex; gap: 8px; align-items: flex-start; padding-bottom: 10px; }
+.ms-items { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.ms-yl { width: 58px; flex: none; font-size: 17px; font-weight: 900; color: var(--muted); padding-top: 6px; position: sticky; top: 0; }
+.ms-item { display: flex; gap: 12px; align-items: flex-start; position: relative; animation: riseIn .4s var(--ease) both; }
+.ms-item::before { content: ''; position: absolute; left: 15px; top: 30px; bottom: -14px; width: 2px; background: var(--line); }
+.ms-year:last-child .ms-item:last-child::before { display: none; }
+.ms-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center; color: #fff; background: var(--mc); box-shadow: 0 0 0 3px var(--surface-solid), 0 3px 8px rgba(0, 0, 0, 0.15); position: relative; z-index: 1; }
+.ms-card { flex: 1; min-width: 0; padding: 9px 13px 10px; border-radius: 13px; background: var(--surface-solid); border: 1px solid var(--line); }
+.ms-t { font-weight: 800; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ms-d { font-size: 12.5px; color: var(--text); opacity: .85; margin-top: 3px; line-height: 1.5; }
+.ms-w { font-size: 11.5px; color: var(--faint); margin-top: 4px; }
+.ms-item.big .ms-dot { width: 40px; height: 40px; margin-left: -4px; box-shadow: 0 0 0 3px var(--surface-solid), 0 0 0 7px color-mix(in srgb, var(--mc) 22%, transparent), 0 4px 12px rgba(0, 0, 0, 0.18); }
+.ms-item.big .ms-card { border-color: color-mix(in srgb, var(--mc) 45%, transparent); background: linear-gradient(120deg, color-mix(in srgb, var(--mc) 10%, var(--surface-solid)), var(--surface-solid) 60%); }
+.ms-item.big .ms-t { font-size: 15.5px; }
+.ms-item.origin .ms-dot { background: var(--faint); }
+.ms-link { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 13px; margin: 2px 0 12px; border-radius: 14px; border: 1px solid rgba(240, 167, 43, 0.35); background: linear-gradient(120deg, rgba(240, 167, 43, 0.14), transparent 70%); color: var(--text); text-align: left; cursor: pointer; transition: transform .2s var(--spring), box-shadow .2s; }
+.ms-link:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(232, 154, 18, 0.18); }
+.ms-link b { display: block; font-size: 14px; }
+.ms-link small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ms-link > .ico { width: 16px; height: 16px; color: var(--faint); }
+.ms-medal.sm { width: 36px; height: 36px; }

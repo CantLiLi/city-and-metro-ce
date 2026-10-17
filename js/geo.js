@@ -56,7 +56,7 @@
     }
     Geo.roads = G.roads.map(function (r) { const p = dec(r[3]); return { name: names[r[0]] || '', cls: r[1], flags: r[2], p: p, bbox: bboxOf(p) }; });
     Geo.streets = G.streets ? G.streets.split('!').map(function (s) { const p = dec(s); return { p: p, bbox: bboxOf(p) }; }) : [];
-    Geo.rail = G.rail.map(function (r) { const p = dec(r[2]); return { name: names[r[0]] || '', flags: r[1], p: p, bbox: bboxOf(p) }; });
+    Geo.rail = G.rail.map(function (r) { const p = dec(r[2]); return { name: names[r[0]] || '', flags: r[1], p: p, bbox: bboxOf(p), year: r[3] || 0 }; });   // year：开通年份（可缺省）
     Geo.parks = G.parks.map(function (r) { return polyFeat(r, names); });
     Geo.reserves = G.reserves.map(function (r) { return polyFeat(r, names); });
     Geo.woods = G.woods.map(function (r) { return polyFeat(r, names); });

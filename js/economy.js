@@ -34,8 +34,9 @@
     this.cur[kind] = (this.cur[kind] || 0) + amount;
     if (!this.isFree()) this.funds += amount;
   };
-  Economy.prototype.costIndex = function (year) { return Math.pow(1 + CFG.cost.inflation, Math.max(0, year - 1990)); };
-  Economy.prototype.opsIndex = function (year) { return Math.pow(1 + CFG.ops.inflation, Math.max(0, year - 1990)); };
+  // 价格指数以本地图的价格基年（CFG.econBase）为 1，涨幅可分段
+  Economy.prototype.costIndex = function (year) { return U.priceIndex(year, CFG.cost.inflation, CFG.econBase || 1990); };
+  Economy.prototype.opsIndex = function (year) { return U.priceIndex(year, CFG.ops.inflation, CFG.econBase || 1990); };
 
   // 每日结算：票款与运营费用（均按当日典型工作日模拟结果）
   Economy.prototype.day = function (daily, compiled, year) {
@@ -89,7 +90,7 @@
     f.push({ label: '地铁覆盖（' + U.fmtPct(daily.coverage, 0) + ' 人口）', v: 12 * U.clamp(daily.coverage / 0.5, 0, 1) });
     f.push({ label: '道路拥堵（指数 ' + daily.cong.toFixed(2) + '）', v: -14 * U.clamp((daily.cong - 1.25) / 0.8, 0, 1) });
     const burden = daily.metro > 1 ? daily.avgFare / (vot * 0.35) : 0;
-    f.push({ label: '票价负担（平均 ' + daily.avgFare.toFixed(1) + ' 元）', v: -9 * U.clamp((burden - 1) / 2, 0, 1) });
+    f.push({ label: '票价负担（平均 ' + daily.avgFare.toFixed(1) + ' ' + CFG.money.unit + '）', v: -9 * U.clamp((burden - 1) / 2, 0, 1) });
     f.push({ label: '车厢拥挤（超载客公里 ' + U.fmtPct(daily.crowdShare, 0) + '）', v: -9 * U.clamp(daily.crowdShare / 0.25, 0, 1) });
     const ym = U.ymIndex(y, m);
     for (const md of this.mods) if (md.kind === 'sat' && md.until >= ym) f.push({ label: md.reason, v: md.delta });
@@ -274,7 +275,7 @@
   Tasks.prototype.generate = function (g) {
     const y = g.clock.y, m = g.clock.m, model = g.model, city = g.city;
     const acc = model.net ? model.net.acc : null;
-    const ci = g.econ.costIndex(y);
+    const ci = g.econ.costIndex(y) * (CFG.economy.rewardScale || 1);   // 奖励按本城价格水平
     const dl = function (months) { const t = U.ymIndex(y, m) + months; return [Math.floor(t / 12), t % 12 + 1]; };
     const rng = new U.RNG((y * 13 + m * 7 + this.seq * 31) >>> 0);
     const ym = U.ymIndex(y, m);

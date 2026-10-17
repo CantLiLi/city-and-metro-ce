@@ -8,7 +8,10 @@
   const PLAN_KEYS = { RES: LU.RES, COM: LU.COM, IND: LU.IND, MIX: LU.MIX, INST: LU.INST };
   const CELL_KM2 = 0.0625;
 
+  let CITY_SEQ = 0;
   function City() {
+    this.uid = ++CITY_SEQ;   // 城市实例编号：几何等缓存按实例区分（不同地图、不同进度不会互相复用）
+    this.terrainVer = 0;     // 地形阶段（填海后递增）
     this.W = CFG.W; this.H = CFG.H; this.N = this.W * this.H;
     this.VW = this.W + 1; this.VH = this.H + 1; this.V = this.VW * this.VH;
     this.version = 0; this.roadVersion = 0;
@@ -52,27 +55,18 @@
     this.urbanYear = new Uint16Array(N);
     this.isPark = new Uint8Array(N);
     this.landmarkOn = new Uint8Array(D.landmarks.length);
+    this.terrainYear = startYear;   // 历史海岸线：此年份之后才形成的填海土地仍按水域处理
     this.buildTerrain();
 
     // 规划用地
     const airportK = this.regions.findIndex(function (r) { return r.id === 'airport'; });
     for (let c = 0; c < N; c++) {
-      const i = c % W, j = (c / W) | 0, cx = i + 0.5, cy = j + 0.5;
-      const rg = this.regions[this.region[c]];
       if (this.waterD[c] < 0 && this.landFrac[c] < 0.5) { this.plan[c] = LU.WATER; this.lu[c] = LU.WATER; continue; }
-      if (rg.scenic) { this.plan[c] = LU.HILL; this.lu[c] = LU.HILL; continue; }
-      const planName = rg.plan || 'res';
-      const dist = D.plans[planName];
-      const r = U.hash2(i, j, seed + 7);
-      let acc = 0, pick = LU.RES;
-      for (const key in dist) { acc += dist[key]; if (r <= acc) { pick = PLAN_KEYS[key]; break; } }
-      // 地块成片：用低频噪声让同类用地聚集
-      const nz = U.noise2(cx * 0.22, cy * 0.22, seed + 11);
-      if (planName !== 'cbd' && nz > 0.72 && dist.COM) pick = LU.COM;
-      else if (nz < 0.18 && dist.IND) pick = LU.IND;
-      this.plan[c] = pick;
+      if (this.regions[this.region[c]].scenic) { this.plan[c] = LU.HILL; this.lu[c] = LU.HILL; continue; }
+      this.plan[c] = this.planFor(c);
       this.lu[c] = LU.RURAL;
-      if (this.parkCov[c] >= 0.45) { this.plan[c] = LU.PARK; this.lu[c] = LU.PARK; this.isPark[c] = 1; }
+      // 公园，或整体保留为绿地的区域（如湿地公园）
+      if (this.parkCov[c] >= 0.45 || this.regions[this.region[c]].park) { this.plan[c] = LU.PARK; this.lu[c] = LU.PARK; this.isPark[c] = 1; }
       else if (this.region[c] === airportK && startYear < D.airport.closeYear) this.lu[c] = LU.AIRPORT;
     }
     this.activateLandmarks(startYear);
@@ -146,21 +140,81 @@
     }
   }
 
-  // 真实地理：水域、绿地、林地、区域（确定性，不随存档保存）
-  City.prototype.buildTerrain = function () {
-    const Geo = CM.Geo.init(), W = this.W, H = this.H, N = this.N;
-    const FW = W * FS, FH = H * FS;
-    this.FS = FS; this.FW = FW; this.FH = FH;
-    // 水域：值为水体序号（面 1…，线 30001…）
+  // 规划用地：按所在区域的用地配方随机选取，并用低频噪声让同类用地成片（确定性，填海后的新土地复用）
+  City.prototype.planFor = function (c) {
+    const W = this.W, i = c % W, j = (c / W) | 0, rg = this.regions[this.region[c]];
+    const planName = rg.plan || 'res', dist = D.plans[planName] || D.plans.res;
+    const r = U.hash2(i, j, this.seed + 7);
+    let acc = 0, pick = LU.RES;
+    for (const key in dist) { acc += dist[key]; if (r <= acc) { pick = PLAN_KEYS[key]; break; } }
+    const nz = U.noise2((i + 0.5) * 0.22, (j + 0.5) * 0.22, this.seed + 11);
+    if (planName !== 'cbd' && nz > 0.72 && dist.COM) pick = LU.COM;
+    else if (nz < 0.18 && dist.IND) pick = LU.IND;
+    return pick;
+  };
+  // 历史海岸线：D.reclaim 为后来形成的填海土地（多边形，格坐标）。year 大于当前地形年份的仍按水域处理
+  City.prototype.reclaimFeats = function (pendingOnly) {
+    const out = [], self = this;
+    (D.reclaim || []).forEach(function (r, k) {
+      if (pendingOnly && r.year <= self.terrainYear) return;
+      if (!r._f) { const p = new Float32Array([].concat.apply([], r.poly)); r._f = { name: r.name, rings: [{ outer: true, p: p }], bbox: CM.Geo.bbox(p), k: k }; }
+      out.push(r._f);
+    });
+    return out;
+  };
+  // 水域栅格（值为水体序号：面 1…，线 30001…，尚未填海的海域 60001…）、有符号距离场与每格陆地比例
+  City.prototype.buildWater = function () {
+    const Geo = CM.Geo, W = this.W, H = this.H, N = this.N, FW = this.FW, FH = this.FH;
     const wm = new Uint16Array(FW * FH);
     Geo.fill(wm, FW, FH, FS, Geo.water, function (f, i) { return i + 1; });
     Geo.waterLines.forEach(function (l, i) { Geo.stroke(wm, FW, FH, FS, l.p, Math.max(l.w / 2, 0.025), 30001 + i); });
+    if (!this.landMax) { const cov0 = Geo.coverage(wm, FW, FS, W, H); this.landMax = new Float32Array(N); for (let c = 0; c < N; c++) this.landMax[c] = 1 - cov0[c]; }   // 现代陆地（含全部填海）
+    const rf = this.reclaimFeats(true);
+    if (rf.length) Geo.fill(wm, FW, FH, FS, rf, function (f) { return 60001 + f.k; });
     this.wmask = wm;
     this.wsdf = Geo.sdf(wm, FW, FH);
     const wcov = Geo.coverage(wm, FW, FS, W, H);
     this.landFrac = new Float32Array(N); this.waterD = new Float32Array(N);
     for (let c = 0; c < N; c++) { this.landFrac[c] = 1 - wcov[c]; this.waterD[c] = this.waterDistAt(c % W + 0.5, ((c / W) | 0) + 0.5); }
-    // 公园与林地覆盖率
+  };
+  // 系统填海：到达年份的填海土地成陆。更新水域、陆地比例、建筑避让、道路跨水标记与新土地的用地；
+  // keepLu 为读档恢复时使用（用地等已从存档恢复，只重建地形）。返回本次成陆的填海项
+  City.prototype.applyReclaim = function (year, keepLu) {
+    const list = (D.reclaim || []).filter((r) => r.year > this.terrainYear && r.year <= year);
+    if (year > this.terrainYear) this.terrainYear = year;
+    if (!list.length) return list;
+    const N = this.N, W = this.W, FW = this.FW, BW = this.BW, BH = this.BH, Geo = CM.Geo, old = this.landFrac;
+    this.buildWater();
+    this.terrainVer++;
+    for (let c = 0; c < N; c++) {
+      if (old[c] === this.landFrac[c]) continue;
+      this.dirty.add(c);
+      if (this.landFrac[c] < 0.5 || this.regions[this.region[c]].scenic) continue;
+      if (this.plan[c] === LU.WATER) this.plan[c] = this.planFor(c);
+      if (!keepLu && this.lu[c] === LU.WATER) this.lu[c] = LU.RURAL;
+    }
+    // 建筑避让：已成陆处去掉水域标记，补上街道
+    const wm = this.wmask, bm = this.bmask;
+    for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) { const i = y * BW + x; if (bm[i] === 3 && !wm[((y >> 1) * FW) + (x >> 1)]) bm[i] = 0; }
+    const free = function (v) { return v === 0; };
+    for (const r of list) for (const k of Geo.query(Geo.streetBk, r._f.bbox[0], r._f.bbox[1], r._f.bbox[2], r._f.bbox[3])) Geo.stroke(bm, BW, BH, BS, Geo.streets[k].p, 0.035, 1, free);
+    // 道路格网的跨水标记
+    for (let e = 0; e < this.eBlock.length; e++) {
+      const uv = this.edgeVerts(e), VW = this.VW;
+      const ax = uv[0] % VW, ay = (uv[0] / VW) | 0, bx = uv[1] % VW, by = (uv[1] / VW) | 0;
+      this.eBlock[e] = this.waterDistAt((ax + bx) / 2, (ay + by) / 2) < 0.08 || this.crossesRiver(ax, ay, bx, by) ? 1 : 0;
+    }
+    this.version++;
+    return list;
+  };
+
+  // 真实地理：水域、绿地、林地、区域（确定性，不随存档保存）
+  City.prototype.buildTerrain = function () {
+    const Geo = CM.Geo.init(), W = this.W, H = this.H, N = this.N;
+    const FW = W * FS, FH = H * FS;
+    this.FS = FS; this.FW = FW; this.FH = FH;
+    this.buildWater();
+    const wm = this.wmask;    // 公园与林地覆盖率
     const pm = new Uint8Array(FW * FH);
     Geo.fill(pm, FW, FH, FS, Geo.parks);
     this.parkCov = Geo.coverage(pm, FW, FS, W, H);
@@ -183,19 +237,27 @@
         const list = rg.geo.reserve ? Geo.reserves.filter(function (f) { return f.name === rg.geo.reserve; }) : Geo.parks.filter(function (f) { return f.name === rg.geo.park; });
         fillCells(list, k);
       }
+      // 山地风景区按林地覆盖率划定（如香港郊野公园的山体），woodMin 为最低林地覆盖率
+      if (rg.woodMin) for (let c = 0; c < N; c++) if (rr[c] === NONE && self.wood[c] >= rg.woodMin && self.landMax[c] >= 0.5) rr[c] = k;
+      // 显式多边形（格坐标），可为多个：[[x, y], …] 或 [[[x, y], …], …]
+      if (rg.poly) {
+        const polys = typeof rg.poly[0][0] === 'number' ? [rg.poly] : rg.poly;
+        fillCells(polys.map(function (pl) { const p = new Float32Array([].concat.apply([], pl)); return { rings: [{ outer: true, p: p }], bbox: Geo.bbox(p) }; }), k);
+      }
       for (const s of rg.streets || []) if (!streetOf.has(s)) streetOf.set(s, k);
       for (const s of rg.district || []) if (!distOf.has(s)) distOf.set(s, k);
     });
     for (const f of Geo.admin) if (f.level === 8 && streetOf.has(f.name)) fillCells([f], streetOf.get(f.name));
-    for (const f of Geo.admin) if (f.level === 6 && distOf.has(f.name)) fillCells([f], distOf.get(f.name));
+    for (const f of Geo.admin) if ((f.level === 6 || f.level === 7) && distOf.has(f.name)) fillCells([f], distOf.get(f.name));   // 区（东京特别区为 7 级）
     const def = regions.length - 1;
     this.region = new Uint8Array(N);
     for (let c = 0; c < N; c++) this.region[c] = rr[c] === NONE ? def : rr[c];
     // 区域中心（标注与定位用）与范围
     const sx = new Float64Array(regions.length), sy = new Float64Array(regions.length), sn = new Float64Array(regions.length);
     const bb = regions.map(function () { return [1e9, 1e9, -1e9, -1e9]; });
+    const LM = this.landMax;   // 区域范围与标注按现代陆地（含之后的填海）计算
     for (let c = 0; c < N; c++) {
-      if (this.landFrac[c] < 0.5) continue;
+      if (LM[c] < 0.5) continue;
       const k = this.region[c], i = c % W, j = (c / W) | 0;
       sx[k] += i + 0.5; sy[k] += j + 0.5; sn[k]++;
       const b = bb[k]; if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (i + 1 > b[2]) b[2] = i + 1; if (j + 1 > b[3]) b[3] = j + 1;
@@ -204,7 +266,7 @@
       // 标注点取离质心最近的本区域格，避免落在别的区域上
       let cx = sn[k] ? sx[k] / sn[k] : W / 2, cy = sn[k] ? sy[k] / sn[k] : H / 2;
       let best = 1e9, bx = cx, by = cy;
-      for (let c = 0; c < N; c++) if (self.region[c] === k && self.landFrac[c] >= 0.5) { const d = U.dist(c % W + 0.5, ((c / W) | 0) + 0.5, cx, cy); if (d < best) { best = d; bx = c % W + 0.5; by = ((c / W) | 0) + 0.5; } }
+      for (let c = 0; c < N; c++) if (self.region[c] === k && LM[c] >= 0.5) { const d = U.dist(c % W + 0.5, ((c / W) | 0) + 0.5, cx, cy); if (d < best) { best = d; bx = c % W + 0.5; by = ((c / W) | 0) + 0.5; } }
       rg.cx = bx; rg.cy = by; rg.bbox = bb[k]; rg.cells = sn[k];
     });
     const ak = regions.findIndex(function (r) { return r.id === 'airport'; });
@@ -254,6 +316,7 @@
       for (let a = 0; a < (r ? 16 : 1); a++) {
         const t = a / 16 * Math.PI * 2, id = this.waterAt(x + Math.cos(t) * r / this.FS, y + Math.sin(t) * r / this.FS);
         if (!id) continue;
+        if (id > 60000) { const rc = (D.reclaim || [])[id - 60001]; return (rc && rc.sea) || D.seaName || D.riverName || '海'; }
         const f = id > 30000 ? Geo.waterLines[id - 30001] : Geo.water[id - 1];
         if (f && f.name) return f.name;
         if (f) return D.riverName || '珠江';
@@ -351,14 +414,25 @@
       if (g.sim) continue;
       const y = yearOfName(g.name, g.flags, g.ways[0]);
       // 只为名称与年份表完全一致的道路/桥梁播报通车（匝道、辅路、出入口不单独播报；已有历史事件的不重复）
-      if (y != null) { g.year = y; g.notable = y > 1990 && !(g.flags & 4) && (D.roadYears[g.name] != null || D.bridgeYears[g.name] != null) && !D.events.some(function (e) { return e.title.indexOf(g.name) >= 0; }); continue; }
+      if (y != null) { g.year = y; g.notable = y > CFG.START.y && !(g.flags & 4) && (D.roadYears[g.name] != null || D.bridgeYears[g.name] != null) && !D.events.some(function (e) { return e.title.indexOf(g.name) >= 0; }); continue; }
       let water = 0;
       if (g.flags & 3) for (const p of g.ways) for (let k = 0; k + 3 < p.length; k += 2) if (self.crossesRiver(p[k], p[k + 1], p[k + 2], p[k + 3])) water++;
       if (water >= 2 && (g.flags & 3)) { g.year = D.bridgeDefaultYear; continue; }
       const p = g.ways[0], m = (p.length / 4 | 0) * 2;
       const c = self.cellAt(p[m], p[m + 1]);
       const rg = c >= 0 ? self.regions[self.region[c]] : D.defaultRegion;
-      g.year = rg.scenic || rg.open == null ? 1990 : Math.max(1990, rg.open);
+      g.year = rg.scenic || rg.open == null ? CFG.START.y : Math.max(CFG.START.y, rg.open);
+    }
+    // 填海土地上的道路：不早于该处填海成陆的年份（道路有三成以上的点在填海范围内，或桥梁接到填海土地上）
+    const rf = this.reclaimFeats(false);
+    if (rf.length) for (const g of groups) {
+      for (const f of rf) {
+        const a = g.bbox, b = f.bbox;
+        if (a[0] > b[2] || a[2] < b[0] || a[1] > b[3] || a[3] < b[1]) continue;
+        let n = 0, inside = 0;
+        for (const p of g.ways) for (let k = 0; k + 1 < p.length; k += 2) { n++; if (inRing(p[k], p[k + 1], f.rings[0].p)) inside++; }
+        if (inside && (inside >= 0.3 * n || (g.flags & 3))) g.year = Math.max(g.year, D.reclaim[f.k].year);
+      }
     }
     this.roadGroups = groups;
     this.roadWays = [];
@@ -405,6 +479,14 @@
     return changed;
   };
   function Geo2() { return CM.Geo; }
+  function inRing(x, y, p) {
+    let ins = false;
+    for (let i = 0, n = p.length / 2, j = n - 1; i < n; j = i++) {
+      const xi = p[2 * i], yi = p[2 * i + 1], xj = p[2 * j], yj = p[2 * j + 1];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) ins = !ins;
+    }
+    return ins;
+  }
   // 根据街区开发情况生成支路与次干道（系统建设）
   City.prototype.updateStreets = function () {
     const W = this.W, H = this.H, Z = CFG.ZONE, st = this.street;
@@ -814,6 +896,7 @@
       this.landmarkOn[k] = 1;
       for (const c of this.landmarkCells(D.landmarks[k])) if (this.lu[c] === LU.LANDMARK || (D.landmarks[k].kind === 'campus' && this.lu[c] !== LU.WATER)) this.protectedId[c] = k + 1;
     }
+    this.applyReclaim(year, true);   // 历史海岸线恢复到存档年份（用地已从存档恢复）
     this.eArt.fill(0); this.eName.fill(0); this.roadsBuilt.fill(0);
     this.applyRoads(year);
     this.updateStreets();

@@ -2,7 +2,7 @@
 // 全局参数。PRD 中标注"待确认"的数值在此给出可调整的默认值（DEFAULT），评审确认后只需修改本文件。
 (function (CM) {
   CM.CFG = {
-    GAME_VERSION: '1.4.0',
+    GAME_VERSION: '1.5.0',
     SAVE_FORMAT: 'city-metro-save',
     SAVE_VERSION: 2,
     SAVE_MIN_VERSION: 2,   // 1.1 起地图改为真实地理，旧版存档的城市数据与之不兼容
@@ -10,6 +10,9 @@
     // 地图：每格 250 m，120×96 格 ≈ 30 km × 24 km；交通小区 4×4 格（1 km²）
     W: 120, H: 96, CELL_M: 250, ZONE: 4,
     START: { y: 1990, m: 1, d: 1, minute: 6 * 60 },
+    // 货币与价格基年（各地图在 maps.js 中替换）：内部金额单位为「万 + 本城货币」，票价为本城货币
+    money: { code: 'CNY', unit: '元', wan: '万元', yi: '亿元', sym: '¥' },
+    econBase: 1990,
 
     time: {
       secPerHour: 2.5,          // 1× 速度下，现实秒/游戏小时（一天 60 秒）

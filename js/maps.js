@@ -2,21 +2,46 @@
 // 地图：广州（真实地理）与新手教程「青湾」（虚构小城）。
 // 各模块在加载时引用同一个 CM.DATA 对象，切换地图时替换它的内容，同时替换 CM.GEO（地理数据源）与网格尺寸、起始日期、人口曲线等参数。
 (function (CM) {
-  const CFG = CM.CFG;
+  const CFG = CM.CFG, U = CM.U;
+  // 随地图切换的配置项：格网、起始日期、人口增长、货币与价格基年、建设与运营成本、票价、财政、出行选择与道路参数
+  const CFG_KEYS = ['W', 'H', 'START', 'growth', 'money', 'econBase', 'cost', 'ops', 'fareDefault', 'fareRange', 'economy', 'choice', 'road'];
+  const GZ_CFG = {}; for (const k of CFG_KEYS) GZ_CFG[k] = k === 'START' ? Object.assign({}, CFG.START) : CFG[k];
+  // 出行选择参数按「发展阶段对应年份」平移并按本城货币缩放：devOffset 为广州曲线年份减本城年份，money 为本城货币相对广州曲线的倍数
+  const shift = function (curve, off, k) { return curve.map(function (p) { return [p[0] - off, p[1] * (k || 1)]; }); };
+  CM.deriveChoice = function (off, money) {
+    const ch = GZ_CFG.choice;
+    return {
+      choice: Object.assign({}, ch, { vot: shift(ch.vot, off, money), carCostPerKm: shift(ch.carCostPerKm, off, money), parking: shift(ch.parking, off, money), occupancy: shift(ch.occupancy, off), hoRate: shift(ch.hoRate, off), workerRate: shift(ch.workerRate, off), distDecayHW: shift(ch.distDecayHW, off), distDecayHO: shift(ch.distDecayHO, off) }),
+      road: Object.assign({}, GZ_CFG.road, { capGrowth: shift(GZ_CFG.road.capGrowth, off) }),
+    };
+  };
   const MAPS = {
     gz: {
-      id: 'gz', name: '广州', title: '广州 · 1990', sub: '真实地理（OpenStreetMap）· 1990 年起',
+      id: 'gz', name: '广州', title: '广州 · 1990', sub: '真实地理 · 1990 年起 · 人民币',
       desc: '从 1990 年尚无地铁的广州开始：珠江水系、道路与桥梁、街道边界和地标都来自真实地理，区域按历史年份逐步开放，并有参考广州地铁发展的历史任务。',
-      facts: [['范围', '30 km × 24 km'], ['起始', '1990 年'], ['人口', '约 300 万'], ['模式', '经营挑战 / 自由建造']],
-      modes: ['challenge', 'free'],
+      facts: [['范围', '30 km × 24 km'], ['起始', '1990 年'], ['人口', '约 300 万'], ['货币', '人民币（元）'], ['模式', '经营挑战 / 自由建造']],
+      modes: ['challenge', 'free'], kind: 'real', mapVersion: 1, scenario: 'gz-1990',
       geo: CM.GEO, data: Object.assign({}, CM.DATA),
-      cfg: { W: CFG.W, H: CFG.H, START: Object.assign({}, CFG.START), growth: CFG.growth },
+      cfg: GZ_CFG,
       cam: { cx: 30, cy: 41, zoom: 18 },
     },
   };
-  if (CM.MAP_TUTORIAL) MAPS.tutorial = CM.MAP_TUTORIAL;
+  // 其他地图（教程与新增城市）由各自的数据文件登记为 CM.MAP_LIST；未写的配置项沿用广州样本
+  for (const m of CM.MAP_LIST || []) {
+    const cfg = Object.assign({}, GZ_CFG);
+    if (m.econ) Object.assign(cfg, CM.deriveChoice(m.econ.devOffset || 0, m.econ.money || 1));
+    Object.assign(cfg, m.cfg);
+    m.cfg = cfg;
+    MAPS[m.id] = m;
+  }
+  // 地图数据指纹：格网、要素数量与名称表（用于存档识别与诊断；内容修订须同时提高 mapVersion）
+  for (const id in MAPS) {
+    const m = MAPS[id], G = m.geo;
+    m.mapVersion = m.mapVersion || 1;
+    m.fp = U.fnv([id, m.cfg.W, m.cfg.H, (G.water || []).length, (G.roads || []).length, (G.names || []).length, (m.data.regions || []).map(function (r) { return r.id; }).join(',')].join('|'));
+  }
   CM.MAPS = MAPS;
-  CM.MAP_ORDER = Object.keys(MAPS);
+  CM.MAP_ORDER = ['gz', 'hz', 'hk', 'tk', 'tutorial'].filter(function (id) { return MAPS[id]; });
   CM.mapId = 'gz';
   CM.useMap = function (id) {
     const m = MAPS[id] || MAPS.gz;
@@ -25,8 +50,9 @@
     for (const k of Object.keys(CM.DATA)) delete CM.DATA[k];
     Object.assign(CM.DATA, m.data);
     CM.GEO = m.geo;
-    CFG.W = m.cfg.W; CFG.H = m.cfg.H; CFG.START = Object.assign({}, m.cfg.START); CFG.growth = m.cfg.growth;
+    for (const k of CFG_KEYS) CFG[k] = k === 'START' ? Object.assign({}, m.cfg.START) : m.cfg[k];
     if (CM.Geo) CM.Geo.init();
+    if (CM.Metro && CM.Metro.clearCaches) CM.Metro.clearCaches();
     return m;
   };
   CM.curMap = function () { return MAPS[CM.mapId] || MAPS.gz; };

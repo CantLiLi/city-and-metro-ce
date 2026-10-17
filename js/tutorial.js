@@ -57,7 +57,7 @@
       body: '按空格或点击 ▶ 开始，再试试 3× 速度。列车数由系统按站数、站距与客流自动配置；早高峰（7–9 点）乘客最多。',
       hint: '让游戏时间走过 3 小时。',
       target: function () { return g.speed > 0 ? (g.speed === 1 ? ui.tbtns.s2 : null) : ui.tbtns.pause; },
-      enter: function () { ctx.t0 = absMin(g.clock); },
+      enter: function () { if (g.tutorial.runT0 == null) g.tutorial.runT0 = absMin(g.clock); ctx.t0 = g.tutorial.runT0; },   // 计时起点随进度保存，读档后不重新计时
       check: function () { return absMin(g.clock) - ctx.t0 >= 180; } },
     { id: 'inspect', title: '查看车站与线路',
       body: '点击一座车站，右侧会显示它的进出站客流、高峰负荷与换乘情况；点击线路则可以看到发车间隔、运行列车数与断面客流。',
@@ -86,7 +86,7 @@
       body: '点击地图上正在行驶的列车，镜头会自动跟随它驶过城区、青江与高架桥。按 H 隐藏界面欣赏画面，按 Esc 退出跟随。',
       hint: '列车只在运营时间（06:00–24:00）行驶；游戏暂停时列车停在原地。',
       enter: function () { if (ui.layer !== 'none') ui.setLayer('none'); },
-      check: function () { return !!(CM.Follow && CM.Follow.used); } },
+      check: function () { return !!g.tutorial.followed; } },   // 按本进度判定，不受其他进度的跟随影响
     { id: 'netmap', title: '线路示意图',
       body: '按 K 或点击左侧的「线路示意图」：换乘站标志与地图一致，可以平滑缩放，也可以导出 PNG 图片。',
       target: function () { return CM.Follow && CM.Follow.active() ? null : ui.tbtns.netmap; },

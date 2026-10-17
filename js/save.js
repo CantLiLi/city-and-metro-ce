@@ -143,6 +143,15 @@
     // 存档所属地图（1.4 版之前的存档都是广州）：按该地图的网格尺寸校验
     const mp = CM.MAPS && CM.MAPS[payload.meta.map || 'gz'];
     if (!mp) throw new Error('存档使用的地图「' + payload.meta.map + '」在当前版本中不存在');
+    // 地图数据版本：缺省为 1（1.4 版及更早的广州 / 青湾存档）。存档版本高于当前地图数据时拒绝载入；
+    // 低于当前版本时按地图登记的迁移函数处理（迁移只作用于解析出的副本，失败时原存档不受影响）
+    const mv = payload.meta.mapVersion || 1;
+    if (mv > mp.mapVersion) throw new Error('存档使用的「' + mp.name + '」地图数据为第 ' + mv + ' 版，高于当前游戏的第 ' + mp.mapVersion + ' 版，请更新游戏后再载入');
+    if (mv < (mp.minVersion || 1)) throw new Error('存档的「' + mp.name + '」地图数据版本（第 ' + mv + ' 版）过旧，当前版本无法兼容');
+    if (mv < mp.mapVersion) {
+      if (!mp.migrate) throw new Error('「' + mp.name + '」地图数据已从第 ' + mv + ' 版更新到第 ' + mp.mapVersion + ' 版，且没有可用的迁移方法');
+      try { mp.migrate(payload, mv); payload.meta.mapVersion = mp.mapVersion; } catch (e) { throw new Error('存档迁移失败（' + (e && e.message || e) + '），原存档未改动'); }
+    }
     for (const k of ['pop', 'jobs', 'bh', 'taken', 'lu', 'street', 'urbanYear']) {
       const a = payload.city[k];
       if (!a || !a.b || a.n !== mp.cfg.W * mp.cfg.H) throw new Error('城市数据不完整或尺寸不符');

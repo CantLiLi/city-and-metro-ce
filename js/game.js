@@ -34,6 +34,7 @@
     g.model = new CM.Model(g.city);
     g.model.setYear(g.clock.y);
     g.net = M.empty();
+    g.mapInit = buildInitialNetwork(g);   // 开局既有地铁（东京 1950 年等），只在新建时生成一次，随存档保存
     g.compiled = M.compile(g.net, g.city);
     g.model.setNetwork(g.compiled);
     g.econ = new CM.Economy(g.mode, g.clock.y, g.clock.m);
@@ -41,12 +42,36 @@
     g.tasks = new CM.Tasks();
     g.model.solveNow(2);
     g.econ.startMonth(g.clock.y, g.clock.m);
-    g.logEvent({ tag: '史实', title: D.events[0].title, desc: D.events[0].desc });
+    const e0 = D.events && D.events[0];
+    if (e0) g.logEvent({ tag: e0.tag || '史实', title: e0.title, desc: e0.desc });
     g.firedEvents = { 0: 1 };
     g.tasks.monthly(g).forEach(function (o) { g.logTask(o); });
     g.recordHistory();
+    if (CM.Milestones) CM.Milestones.onStart(g);
     return g;
   };
+
+  // 开局时已运营的真实地铁：直接属于玩家，不收取历史建设费；之后正常产生运营费用与票款，可改造、扩建或拆除
+  function buildInitialNetwork(g) {
+    const IN = D.initialNetwork; if (!IN) return null;
+    const net = g.net, city = g.city, desc = [];
+    for (const L of IN.lines) {
+      const lid = M.newLine(net);
+      if (L.color) net.lines[lid].color = L.color;
+      if (L.name) net.lines[lid].name = L.name;
+      let prev = null;
+      for (const st of L.stations) {
+        const sid = M.addStation(net, st[1], st[2], { size: st[3] || L.size || 'M', type: L.type || 'underground' }, city);
+        const s = net.stations[sid]; s.name = st[0]; s.built = [st[4] || L.year || CFG.START.y, 1]; s.site = [s.x, s.y]; s.inherited = true;
+        if (prev) M.addSegment(net, lid, prev, sid, [], L.type || 'underground');
+        prev = sid;
+      }
+      desc.push(net.lines[lid].name + ' ' + L.stations[0][0] + '—' + L.stations[L.stations.length - 1][0] + '（' + L.stations.length + ' 站）');
+    }
+    M.normalizeLines(net);
+    for (const id in net.segments) { net.segments[id].built = [IN.year || CFG.START.y, 1]; net.segments[id].inherited = true; }
+    return { metro: (IN.note ? IN.note + '：' : '') + desc.join('；'), year: CFG.START.y };
+  }
 
   Game.prototype.year = function () { return this.clock.y + (this.clock.m - 1) / 12 + (this.clock.d - 1) / 365; };
   Game.prototype.ym = function () { return U.ymIndex(this.clock.y, this.clock.m); };
@@ -119,12 +144,19 @@
     // 历史事件
     D.events.forEach((e, k) => {
       if (this.firedEvents[k]) return;
-      if (U.ymIndex(e.y, e.m) <= U.ymIndex(y, m)) { this.firedEvents[k] = 1; this.logEvent({ tag: e.tag, title: e.title, desc: e.desc }); this.emit('toast', { kind: 'info', text: e.y + ' 年：' + e.title }); }
+      if (U.ymIndex(e.y, e.m) <= U.ymIndex(y, m)) { this.firedEvents[k] = 1; this.logEvent({ tag: e.tag, title: e.title, desc: e.desc }); this.emit('toast', { kind: 'info', text: e.y + ' 年：' + e.title }); if (CM.Milestones) CM.Milestones.onEvent(this, e, k); }
     });
-    if (yr >= D.airport.closeYear + 7 / 12) {
+    if (D.airport && yr >= D.airport.closeYear + 7 / 12) {
       if (city.lu.some(function (v) { return v === CM.LU.AIRPORT; })) city.closeAirport();
     }
     let roadsChanged = false;
+    // 系统填海：到达年份的填海土地成陆（之后可开发与建设）
+    for (const r of city.applyReclaim(y)) {
+      roadsChanged = true;
+      this.logEvent({ tag: r.tag || '史实', title: '填海成陆：' + r.name, desc: r.desc || '新土地将逐步开发，之后可以在此建站与铺轨。' });
+      this.emit('toast', { kind: 'info', text: '填海成陆：' + r.name });
+      if (CM.Milestones) CM.Milestones.onReclaim(this, r);
+    }
     const before = city.roadsBuilt.slice();
     if (city.applyRoads(y)) {
       roadsChanged = true;
@@ -135,7 +167,9 @@
         this.logEvent({ tag: r.sim ? '模拟' : '史实', title: r.name + (r.sim ? '建成（模拟规划）' : '通车（参考）'), desc: '' });
       });
     }
+    const lmBefore = city.landmarkOn.slice();
     city.activateLandmarks(y);
+    if (CM.Milestones) CM.Milestones.onLandmarks(this, lmBefore);
     // 区域开放
     const tot = city.totals();
     for (let k = 0; k < city.regions.length; k++) {
@@ -169,6 +203,7 @@
     this.tasks.monthly(this).forEach((o) => this.logTask(o));
     this.econ.payGrant(y, m);
     this.recordHistory();
+    if (CM.Milestones) CM.Milestones.onMonth(this);
     if (this.draft) { this.draft.evalVer = -1; this.invalidatePrediction('城市状态已更新（' + y + '年' + m + '月），请重新计算预测'); }
     this.emit('month', { y: y, m: m });
   };
@@ -332,6 +367,7 @@
     this.model.setNetwork(this.compiled);
     this.draft = null;
     this.logEvent({ tag: '建设', title: '建设完成并投入运营', desc: summary + (ev.total > 0 ? '，费用 ' + U.fmtMoney(ev.total) : '，无费用') });
+    if (CM.Milestones) CM.Milestones.onNetwork(this);
     this.emit('network');
     this.emit('draft');
     this.emit('toast', { kind: 'good', text: '建设完成，已投入运营' + (ev.total > 0 ? '（' + U.fmtMoney(ev.total) + '）' : '') });
@@ -383,19 +419,18 @@
     }
     return den > 0 ? num / den : 1;
   };
+  // 发展阶段名称：由各地图的场景数据提供（stages 为 [截止年份（不含）, 名称]，stageLast 为史料截止前的最后阶段）
   Game.prototype.stageName = function () {
     const y = this.clock.y;
-    if (y < 1997) return '起步期（无地铁时代）';
-    if (y < 2005) return '扩张期';
-    if (y < 2011) return '亚运建设期';
-    if (y <= CFG.growth.histEnd) return '网络化时期';
-    return '模拟未来';
+    for (const s of D.stages || []) if (y < s[0]) return s[1];
+    if (y <= CFG.growth.histEnd) return D.stageLast || '发展期';
+    return D.fictional ? '持续发展' : '模拟未来';
   };
 
   // ---------------- 存档 ----------------
   Game.prototype.serialize = function () {
     return {
-      meta: { gameId: this.id, name: this.name, mode: this.mode, seed: this.seed, createdAt: this.createdAt, gameVersion: CFG.GAME_VERSION, map: this.mapId || 'gz' },
+      meta: { gameId: this.id, name: this.name, mode: this.mode, seed: this.seed, createdAt: this.createdAt, gameVersion: CFG.GAME_VERSION, map: this.mapId || 'gz', mapVersion: (CM.MAPS[this.mapId || 'gz'] || {}).mapVersion || 1, scenario: (CM.MAPS[this.mapId || 'gz'] || {}).scenario || '', mapFp: (CM.MAPS[this.mapId || 'gz'] || {}).fp || '' },
       clock: Object.assign({}, this.clock),
       city: this.city.serialize(),
       net: this.net,
@@ -406,6 +441,8 @@
       firedEvents: this.firedEvents,
       favs: this.favs,
       tutorial: this.tutorial || null,
+      milestones: this.milestones || null,
+      mapInit: this.mapInit || null,
     };
   };
   Game.restore = function (s) {
@@ -429,7 +466,10 @@
     g.tasks = CM.Tasks.restore(s.tasks);
     g.events = s.events || []; g.history = s.history || []; g.firedEvents = s.firedEvents || {};
     g.favs = { stations: (s.favs && s.favs.stations) || [], lines: (s.favs && s.favs.lines) || [] };
+    g.mapInit = s.mapInit || null;
+    g.milestones = s.milestones || null;
     g.model.solveNow(2);
+    if (CM.Milestones) CM.Milestones.backfill(g);
     return g;
   };
 })(window.CM);

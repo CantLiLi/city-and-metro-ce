@@ -191,15 +191,31 @@ window.CM = window.CM || {};
 
   // ---------- 格式化 ----------
   U.pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
-  // 金额单位：万元
-  U.fmtMoney = function (wan, digits) {
+  // 未开放区域的说明：按参考年份开放，或长期不开放（如军用机场，见区域的 lockNote）
+  U.regionLock = function (rg) { return rg.open != null ? '参考 ' + rg.open + ' 年开放' : (rg.lockNote || '不开放'); };
+  // 金额：内部单位为「万 + 本城货币」（广州、杭州为万元，香港为万港元，东京为万日元），显示随当前地图的货币
+  // money 可显式指定（地图选择页显示别的地图时用）
+  U.fmtMoney = function (wan, digits, money) {
     if (wan === Infinity) return '∞';
     if (!isFinite(wan)) return '—';
+    const mo = money || (CM.CFG && CM.CFG.money) || { wan: '万元', yi: '亿元' };
     const neg = wan < 0; const a = Math.abs(wan);
     let s;
-    if (a >= 10000) s = (a / 10000).toFixed(digits === undefined ? (a >= 1e6 ? 0 : 2) : digits) + ' 亿元';
-    else s = Math.round(a).toLocaleString('zh-CN') + ' 万元';
+    if (a >= 10000) s = (a / 10000).toFixed(digits === undefined ? (a >= 1e6 ? 0 : 2) : digits) + ' ' + mo.yi;
+    else s = Math.round(a).toLocaleString('zh-CN') + ' ' + mo.wan;
     return (neg ? '−' : '') + s;
+  };
+  // 价格指数：base 为价格基年；rate 为年涨幅，或分段 [[起始年, 涨幅], …]（按年连乘）
+  U.priceIndex = function (year, rate, base) {
+    if (year <= base) return 1;
+    if (typeof rate === 'number') return Math.pow(1 + rate, year - base);
+    let f = 1;
+    for (let y = base; y < year; y++) {
+      let r = rate[0][1]; for (const s of rate) if (y >= s[0]) r = s[1];
+      const step = Math.min(1, year - y);
+      f *= Math.pow(1 + r, step);
+    }
+    return f;
   };
   U.fmtYi = function (wan, d) { return (wan / 10000).toFixed(d === undefined ? 2 : d); };
   U.fmtPeople = function (n) {

@@ -93,6 +93,7 @@
       const was = !!t;
       t = tr; lineId = tr.g.rt.lineId; routeR = tr.g.r;
       Follow.used = true;
+      if (CM.game && CM.game.tutorial) CM.game.tutorial.followed = true;
       if (!was) { under0 = R.cam.tu; autoUnder = true; }
       R.cam.fly = null; R.cam.anchor = null;
       if (!was && R.cam.tz < 30) { R.cam.tz = 32; R.cam.anchor = null; }

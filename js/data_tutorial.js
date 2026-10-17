@@ -164,7 +164,9 @@
 
   // ---------------- 城市规则数据（结构同 data_gz.js） ----------------
   const DATA = {
-    city: '青湾', riverName: '青江', tutorial: true, noDynTasks: true,
+    city: '青湾', riverName: '青江', tutorial: true, noDynTasks: true, fictional: true,
+    stages: [[2003, '起步期'], [2008, '科技园开发期']], stageLast: '城市扩张期',
+    dataNote: [['虚构设定', 'info', '青湾是为新手教程设计的虚构小城：地形、道路、地名、人口与历史事件均为虚构，不对应任何真实城市。'], ['模拟', 'sim', '城市发展、居民出行、道路拥堵、客流与财政为游戏模拟结果。']],
     airport: { name: '', closeYear: 9999 },
     regions: [
       { id: 'fhs', name: '凤凰山风景区', geo: { reserve: '凤凰山风景区' }, open: null, scenic: true },
@@ -205,19 +207,19 @@
     ],
     districtLabels: [['老城', ['老城街道']], ['西关', ['西关街道']], ['东关', ['东关街道']], ['北站', ['北站街道']], ['南岸', ['南岸街道']], ['科技园', ['科技园街道']], ['东部', ['东部街道']]],
     events: [
-      { y: 2000, m: 1, tag: '模拟', title: '欢迎来到青湾', desc: '青湾是一座约 42 万人的虚构小城，青江从城中穿过，城市集中在北岸的老城、西关与东关，尚无地铁。' },
-      { y: 2003, m: 1, tag: '模拟', title: '科技园开始开发', desc: '青江南岸东部的科技园与大学城对外开放建设。' },
-      { y: 2008, m: 1, tag: '模拟', title: '江湾中心落成', desc: '南岸出现城市新的地标高楼。' },
+      { y: 2000, m: 1, tag: '虚构', title: '欢迎来到青湾', desc: '青湾是一座约 42 万人的虚构小城，青江从城中穿过，城市集中在北岸的老城、西关与东关，尚无地铁。' },
+      { y: 2003, m: 1, tag: '虚构', title: '科技园开始开发', desc: '青江南岸东部的科技园与大学城对外开放建设。' },
+      { y: 2008, m: 1, tag: '虚构', title: '江湾中心落成', desc: '南岸出现城市新的地标高楼。' },
     ],
     histTasks: [],
     lineColorsNice: ['#e4002b', '#0072ce', '#f6a800', '#00a651', '#8e44ad', '#00a8a8', '#d35400', '#c2185b', '#5c6bc0', '#7cb342', '#8d6e63', '#26a69a'],
     places: places.map(function (p) { return [p[0], p[1], p[2], p[3]]; }),
   };
 
-  CM.MAP_TUTORIAL = {
+  (CM.MAP_LIST = CM.MAP_LIST || []).push({
     id: 'tutorial', name: '青湾', title: '新手教程 · 青湾', sub: '虚构小城 · 12 个引导任务', tutorial: true,
     desc: '一座约 42 万人的虚构小城，青江从城中穿过。跟随循序渐进的引导与小任务，学会移动地图、读图层、建站绘线、确认建设、跨江、换乘、查看客流与跟随列车。',
-    facts: [['范围', '12 km × 10 km'], ['起始', '2000 年'], ['人口', '约 42 万'], ['模式', '自由建造（不限资金）']],
+    facts: [['范围', '12 km × 10 km'], ['起始', '2000 年'], ['人口', '约 42 万'], ['类型', '虚构城市'], ['模式', '自由建造（不限资金）']],
     modes: ['free'],
     geo: GEO, data: DATA,
     cfg: {
@@ -225,5 +227,6 @@
       growth: Object.assign({}, CFG.growth, { popCurve: [[2000, 4.2e5], [2005, 4.9e5], [2010, 5.7e5], [2015, 6.3e5], [2020, 6.8e5], [2030, 7.5e5], [2050, 8.2e5], [2300, 9.0e5]], histEnd: 2000 }),
     },
     cam: { cx: 19, cy: 15, zoom: 24 },
-  };
+    kind: 'fictional', mapVersion: 1, scenario: 'tutorial-2000',
+  });
 })(window.CM);

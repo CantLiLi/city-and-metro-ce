@@ -8,7 +8,7 @@
     light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
     dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
   };
-  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['finance', '财政', 'wallet']];
+  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['finance', '财政', 'wallet'], ['milestones', '里程碑', 'flag']];
   let ui = null, tab = 'overview', range = 'all', isOpen = false, charts = [], body = null, sig = '';
 
   function pal() { return PALETTE[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']; }
@@ -344,7 +344,54 @@
       lineChart({ title: '收入与支出', sub: (E.ledger.length > 36 ? '按年' : '按月') + '合计：收入 = 拨款 + 票款 + 奖励；支出 = 建设 + 运营', icon: 'wallet', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }), series: [{ name: '收入', color: P[2], vals: rows.map(function (o) { return inc(o.r); }) }, { name: '支出', color: P[1], vals: rows.map(function (o) { return exp(o.r); }) }], fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, empty: '尚无完整月份的记录。' }));
     el.appendChild(cg);
   }
-  const PAGES = { overview: pageOverview, traffic: pageTraffic, finance: pageFinance };
+  // ---------- 里程碑：城市发展与地铁建设的关键节点（时间线 + 下一个目标） ----------
+  let msFilter = 'all';
+  function pageMilestones(g, el) {
+    const MS = CM.Milestones; if (!MS) return;
+    const st = MS.state(g), list = st.list.slice(), CAT = MS.CAT;
+    const counts = {}; for (const r of list) counts[r.cat] = (counts[r.cat] || 0) + 1;
+    const real = list.filter(function (r) { return r.id !== 'start'; });
+    // 概览：数量与分类
+    el.appendChild(h('div', { class: 'ms-hero' },
+      h('div', { class: 'ms-medal' }, CM.icon('trophy', 30)),
+      h('div', { class: 'grow' }, h('div', { class: 'ms-count' }, h('b', null, String(real.length)), ' 个里程碑'),
+        h('div', { class: 'ms-sub' }, real.length ? '最近：' + real[real.length - 1].title + '（' + real[real.length - 1].y + '年' + real[real.length - 1].m + '月）' : '建成第一条地铁、人口与客流跨越关口时，都会记录在这里。')),
+      h('div', { class: 'ms-cats' }, Object.keys(CAT).map(function (k) { return h('span', null, h('i', { style: { background: CAT[k].color } }), CAT[k].name, h('b', null, String(counts[k] || 0))); }))));
+    // 下一个目标
+    const nx = MS.next(g);
+    if (nx.length) {
+      const row = h('div', { class: 'ms-next' });
+      for (const o of nx) {
+        const f = U.clamp(o.cur / o.goal, 0, 1);
+        row.appendChild(h('div', { class: 'ms-goal' }, h('div', { class: 'ms-gh' }, h('span', { class: 'ms-gi', style: { color: o.color } }, CM.icon(o.icon, 16)), h('span', null, '下一个 · ' + o.label)),
+          h('div', { class: 'ms-gt' }, o.text), h('div', { class: 'ms-bar' }, h('i', { style: { width: (f * 100).toFixed(1) + '%', background: o.color } }))));
+      }
+      el.appendChild(h('div', { class: 'ms-sec' }, '下一个目标'));
+      el.appendChild(row);
+    }
+    // 筛选
+    const chips = h('div', { class: 'ms-chips' }, [['all', '全部']].concat(Object.keys(CAT).map(function (k) { return [k, CAT[k].name]; })).map(function (o) {
+      return h('button', { class: msFilter === o[0] ? 'on' : '', 'data-silent': '1', onclick: function () { msFilter = o[0]; CM.Sound && CM.Sound.play('soft'); render(); } }, o[0] !== 'all' ? h('i', { style: { background: CAT[o[0]].color } }) : null, o[1]);
+    }));
+    el.appendChild(h('div', { class: 'ms-sec row between' }, h('span', null, '时间线'), chips));
+    // 时间线：按年分组，最新在上
+    const shown = list.filter(function (r) { return msFilter === 'all' || r.cat === msFilter; }).reverse();
+    if (!shown.length) { el.appendChild(h('div', { class: 'empty-chart' }, '这一类还没有里程碑。')); return; }
+    const tl = h('div', { class: 'ms-tl' });
+    let year = null, grp = null, col = null;
+    for (const r of shown) {
+      if (r.y !== year) { year = r.y; col = h('div', { class: 'ms-items' }); grp = h('div', { class: 'ms-year' }, h('div', { class: 'ms-yl' }, String(year)), col); tl.appendChild(grp); }
+      const c = CAT[r.cat] || CAT.history;
+      col.appendChild(h('div', { class: 'ms-item' + (r.big ? ' big' : '') + (r.id === 'start' ? ' origin' : ''), style: { '--mc': c.color } },
+        h('span', { class: 'ms-dot' }, CM.icon(r.icon || 'flag', r.big ? 18 : 15)),
+        h('div', { class: 'ms-card' },
+          h('div', { class: 'ms-t' }, r.title, r.tag && r.tag !== '史实' ? h('span', { class: 'tag ' + (r.tag === '模拟' ? 'sim' : (r.tag === '估算' ? 'est' : '')) }, r.tag) : (r.tag === '史实' ? h('span', { class: 'tag hist' }, '史实') : null)),
+          r.desc ? h('div', { class: 'ms-d' }, r.desc) : null,
+          h('div', { class: 'ms-w' }, r.m + '月' + (r.d && r.d > 1 ? r.d + '日' : ''), ' · ', c.name))));
+    }
+    el.appendChild(tl);
+  }
+  const PAGES = { overview: pageOverview, traffic: pageTraffic, finance: pageFinance, milestones: pageMilestones };
 
   // ---------- 外框 ----------
   function go(t) { if (t === tab) return; tab = t; CM.Sound && CM.Sound.play('soft'); render(); }
@@ -361,14 +408,14 @@
     body = h('div', { class: 'stats-body' }); body.dataset.tab = tab;
     const g2 = g;
     PAGES[tab](g2, body);
-    body.appendChild(h('div', { class: 'tiny muted', style: { marginTop: '14px' } }, '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。'));
+    body.appendChild(h('div', { class: 'tiny muted', style: { marginTop: '14px' } }, tab === 'milestones' ? '只记录关键节点：地铁建设的「第一次」与里程关口、客流与分担率关口、人口关口、本地图的重大历史事件与地标落成。' : '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。'));
     const win = h('div', { class: 'stats-win', onclick: function (e) { e.stopPropagation(); } }, head, body);
     root.appendChild(win);
     root.onclick = function () { Stats.close(); };
     requestAnimationFrame(function () { for (const d of charts) d(); if (keepScroll) body.scrollTop = keepScroll; });
     sig = signature(g);
   }
-  function signature(g) { return g.history.length + '|' + g.econ.ledger.length + '|' + g.netVersion + '|' + (g.model.stDaily ? 1 : 0) + '|' + document.documentElement.dataset.theme; }
+  function signature(g) { return g.history.length + '|' + g.econ.ledger.length + '|' + g.netVersion + '|' + (g.model.stDaily ? 1 : 0) + '|' + document.documentElement.dataset.theme + '|' + (g.milestones ? g.milestones.list.length : 0); }
   function redrawCharts() { for (const d of charts) d(); }
   let rT = null;
   window.addEventListener('resize', function () { if (!isOpen) return; clearTimeout(rT); rT = setTimeout(redrawCharts, 120); });
