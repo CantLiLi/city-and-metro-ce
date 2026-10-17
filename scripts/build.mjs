@@ -21,6 +21,9 @@ for (const entry of entries) {
   await cp(path.join(root, entry), path.join(output, entry), { recursive: true });
 }
 
+// This game has no client-side URL router; unknown paths should return a real 404.
+await writeFile(path.join(output, '404.html'), '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>页面不存在 · 城市与地铁</title><h1>页面不存在</h1><p><a href="/">返回游戏</a></p></html>\n');
+
 // Files have stable names, so browsers should revalidate before using a cached release.
 await writeFile(path.join(output, '_headers'), [
   '/*',
