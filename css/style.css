@@ -426,6 +426,7 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 .start-btn.primary > .ico, .start-btn.primary .chev, .start-btn.primary .sub { color: rgba(255, 255, 255, 0.92); }
 .start-btn[disabled] { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
 .start-foot { margin-top: 26px; font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+.start-foot a { color: inherit; text-underline-offset: 3px; }
 .start-wrap > * { animation: riseIn .6s var(--ease) both; }
 .start-menu > * { animation: riseIn .5s var(--ease) both; }
 .start-menu > *:nth-child(2) { animation-delay: .05s; } .start-menu > *:nth-child(3) { animation-delay: .1s; } .start-menu > *:nth-child(4) { animation-delay: .15s; } .start-menu > *:nth-child(5) { animation-delay: .2s; }.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 6px 0 0; }

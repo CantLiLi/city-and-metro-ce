@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.resolve(root, 'dist');
-const entries = ['index.html', 'css', 'img', 'js'];
+const entries = ['index.html', 'css', 'img', 'js', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses'];
 
-// Publish only game assets. Product documents, Git metadata and local files stay private.
+// Publish game assets and required legal notices; exclude planning docs and local files.
 if (path.dirname(output) !== root || path.basename(output) !== 'dist') {
   throw new Error('Refusing to rebuild a directory outside the project dist folder.');
 }

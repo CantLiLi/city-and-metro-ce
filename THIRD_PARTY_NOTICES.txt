@@ -1,0 +1,21 @@
+Third-party notices / 第三方资料与许可
+
+OpenStreetMap geographic data
+----------------------------
+Copyright: (c) OpenStreetMap contributors / © OpenStreetMap 贡献者
+Source: https://www.openstreetmap.org/
+Copyright and attribution: https://www.openstreetmap.org/copyright
+License: Open Data Commons Open Database License (ODbL) 1.0
+License URL: https://opendatacommons.org/licenses/odbl/1-0/
+Included license text: licenses/ODbL-1.0.txt
+
+js/geo_gz.js contains preprocessed OpenStreetMap geographic data, including
+waterways, roads, railways, green areas, boundaries and place names.
+That database remains available under ODbL 1.0. The game's non-commercial
+license does not add restrictions to rights already granted under ODbL.
+The distributed geographic database can be obtained from js/geo_gz.js in the
+repository or the deployed game; retain attribution and applicable ODbL terms.
+
+本项目预处理的 OpenStreetMap 地理数据库继续按 ODbL 1.0 提供。
+游戏的非商业使用条款不限制该数据库原许可授予的权利。
+本游戏自有代码的许可与地理数据库许可分别适用。
