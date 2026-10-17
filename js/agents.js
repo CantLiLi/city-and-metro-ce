@@ -160,6 +160,7 @@
       const nx = -Math.sin(pa.a) * off, ny = Math.cos(pa.a) * off;
       const uw = function (h) { return h < 0 ? h * under * CM.RENDER_CONST.UNDER_DEPTH : h; };
       const A = R.P(pa.x + nx, pa.y + ny, uw(hA)), B = R.P(pb.x + nx, pb.y + ny, uw(hB));
+      t.sx = (A.x + B.x) / 2; t.sy = (A.y + B.y) / 2; t.drawn = R.frame;   // 点击列车（跟随模式）用
       let alpha = t.alpha;
       const seg = rt.segRefs[tmp.k];
       const segType = net.C.segs.get(seg.id) ? net.C.segs.get(seg.id).seg.type : 'underground';
@@ -167,6 +168,12 @@
       else if (under > 0) alpha *= U.lerp(1, 0.4, under);
       if (hl && hl !== rt.lineId) alpha *= 0.3;
       ctx.globalAlpha = alpha;
+      // 跟随中的列车：脉动圆环
+      if (R.follow === t) {
+        const pr = 0.5 + 0.5 * Math.sin(R.time * 5), cx = (A.x + B.x) / 2, cy = (A.y + B.y) / 2, rr = Math.max(9, Math.hypot(A.x - B.x, A.y - B.y) / 2 + 6);
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cx, cy, rr + pr * 3, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = rt.color; ctx.lineWidth = 2.2; ctx.stroke();
+      }
       if (z < 7) {
         ctx.fillStyle = rt.color; ctx.beginPath(); ctx.arc(A.x, A.y, 2.6, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
@@ -193,11 +200,52 @@
     }
     ctx.globalAlpha = 1;
   };
+  Agents.prototype.heightAt = function (rt, p) { return heightAt(rt, p); };
+  // 当前区间的运行速度（m/s）：加速—匀速—减速；停站与等候时为 0
+  Agents.prototype.trainSpeed = function (t) {
+    const L = t.g && t.g.legs[t.leg]; if (!L || t.t < 0 || t.t >= L.T) return 0;
+    const a = CFG.metro.accel, ta = L.v / a;
+    return t.t < ta ? a * t.t : (t.t < L.T - ta ? L.v : a * (L.T - t.t));
+  };
   function heightAt(rt, p) {
     const i = p.i, f = p.f || 0;
     const a = rt.hs[i], b = rt.hs[Math.min(rt.hs.length - 1, i + 1)];
     return a + (b - a) * f;
   }
+
+  // ---------------- 开始界面背景：列车与汽车（不依赖交通模型） ----------------
+  // 列车按固定班次在示意线路上往返（开场即按间隔铺满全线），汽车按道路等级给出的示意流量在真实道路上行驶
+  const PV_FREQ = 12, PV_VOL = [0, 0, 300, 950, 1800];
+  const PV_MODEL = { freqAt: function () { return PV_FREQ; } };
+  Agents.prototype.updatePreview = function (dt, pg, R) {
+    if (!pg || !pg.compiled) return;
+    if (!pg.pnet) pg.pnet = { C: pg.compiled, routeKey: pg.compiled.routes.map(function (r, i) { return 'pv' + i; }), rideEdge: [] };
+    if (this.netRef !== pg.pnet) {
+      this.reset(); this.syncNetwork(pg.pnet);
+      const h = 3600 / PV_FREQ;
+      this.groups.forEach((g) => {
+        const need = Math.max(1, Math.ceil(g.cycle / h));
+        for (let i = 0; i < need; i++) {
+          let off = i * h, leg = 0;
+          while (leg < g.legs.length && off >= g.legs[leg].T + g.legs[leg].dwell) { off -= g.legs[leg].T + g.legs[leg].dwell; leg++; }
+          if (leg >= g.legs.length) break;
+          this.trains.push({ id: ++this.seq, g: g, gkey: g.key, leg: leg, t: off, alpha: 1, dying: false, held: false });
+        }
+        g.lastDep = 0;
+      });
+    }
+    const dtv = dt * CFG.time.visualPerSec * 1.5;
+    this.vt += dtv; this.W = null;
+    this.updateTrains(dtv, dt, PV_MODEL, null);
+    if (!R.view) return;
+    const road = pg.city.car;
+    if (!pg.pmodel) pg.pmodel = {
+      road: road,
+      arcVolAt: function (a) { const L = road.links[a >> 1]; return (PV_VOL[L.cls] || 0) * (0.4 + 0.9 * U.hash2(a, 3, 7)); },
+      arcRatioAt: function (a) { return 1 + 0.7 * U.hash2(a, 5, 9); },
+    };
+    this.updateCars(dtv, dt, { model: pg.pmodel, city: pg.city }, R, null);
+  };
 
   // ---------------- 汽车 ----------------
   Agents.prototype.updateCars = function (dtv, dt, game, R, W) {

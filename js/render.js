@@ -197,6 +197,9 @@
     this.game = g;
     this.ground.clear(); this.iso.clear(); this.cachePx = 0; this.overviewStale = true; this.heatKey = '';
     this.roadVer = g ? g.city.roadVersion : -1;
+    // 换城市（含换地图）时清掉按城市版本号缓存的数据，避免不同城市的版本号恰好相同
+    this.linkGrid = null; this.linkGridVer = -1; this._cgIdx = null; this._cgRuns = null; this._fa = null; this._fl = null; this._flKey = null;
+    this._flLay = null; this._flLayKey = null; this._flShow = null; this._sf = null; this._sfKey = null; this._rm = {}; this.hl = null; this.follow = null;
   };
   // 切换主题：重建地面与建筑缓存（总览图立即重绘，避免空白）
   Renderer.prototype.setTheme = function (name) {
@@ -1255,17 +1258,18 @@
       let col = null, a = 0;
       const p = city.pop[c] / 0.0625, jb = city.jobs[c] / 0.0625;
       if (this.layer === 'pop') {
-        if (p > 200) { col = U.ramp([[0, [255, 240, 190]], [0.35, [253, 174, 97]], [0.7, [227, 74, 51]], [1, [140, 20, 40]]], Math.sqrt(p / 60000)); a = U.clamp(0.25 + p / 30000, 0, 0.85); }
+        // 浅色单色渐变、半透明（最高约 0.5），道路与地名仍清楚可见
+        if (p > 200) { const t = U.clamp(Math.sqrt(p / 60000), 0, 1); col = U.ramp([[0, [255, 226, 150]], [0.5, [249, 158, 76]], [1, [222, 84, 52]]], t); a = 0.12 + 0.4 * t; }
       } else if (this.layer === 'jobs') {
         const t = p + jb;
-        if (t > 300) { const sh = p / t; col = U.mixc([52, 104, 214], [240, 150, 60], sh); a = U.clamp(0.2 + Math.sqrt(t / 90000), 0, 0.85); }
+        if (t > 300) { const sh = p / t; col = U.mixc([52, 104, 214], [240, 150, 60], sh); a = U.clamp(0.12 + 0.4 * Math.sqrt(t / 90000), 0, 0.5); }
       } else if (this.layer === 'cover') {
         const w = acc ? acc.cellWalk[c] : Infinity;
         const m = w / CFG.walk.mPerMin;
-        if (m <= 5) { col = [27, 120, 55]; a = 0.65; }
-        else if (m <= 10) { col = [90, 174, 97]; a = 0.55; }
-        else if (m <= 15) { col = [172, 220, 140]; a = 0.5; }
-        else if (p > 4000) { col = [215, 48, 39]; a = U.clamp(0.15 + p / 80000, 0, 0.5); }
+        if (m <= 5) { col = [27, 140, 70]; a = 0.5; }
+        else if (m <= 10) { col = [90, 180, 100]; a = 0.42; }
+        else if (m <= 15) { col = [160, 214, 130]; a = 0.36; }
+        else if (p > 4000) { col = [215, 48, 39]; a = U.clamp(0.1 + p / 120000, 0, 0.38); }
       } else if (this.layer === 'region') {
         const rg = city.regions[city.region[c]];
         if (rg.scenic) { col = [120, 170, 110]; a = 0.25; }
@@ -1282,6 +1286,7 @@
     this.resize();
     const ctx = this.ctx, dpr = this.dpr, g = this.game;
     if (!g) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = U.rgb(TH.bg); ctx.fillRect(0, 0, this.cv.width, this.cv.height); return; }
+    if (g.preview && this.layer !== 'none') this.layer = 'none';   // 开始界面背景没有交通模型，不画分析图层
     this.updateCamera(dt);
     this.markDirty();
     const cam = this.cam, under = U.smooth(cam.under), t = this.tEase;
@@ -1343,7 +1348,7 @@
       this.buildHeat();
       setWorld();
       ctx.imageSmoothingEnabled = true;
-      ctx.globalAlpha = 0.95;
+      ctx.globalAlpha = 1;
       ctx.drawImage(this.heat, 0, 0, CFG.W, CFG.H);
       ctx.globalAlpha = 1;
     }
@@ -1410,6 +1415,7 @@
     if (under < 0.5) this.drawAtmosphere(ctx);
     // ---- 标注 ----
     this.drawLabels(ctx, ui);
+    if (this.hl) this.drawHighlight(ctx);
     if (ui && ui.drawOverlay) ui.drawOverlay(ctx, this);
     // ---- 缓存渲染队列 ----
     queue.sort(function (a, b) { return a.d - b.d; });
@@ -1646,7 +1652,9 @@
 
   // 道路拥堵图层：沿真实道路线形着色（连续不断开）。快速路与主干道的折线约每 100 m 取一个样点，
   // 样点对应同名的模拟路段，取其当前时刻的饱和度；相邻同档样点合并为一段，按道路等级定粗细
-  const CONG_COLS = ['#4fb07a', '#f2bf3a', '#f27a24', '#d3203a'];
+  // 0 畅通 · 1 缓行 · 2 拥堵 · 3 严重拥堵；按饱和度（小时流量 ÷ 通行能力）分档。已建成的干道全部着色（车少时为绿色）
+  const CONG_COLS = ['#33a660', '#f2bf3a', '#f27a24', '#d3203a'];
+  const CONG_CUT = [0.3, 0.55, 0.8];
   Renderer.CONG_COLS = CONG_COLS;
   Renderer.prototype.congIndex = function () {
     const city = this.game.city, car = city.car;
@@ -1656,7 +1664,7 @@
     const ways = [], STEP = 0.4;
     for (const w of city.roadWays) {
       const gr = city.roadGroups[w.g];
-      if (gr.cls < 3 || (gr.flags & 4)) continue;   // 匝道不画
+      if (gr.cls < 2 || (gr.flags & 4)) continue;   // 快速路、主干道、次干道（匝道不画）
       const p = w.p, xs = [], ys = [];
       for (let k = 0; k + 3 < p.length; k += 2) {
         const ax = p[k], ay = p[k + 1], bx = p[k + 2], by = p[k + 3], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / STEP));
@@ -1669,7 +1677,7 @@
           const b = L.bbox; if (xs[i] < b[0] - 1 || xs[i] > b[2] + 1 || ys[i] < b[1] - 1 || ys[i] > b[3] + 1) continue;
           const d = U.distToPoly(xs[i], ys[i], L.pts); if (d < bd) { bd = d; best = L.id; }
         }
-        if (best < 0) { const L = this.pickLink(xs[i], ys[i], 0.6); if (L && L.cls >= 3) best = L.id; }
+        if (best < 0) { const L = this.pickLink(xs[i], ys[i], gr.cls >= 3 ? 0.6 : 0.5); if (L && L.cls >= 2) best = L.id; }
         lk[i] = best;
       }
       ways.push({ g: w.g, cls: gr.cls, bbox: w.bbox, xs: Float32Array.from(xs), ys: Float32Array.from(ys), lk: lk });
@@ -1689,12 +1697,12 @@
       if (v === undefined) { v = Math.max(model.arcVolAt(2 * id, W), model.arcVolAt(2 * id + 1, W)) / model.cap(2 * id); sat.set(id, v); }
       return v;
     };
-    const lvl = function (x) { return x < 0.6 ? 0 : (x < 0.85 ? 1 : (x < 1.05 ? 2 : 3)); };
+    const lvl = function (x) { let k = 0; while (k < 3 && x >= CONG_CUT[k]) k++; return k; };
     const runs = [[], [], [], []];
     for (const w of idx.ways) {
       if (!city.roadsBuilt[w.g]) continue;
       const n = w.xs.length; if (n < 2) continue;
-      let first = 0; for (let i = 0; i < n; i++) if (w.lk[i] >= 0) { first = lvl(satOf(w.lk[i])); break; }
+      let first = 0; for (let i = 0; i < n; i++) if (w.lk[i] >= 0) { first = lvl(satOf(w.lk[i])); break; }   // 没有对应路段的道路按畅通显示
       let cur = first, start = 0;
       const push = function (a, b, k) { if (b > a) runs[k].push({ w: w, a: a, b: b }); };
       for (let i = 1; i < n; i++) {
@@ -1719,145 +1727,385 @@
       }
     };
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    // 先画全部衬边，再按拥堵程度从轻到重画颜色
+    // 先画全部衬边，再按拥堵程度从轻到重画颜色（重的压在上面）
+    const widthOf = { 2: 0.7, 3: 1, 4: 1.45 };
     for (let pass = 0; pass < 2; pass++) {
       for (let k = 0; k < 4; k++) {
-        for (const cls of [3, 4]) {
+        for (const cls of [2, 3, 4]) {
           trace(runs[k], cls);
-          const w = lw * (cls === 4 ? 1.45 : 1) * (k >= 2 ? 1.15 : 1);
+          const w = lw * widthOf[cls] * (k >= 2 ? 1.15 : 1);
           if (pass === 0) { ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 3; } else { ctx.strokeStyle = CONG_COLS[k]; ctx.lineWidth = w; }
           ctx.stroke();
         }
       }
     }
   };
-  // 出行方向图层：按行政区汇总当前时段的出行，只画区与区之间最主要的几条流向。
-  // 结果按「模型版本 + 时段 + 方式」缓存，不随每帧的分钟权重变化（不闪烁）；箭头统一向右侧弯曲，往返两个方向互不重叠
-  Renderer.prototype.flowDistricts = function () {
+  // 出行方向图层：按片区（城市区域；老城区再分为越秀、东山、荔湾）汇总当前时段的出行，每个片区画出它最主要的出行方向
+  // （第二方向接近最主要方向时也画出）：箭头从片区中心指向目的片区，尖端标出目的地。放置时按流量从大到小依次尝试缩短、
+  // 小角度偏转，尽量不与其他箭头、片区名称重叠。新区域开放、城市发展后流向随之变化；箭头中间的蓝色部分是乘地铁的比例。
+  // 结果只在模拟完成一整轮或时段变化时更新，箭头的出现、消失与粗细变化都平滑过渡（不跳闪）
+  Renderer.prototype.flowAreas = function () {
     const g = this.game, city = g.city, model = g.model;
-    if (this._fd && this._fd.city === city && this._fd.ver === city.version) return this._fd;
-    const W = city.W, H = city.H, N = W * H, Geo = CM.Geo;
-    const dist = new Int16Array(N).fill(-1), names = [];
-    const feats = Geo.admin.filter(function (f) { return f.level === 6; });
-    feats.forEach(function (f, k) {
-      const tmp = new Uint8Array(N); Geo.fill(tmp, W, H, 1, [f]);
-      let any = false; for (let c = 0; c < N; c++) if (tmp[c] && dist[c] < 0) { dist[c] = names.length; any = true; }
-      if (any) names.push(String(f.name || '').replace(/区$/, ''));
-    });
-    // 每个区的活动中心（人口 + 岗位加权），作为流向的端点
-    const sx = new Float64Array(names.length), sy = new Float64Array(names.length), sw = new Float64Array(names.length);
-    for (let c = 0; c < N; c++) { const d = dist[c]; if (d < 0) continue; const w = city.pop[c] + city.jobs[c] + 1; sx[d] += (c % W + 0.5) * w; sy[d] += (((c / W) | 0) + 0.5) * w; sw[d] += w; }
-    // 交通区块（2×2 小区）→ 所属区
-    const B = model.B, BW = model.BW, blkD = new Int16Array(B).fill(-1);
-    for (let b = 0; b < B; b++) {
-      const bi = b % BW, bj = (b / BW) | 0, Z = CFG.ZONE * 2;
-      const cnt = new Map();
-      for (let j = bj * Z; j < Math.min(H, bj * Z + Z); j++) for (let i = bi * Z; i < Math.min(W, bi * Z + Z); i++) { const d = dist[j * W + i]; if (d >= 0) cnt.set(d, (cnt.get(d) || 0) + 1); }
-      let best = -1, bn = 0; cnt.forEach(function (n, d) { if (n > bn) { bn = n; best = d; } }); blkD[b] = best;
+    if (this._fa && this._fa.city === city && this._fa.ver === city.version) return this._fa;
+    const W = city.W, H = city.H, N = W * H;
+    const names = [], idOf = new Map(), area = new Int16Array(N).fill(-1);
+    const old = city.regions.findIndex(function (r) { return r.id === 'oldcity'; });
+    const oldLabels = (city.districtLabels || []).filter(function (d) { return d[0] === '越秀' || d[0] === '东山' || d[0] === '荔湾'; });
+    const short = function (n) { return n.replace(/（.*）/, '').replace(/·.*$/, ''); };
+    for (let c = 0; c < N; c++) {
+      const k = city.region[c], rg = city.regions[k];
+      if (rg.scenic || !city.regionOpen[k] || city.landFrac[c] < 0.5) continue;
+      let key = 'r' + k, name = short(rg.name);
+      if (k === old && oldLabels.length) {
+        const x = c % W + 0.5, y = ((c / W) | 0) + 0.5; let best = 0, bd = 1e9;
+        oldLabels.forEach(function (d, q) { const dd = U.dist(x, y, d[1], d[2]); if (dd < bd) { bd = dd; best = q; } });
+        key = 'o' + best; name = oldLabels[best][0];
+      }
+      let id = idOf.get(key); if (id === undefined) { id = names.length; idOf.set(key, id); names.push(name); }
+      area[c] = id;
     }
-    this._fd = { city: city, ver: city.version, names: names, x: Array.from(sx).map(function (v, k) { return sw[k] ? v / sw[k] : 0; }), y: Array.from(sy).map(function (v, k) { return sw[k] ? v / sw[k] : 0; }), blk: blkD };
-    this._fl = null;
-    return this._fd;
+    const n = names.length, sx = new Float64Array(n), sy = new Float64Array(n), sw = new Float64Array(n);
+    for (let c = 0; c < N; c++) { const d = area[c]; if (d < 0) continue; const w = city.pop[c] + city.jobs[c] + 1; sx[d] += (c % W + 0.5) * w; sy[d] += (((c / W) | 0) + 0.5) * w; sw[d] += w; }
+    const B = model.B, BW = model.BW, blk = new Int16Array(B).fill(-1), Z = CFG.ZONE * 2;
+    for (let b = 0; b < B; b++) {
+      const bi = b % BW, bj = (b / BW) | 0, cnt = new Map();
+      for (let j = bj * Z; j < Math.min(H, bj * Z + Z); j++) for (let i = bi * Z; i < Math.min(W, bi * Z + Z); i++) { const c = j * W + i, d = area[c]; if (d >= 0) cnt.set(d, (cnt.get(d) || 0) + city.pop[c] + city.jobs[c] + 1); }
+      let best = -1, bn = 0; cnt.forEach(function (v, d) { if (v > bn) { bn = v; best = d; } }); blk[b] = best;
+    }
+    this._fa = { city: city, ver: city.version, names: names, x: Array.from(sx, function (v, k) { return sw[k] ? v / sw[k] : 0; }), y: Array.from(sy, function (v, k) { return sw[k] ? v / sw[k] : 0; }), blk: blk };
+    return this._fa;
   };
   Renderer.prototype.flowList = function () {
-    const g = this.game, model = g.model, fd = this.flowDistricts();
+    const g = this.game, model = g.model, fa = this.flowAreas();
     const p = model.weights(g.clock.minute).p0, mode = this.layerOpt.flow;
-    const key = model.version + ':' + p + ':' + mode + ':' + fd.ver;
+    const key = model.cycles + ':' + p + ':' + mode + ':' + fa.ver + ':' + g.netVersion;
     if (this._fl && this._flKey === key) return this._fl;
-    const P = model.live.per[p], B = model.B, n = fd.names.length;
+    const P = model.live.per[p], B = model.B, n = fa.names.length;
     const tot = new Float64Array(n * n), met = new Float64Array(n * n), node = new Float64Array(n);
     for (let a = 0; a < B; a++) {
-      const da = fd.blk[a]; if (da < 0) continue;
+      const da = fa.blk[a]; if (da < 0) continue;
       for (let b = 0; b < B; b++) {
-        const db = fd.blk[b]; if (db < 0) continue;
+        const db = fa.blk[b]; if (db < 0) continue;
         const k = a * B + b, t = P.desTot[k]; if (!(t > 0)) continue;
         const m = P.desMetro[k], f = mode === 'metro' ? m : (mode === 'car' ? t - m : t);
         node[da] += f;
-        if (da === db) continue;
-        tot[da * n + db] += f; met[da * n + db] += m;
+        if (da !== db) { tot[da * n + db] += f; met[da * n + db] += m; }
       }
     }
     const list = [];
-    for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) if (a !== b && tot[a * n + b] > 0) list.push({ a: a, b: b, f: tot[a * n + b], share: met[a * n + b] / Math.max(1e-9, (mode === 'all' ? tot[a * n + b] : met[a * n + b] + 1e-9)) });
+    const add = function (a, b, f, rank) { list.push({ key: a + '>' + b, a: a, b: b, f: f, rank: rank, share: mode === 'metro' ? 1 : (mode === 'car' ? 0 : met[a * n + b] / f) }); };
+    for (let a = 0; a < n; a++) {
+      let b1 = -1, f1 = 0, b2 = -1, f2 = 0;
+      for (let b = 0; b < n; b++) { const f = tot[a * n + b]; if (f > f1) { b2 = b1; f2 = f1; b1 = b; f1 = f; } else if (f > f2) { b2 = b; f2 = f; } }
+      if (b1 >= 0) add(a, b1, f1, 0);
+      if (b2 >= 0 && f2 >= f1 * 0.6) add(a, b2, f2, 1);
+    }
     list.sort(function (x, y) { return y.f - x.f; });
-    const mx = list.length ? list[0].f : 1;
-    const top = list.filter(function (e) { return e.f >= mx * 0.2; }).slice(0, 10);
-    const used = new Set(); for (const e of top) { used.add(e.a); used.add(e.b); }
-    this._fl = { top: top, mx: mx, node: node, used: used }; this._flKey = key;
+    // 两个片区互为主要方向时合并为一条双向箭头（两端都是片区圆点，不必另标目的地）
+    const byKey = new Map(), top = [];
+    for (const e of list) byKey.set(e.key, e);
+    for (const e of list) {
+      if (e.used) continue;
+      e.used = true;
+      const r = byKey.get(e.b + '>' + e.a);
+      if (r && !r.used) {
+        r.used = true;
+        const a = Math.min(e.a, e.b), b = Math.max(e.a, e.b);
+        top.push({ key: a + '<>' + b, a: a, b: b, f: Math.max(e.f, r.f), both: true, share: (e.share * e.f + r.share * r.f) / (e.f + r.f) });
+      } else top.push(e);
+    }
+    const mx = top.length ? top[0].f : 1;
+    let nmx = 1; for (const v of node) nmx = Math.max(nmx, v);
+    this._fl = { top: top.filter(function (e) { return e.f >= mx * 0.015; }), mx: mx, node: node, nodeMax: nmx }; this._flKey = key;
     return this._fl;
   };
-  Renderer.prototype.drawDesire = function (ctx) {
-    const fd = this.flowDistricts(), fl = this.flowList(), mode = this.layerOpt.flow;
-    const metroCol = [33, 102, 204], carCol = [222, 112, 46], grey = [120, 126, 140];
-    const pos = (d) => this.P(fd.x[d], fd.y[d], 0);
-    let nodeMax = 1; fl.used.forEach(function (k) { nodeMax = Math.max(nodeMax, fl.node[k]); });
-    const rad = (d) => 7 + 9 * Math.sqrt(fl.node[d] / nodeMax);
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (let q = fl.top.length - 1; q >= 0; q--) {
-      const e = fl.top[q], pa = pos(e.a), pb = pos(e.b);
-      const dx = pb.x - pa.x, dy = pb.y - pa.y, len = Math.hypot(dx, dy);
-      if (len < 24) continue;
-      const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
-      // 起止点留出节点圆的距离；统一向行进方向右侧弯曲，往返两条分开
-      const ra = rad(e.a) + 3, rb = rad(e.b) + 6;
-      const sx = pa.x + ux * ra + nx * 4, sy = pa.y + uy * ra + ny * 4, ex = pb.x - ux * rb + nx * 4, ey = pb.y - uy * rb + ny * 4;
-      const bend = Math.min(60, len * 0.16), cx = (sx + ex) / 2 + nx * bend, cy = (sy + ey) / 2 + ny * bend;
-      const w = 2 + 9 * (e.f / fl.mx);
-      const col = mode === 'metro' ? metroCol : (mode === 'car' ? carCol : U.mixc(grey, metroCol, U.clamp(e.share * 2.5, 0, 1)));
-      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(cx, cy, ex, ey);
-      ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 4; ctx.stroke();
-      ctx.strokeStyle = U.rgb(col, 0.9); ctx.lineWidth = w; ctx.stroke();
-      // 终点箭头（沿曲线末端切线）
-      const tx = ex - cx, ty = ey - cy, tl = Math.hypot(tx, ty) || 1, ah = 6 + w * 0.9, ang = Math.atan2(ty / tl, tx / tl);
-      ctx.fillStyle = U.rgb(col, 1);
-      ctx.beginPath(); ctx.moveTo(ex + Math.cos(ang) * ah * 0.6, ey + Math.sin(ang) * ah * 0.6); ctx.lineTo(ex + Math.cos(ang + 2.45) * ah, ey + Math.sin(ang + 2.45) * ah); ctx.lineTo(ex + Math.cos(ang - 2.45) * ah, ey + Math.sin(ang - 2.45) * ah); ctx.closePath();
-      ctx.strokeStyle = TH.halo; ctx.lineWidth = 2; ctx.stroke(); ctx.fill();
-    }
-    // 区节点与名称
-    ctx.font = '600 12px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    fl.used.forEach((d) => {
-      const p = pos(d), r = rad(d);
-      ctx.fillStyle = TH.stFill; ctx.strokeStyle = TH.stInter; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.lineWidth = 3.5; ctx.strokeStyle = TH.halo; ctx.strokeText(fd.names[d], p.x, p.y + r + 11); ctx.fillStyle = TH.ink; ctx.fillText(fd.names[d], p.x, p.y + r + 11);
-    });
+  // 箭头几何（屏幕坐标）：从起点片区的圆边出发，朝目的片区方向（可偏转 ang），长度约为两地距离的一半（乘 lf），并略偏向右侧，
+  // 使相向的两条箭头并排而不重叠。距离太近（缩得太小）时返回 null
+  const flowGeo = function (pa, pb, ra, rb, w, ang, lf) {
+    const dx = pb.x - pa.x, dy = pb.y - pa.y, dist = Math.hypot(dx, dy);
+    if (dist < ra + rb + 26) return null;
+    const t = Math.atan2(dy, dx) + ang, ux = Math.cos(t), uy = Math.sin(t), nx = -uy, ny = ux;
+    const off = w / 2 + 2, s0 = ra + 3, ah = 5 + w * 0.7;
+    const L = Math.min(dist - rb - ah - 4, U.clamp(dist * 0.5, 42, 150)) * lf;
+    if (L < s0 + 14) return null;
+    const sx = pa.x + ux * s0 + nx * off, sy = pa.y + uy * s0 + ny * off, ex = pa.x + ux * L + nx * off, ey = pa.y + uy * L + ny * off;
+    return { sx: sx, sy: sy, ex: ex, ey: ey, tx: ex + ux * ah, ty: ey + uy * ah, ux: ux, uy: uy, nx: nx, ny: ny, ah: ah };
   };
-  // 车站客流图层
-  Renderer.prototype.drawStationFlows = function (ctx) {
-    const g = this.game, model = g.model, net = model.net;
-    if (!net || !this.stPx) return;
-    const W = model.weights(g.clock.minute);
-    const kind = this.layerOpt.station;
-    // 断面客流
-    const lw = this.lineWidthPx();
+  // 双向箭头：连接两个片区圆点，两端各有箭头（ax,ay 为起点端尖端）
+  const flowGeo2 = function (pa, pb, ra, rb, w) {
+    const dx = pb.x - pa.x, dy = pb.y - pa.y, dist = Math.hypot(dx, dy), ah = 5 + w * 0.7;
+    if (dist < ra + rb + ah * 2 + 14) return null;
+    const ux = dx / dist, uy = dy / dist;
+    const ax = pa.x + ux * (ra + 3), ay = pa.y + uy * (ra + 3), tx = pb.x - ux * (rb + 3), ty = pb.y - uy * (rb + 3);
+    return { both: true, ax: ax, ay: ay, tx: tx, ty: ty, sx: ax + ux * ah, sy: ay + uy * ah, ex: tx - ux * ah, ey: ty - uy * ah, ux: ux, uy: uy, nx: -uy, ny: ux, ah: ah };
+  };
+  // 碰撞检测用的箭头线段：去掉靠近片区圆点的根部，从同一片区出发、方向不同的箭头不算重叠
+  const flowSpan = function (G) {
+    const t = 12, x1 = G.both ? G.ax : G.sx, y1 = G.both ? G.ay : G.sy;
+    return [x1 + G.ux * t, y1 + G.uy * t, G.tx - (G.both ? G.ux * t : 0), G.ty - (G.both ? G.uy * t : 0)];
+  };
+  const segDist = function (ax, ay, bx, by, cx, cy, dx, dy) {
+    const ps = function (px, py, x1, y1, x2, y2) { const vx = x2 - x1, vy = y2 - y1, l2 = vx * vx + vy * vy; const t = l2 ? U.clamp(((px - x1) * vx + (py - y1) * vy) / l2, 0, 1) : 0; return Math.hypot(px - x1 - vx * t, py - y1 - vy * t); };
+    const cr = function (x1, y1, x2, y2, x3, y3) { return (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1); };
+    const d1 = cr(ax, ay, bx, by, cx, cy), d2 = cr(ax, ay, bx, by, dx, dy), d3 = cr(cx, cy, dx, dy, ax, ay), d4 = cr(cx, cy, dx, dy, bx, by);
+    if (((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0))) return 0;
+    return Math.min(ps(ax, ay, cx, cy, dx, dy), ps(bx, by, cx, cy, dx, dy), ps(cx, cy, ax, ay, bx, by), ps(dx, dy, ax, ay, bx, by));
+  };
+  const flowLabelBox = function (G, tw) {
+    const k = 5 + (tw / 2) * Math.abs(G.ux) + 8 * Math.abs(G.uy), cx = G.tx + G.ux * k, cy = G.ty + G.uy * k;
+    return { cx: cx, cy: cy, x0: cx - tw / 2 - 2, y0: cy - 8, x1: cx + tw / 2 + 2, y1: cy + 8 };
+  };
+  // 布局：只在流向列表、缩放档位或视角变化时重算（与平移无关），结果是每条箭头选定的偏转、长度与是否标注目的地
+  Renderer.prototype.flowLayout = function (ctx, fa, fl, show) {
+    const M = this.M, z = this.z;
+    const key = this._flKey + '|' + Math.round(Math.log2(z) * 5) + '|' + M.map(function (v) { return v.toFixed(2); }).join(',') + '|' + this.w + 'x' + this.h;
+    if (this._flLay && this._flLayKey === key) return this._flLay;
+    const q = function (d) { return { x: (M[0] * fa.x[d] + M[1] * fa.y[d]) * z, y: (M[2] * fa.x[d] + M[3] * fa.y[d]) * z }; };
+    const rad = function (d) { return 4 + 6 * Math.sqrt(fl.node[d] / fl.nodeMax); };
+    const caps = [], rects = [];
+    const capRect = function (x1, y1, x2, y2, r, b) { for (let k = 0; k <= 8; k++) { const px = x1 + (x2 - x1) * k / 8, py = y1 + (y2 - y1) * k / 8; if (px > b.x0 - r && px < b.x1 + r && py > b.y0 - r && py < b.y1 + r) return true; } return false; };
+    const hitRect = function (b) { let n = 0; for (const r of rects) if (b.x0 < r.x1 && b.x1 > r.x0 && b.y0 < r.y1 && b.y1 > r.y0) n++; for (const c of caps) if (capRect(c.x1, c.y1, c.x2, c.y2, c.r, b)) n++; return n; };
+    const hitCap = function (x1, y1, x2, y2, r, own) {
+      let n = 0;
+      for (const c of caps) if (c.own !== own && segDist(x1, y1, x2, y2, c.x1, c.y1, c.x2, c.y2) < r + c.r) n++;
+      for (const b of rects) if (b.own !== own && capRect(x1, y1, x2, y2, r, b)) n++;
+      return n;
+    };
+    // 片区圆点与名称先占位
+    ctx.font = '600 12px ' + FONT;
+    const nodes = new Set(); show.forEach(function (s) { nodes.add(s.e.a); if (s.e.both) nodes.add(s.e.b); });
+    nodes.forEach(function (d) { const p = q(d), r = rad(d), tw = ctx.measureText(fa.names[d]).width; caps.push({ x1: p.x, y1: p.y, x2: p.x, y2: p.y, r: r + 2, own: d }); rects.push({ x0: p.x - tw / 2 - 3, y0: p.y + r + 3, x1: p.x + tw / 2 + 3, y1: p.y + r + 19, own: d }); });
+    const out = new Map();
+    // 双向箭头位置固定（连接两个圆点），先占位
+    show.forEach(function (s) {
+      if (!s.e.both) return;
+      const G = flowGeo2(q(s.e.a), q(s.e.b), rad(s.e.a), rad(s.e.b), 2.5 + 9 * Math.sqrt(s.tw)); if (!G) return;
+      const sp = flowSpan(G); caps.push({ x1: sp[0], y1: sp[1], x2: sp[2], y2: sp[3], r: 2.5 + 4.5 * Math.sqrt(s.tw) + 2, own: -1 });
+      out.set(s.e.key, { ang: 0, lf: 1, label: false });
+    });
+    // 单向箭头：按流量从大到小依次放置，依次尝试原方向、缩短、小角度偏转
+    const CAND = [[0, 1], [0, 0.72], [0.2, 1], [-0.2, 1], [0.2, 0.72], [-0.2, 0.72], [0, 0.5], [0.2, 0.5], [-0.2, 0.5], [0.4, 0.72], [-0.4, 0.72], [0.4, 0.5], [-0.4, 0.5]];
+    ctx.font = '600 11px ' + FONT;
+    const items = Array.from(show.values()).filter(function (s) { return !s.e.both; }).sort(function (x, y) { return y.tw - x.tw; });
+    for (const s of items) {
+      const e = s.e, pa = q(e.a), pb = q(e.b), w = 2.5 + 9 * Math.sqrt(s.tw), tw = ctx.measureText(fa.names[e.b]).width;
+      let best = null;
+      for (const cd of CAND) {
+        const G = flowGeo(pa, pb, rad(e.a), rad(e.b), w, cd[0], cd[1]); if (!G) continue;
+        const sp = flowSpan(G), ha = hitCap(sp[0], sp[1], sp[2], sp[3], w / 2 + 2, e.a), lb = flowLabelBox(G, tw), hl = hitRect(lb);
+        const sc = ha * 10 + (hl ? 1 : 0);
+        if (!best || sc < best.sc) best = { sc: sc, ang: cd[0], lf: cd[1], G: G, sp: sp, lb: lb, label: hl === 0 };
+        if (sc === 0) break;
+      }
+      if (!best) continue;
+      const sp = best.sp;
+      caps.push({ x1: sp[0], y1: sp[1], x2: sp[2], y2: sp[3], r: w / 2 + 2, own: -1 });
+      if (best.label) rects.push({ x0: best.lb.x0, y0: best.lb.y0, x1: best.lb.x1, y1: best.lb.y1, own: -1 });
+      out.set(e.key, { ang: best.ang, lf: best.lf, label: best.label });
+    }
+    this._flLay = out; this._flLayKey = key;
+    return out;
+  };
+  Renderer.prototype.drawDesire = function (ctx) {
+    const fa = this.flowAreas(), fl = this.flowList(), mode = this.layerOpt.flow, dt = Math.min(0.1, this.dt || 0.016);
+    // 平滑过渡：每条流向的透明度与粗细逐帧趋近目标值
+    const show = this._flShow || (this._flShow = new Map());
+    if (this._flShowArea !== fa) { show.clear(); this._flShowArea = fa; this._flLayKey = null; }
+    const want = new Set();
+    for (const e of fl.top) {
+      want.add(e.key);
+      let s = show.get(e.key);
+      if (!s) { s = { a: 0, w: e.f / fl.mx, share: e.share }; show.set(e.key, s); }
+      s.e = e; s.tw = e.f / fl.mx; s.ts = e.share;
+    }
+    show.forEach(function (s, k) {
+      const on = want.has(k);
+      s.a = U.clamp(s.a + (on ? dt : -dt) / 0.45, 0, 1);
+      if (on) { s.w += (s.tw - s.w) * Math.min(1, dt * 4); s.share += (s.ts - s.share) * Math.min(1, dt * 4); }
+      if (!on && s.a <= 0) show.delete(k);
+    });
+    const lay = this.flowLayout(ctx, fa, fl, show);
+    const rad = function (d) { return 4 + 6 * Math.sqrt(fl.node[d] / fl.nodeMax); };
+    const pos = (d) => this.P(fa.x[d], fa.y[d], 0);
+    const metroCol = [33, 102, 204], carCol = mode === 'car' ? [222, 112, 46] : [128, 134, 148];
+    const items = Array.from(show.values()).sort(function (x, y) { return x.w - y.w; });
+    const nodeA = new Map(), labels = [];
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const s of items) {
+      const e = s.e, c = lay.get(e.key); if (!c) continue;
+      const w = 2.5 + 9 * Math.sqrt(Math.max(0, s.w));
+      const G = e.both ? flowGeo2(pos(e.a), pos(e.b), rad(e.a), rad(e.b), w) : flowGeo(pos(e.a), pos(e.b), rad(e.a), rad(e.b), w, c.ang, c.lf); if (!G) continue;
+      nodeA.set(e.a, Math.max(nodeA.get(e.a) || 0, s.a));
+      if (e.both) nodeA.set(e.b, Math.max(nodeA.get(e.b) || 0, s.a));
+      const share = mode === 'metro' ? 1 : U.clamp(s.share, 0, 1);
+      ctx.globalAlpha = s.a;
+      ctx.beginPath(); ctx.moveTo(G.sx, G.sy); ctx.lineTo(G.ex, G.ey);
+      ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 4; ctx.stroke();
+      ctx.strokeStyle = U.rgb(share >= 0.999 ? metroCol : carCol, 0.94); ctx.lineWidth = w; ctx.stroke();
+      if (share > 0.02 && share < 0.999) { ctx.strokeStyle = U.rgb(metroCol, 0.95); ctx.lineWidth = Math.max(1.5, w * share); ctx.stroke(); }   // 乘地铁部分
+      const hw = G.ah * 0.62, fill = U.rgb(share > 0.5 ? metroCol : carCol, 1);
+      const head = function (tx, ty, ux, uy) {
+        const bx = tx - ux * (G.ah + 2), by = ty - uy * (G.ah + 2);
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(bx - uy * hw, by + ux * hw); ctx.lineTo(bx + uy * hw, by - ux * hw); ctx.closePath();
+        ctx.strokeStyle = TH.halo; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = fill; ctx.fill();
+      };
+      head(G.tx, G.ty, G.ux, G.uy);
+      if (G.both) head(G.ax, G.ay, -G.ux, -G.uy);
+      if (c.label) labels.push({ G: G, t: fa.names[e.b], a: s.a });
+    }
+    // 目的地名称（箭头尖端）
+    ctx.font = '600 11px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const L of labels) {
+      const b = flowLabelBox(L.G, ctx.measureText(L.t).width);
+      ctx.globalAlpha = L.a; ctx.lineWidth = 3; ctx.strokeStyle = TH.halo; ctx.strokeText(L.t, b.cx, b.cy);
+      ctx.fillStyle = TH.night ? '#b9c4cf' : '#465264'; ctx.fillText(L.t, b.cx, b.cy);
+    }
+    // 片区圆点与名称
+    ctx.font = '700 12px ' + FONT;
+    nodeA.forEach((a, d) => {
+      const p = pos(d), r = rad(d);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = TH.stFill; ctx.strokeStyle = TH.stInter; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.lineWidth = 3.5; ctx.strokeStyle = TH.halo; ctx.strokeText(fa.names[d], p.x, p.y + r + 11); ctx.fillStyle = TH.ink; ctx.fillText(fa.names[d], p.x, p.y + r + 11);
+    });
+    ctx.globalAlpha = 1;
+  };
+  // 车站客流图层：用典型工作日的全天数据（夜间停运时同样可看）。圆的大小 = 车站日客流，颜色 = 高峰小时负荷；
+  // 线路下方的半透明色带 = 区间日断面客流（双向合计）；客流较大的车站标出数值
+  Renderer.prototype.stationFlowData = function () {
+    const model = this.game.model, net = model.net, sd = model.stDaily;
+    if (!net || !sd || !net.N) return null;
+    const kind = this.layerOpt.station, key = model.cycles + ':' + net.N + ':' + net.R + ':' + kind;
+    if (this._sf && this._sfKey === key) return this._sf;
+    const C = net.C, N = net.N, val = new Float32Array(N), ratio = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const a = sd.inn[i] || 0, b = sd.out[i] || 0, x = sd.xfer[i] || 0;
+      val[i] = kind === 'in' ? a : (kind === 'out' ? b : (kind === 'xfer' ? x : a + b + x));
+      ratio[i] = (sd.peak[i] || 0) / CFG.metro.stationCap[C.stations[i].size];
+    }
+    const segLoad = new Map();
     for (let r = 0; r < net.R; r++) {
-      const rt = net.C.routes[r], re = net.rideEdge[r];
+      const rt = C.routes[r], re = net.rideEdge[r];
       for (let k = 0; k < rt.segRefs.length; k++) {
-        const ld = model.edgeLoadAt(re[2 * k], W) + model.edgeLoadAt(re[2 * k + 1], W);
-        if (ld < 50) continue;
-        const arr = this.segPx && this.segPx.get(rt.segRefs[k].id);
-        if (!arr) continue;
-        ctx.strokeStyle = U.rgb(U.hex2rgb(rt.color), 0.35);
-        ctx.lineWidth = lw + U.clamp(Math.sqrt(ld) / 6, 0, 26);
-        this.strokeArr(ctx, arr);
+        let d = 0;
+        for (let p = 0; p < 4; p++) { const P = model.live.per[p]; d += ((P.load[re[2 * k]] || 0) + (P.load[re[2 * k + 1]] || 0)) * model.pHours[p] * (p === 3 ? 0.9 : 1); }
+        const id = rt.segRefs[k].id; segLoad.set(id, Math.max(segLoad.get(id) || 0, d));
       }
     }
-    ctx.font = '11px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    for (let i = 0; i < net.N; i++) {
-      const sp = this.stPx[i]; if (!sp) continue;
-      let f = 0;
-      if (kind === 'in') f = model.stFlowAt(i, W, 'stIn'); else if (kind === 'out') f = model.stFlowAt(i, W, 'stOut'); else if (kind === 'xfer') f = model.stFlowAt(i, W, 'stXfer');
-      else f = model.stFlowAt(i, W, 'stIn') + model.stFlowAt(i, W, 'stOut') + model.stFlowAt(i, W, 'stXfer');
-      if (f < 1) continue;
-      const cap = CFG.metro.stationCap[net.C.stations[i].size];
-      const ratio = (model.stFlowAt(i, W, 'stIn') + model.stFlowAt(i, W, 'stOut') + model.stFlowAt(i, W, 'stXfer')) / cap;
-      const r = 4 + Math.sqrt(f) / 4;
-      ctx.fillStyle = ratio > 1 ? 'rgba(214,48,49,0.45)' : (ratio > 0.8 ? 'rgba(242,153,74,0.45)' : 'rgba(33,102,204,0.35)');
-      ctx.beginPath(); ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2); ctx.fill();
-      if (this.z > 16 && r > 9) { ctx.fillStyle = TH.ink; ctx.fillText(U.fmtPeople(f), sp.x, sp.y - r - 7); }
+    let vmax = 1; for (let i = 0; i < N; i++) vmax = Math.max(vmax, val[i]);
+    let smax = 1; segLoad.forEach(function (v) { smax = Math.max(smax, v); });
+    this._sf = { val: val, ratio: ratio, segLoad: segLoad, vmax: vmax, smax: smax }; this._sfKey = key;
+    return this._sf;
+  };
+  Renderer.prototype.drawStationFlows = function (ctx) {
+    const g = this.game, model = g.model, net = model.net;
+    if (!net || !this.stPx || !this.drawnC) return;
+    const sf = this.stationFlowData(); if (!sf) return;
+    const C = net.C, DC = this.drawnC, zk = U.clamp(this.z / 26, 0.45, 1.15);   // 圆的大小随缩放变化，缩小时不互相压住
+    // 区间断面客流色带
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    sf.segLoad.forEach((v, id) => {
+      const arr = this.segPx && this.segPx.get(id); if (!arr || v <= 0) return;
+      const cs = C.segs.get(id), L = cs && C.net.lines[cs.seg.line]; if (!L) return;
+      ctx.strokeStyle = U.rgb(U.hex2rgb(L.color), 0.32); ctx.lineWidth = this.lineWidthPx() + (3 + 22 * Math.sqrt(v / sf.smax)) * zk;
+      this.strokeArr(ctx, arr);
+    });
+    // 车站：按客流从小到大画，大站在上
+    const list = [];
+    for (let i = 0; i < C.stations.length; i++) {
+      const k = DC.sIndex.get(C.stations[i].id); if (k === undefined) continue;
+      const sp = this.stPx[k]; if (!sp || !(sf.val[i] > 0)) continue;
+      list.push({ i: i, sp: sp, v: sf.val[i], r: (4 + 20 * Math.sqrt(sf.val[i] / sf.vmax)) * zk });
+    }
+    list.sort(function (a, b) { return a.v - b.v; });
+    for (const it of list) {
+      const rt = sf.ratio[it.i], col = rt > 1 ? [217, 58, 58] : (rt > 0.6 ? [240, 160, 32] : [31, 143, 191]);
+      ctx.fillStyle = U.rgb(col, 0.78); ctx.strokeStyle = TH.halo; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(it.sp.x, it.sp.y, it.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+    // 标注：站名 + 日客流，放在圆的下方；大站优先，互不重叠（本图层不显示普通站名）
+    const placed = list.map(function (it) { return [it.sp.x - it.r * 0.7, it.sp.y - it.r * 0.7, it.sp.x + it.r * 0.7, it.sp.y + it.r * 0.7]; });
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let shown = 0;
+    for (let q = list.length - 1; q >= 0 && shown < 30; q--) {
+      const it = list[q], name = C.stations[it.i].name, val = U.fmtPeople(it.v) + ' 人次';
+      ctx.font = '600 12px ' + FONT; const w1 = ctx.measureText(name).width;
+      ctx.font = '11px ' + FONT; const w2 = ctx.measureText(val).width;
+      const w = Math.max(w1, w2) + 6, x = it.sp.x, y = it.sp.y + it.r + 4;
+      const b = [x - w / 2, y, x + w / 2, y + 28];
+      if (placed.some(function (o, k) { return k !== q && b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]; })) continue;
+      placed.push(b); shown++;
+      ctx.lineJoin = 'round'; ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo;
+      ctx.font = '600 12px ' + FONT; ctx.strokeText(name, x, y + 7); ctx.fillStyle = TH.ink; ctx.fillText(name, x, y + 7);
+      ctx.font = '11px ' + FONT; ctx.strokeText(val, x, y + 21); ctx.fillStyle = TH.roadInk; ctx.fillText(val, x, y + 21);
     }
   };
-
+  // ---------------- 地图定位高亮：片区（矩形）、区域（范围与边界）、道路（线形）、地点（圆），脉动显示数秒 ----------------
+  Renderer.prototype.setHighlight = function (hl) {
+    this.hl = hl ? Object.assign({ t0: this.time, dur: 7 }, hl) : null;
+    if (this.hl) for (const it of this.hl.kind === 'multi' ? this.hl.items : [this.hl]) if (it.kind === 'region') this.regionMask(it.region);
+  };
+  // 区域范围：W×H 掩膜（填充）与边界线段（世界坐标），按区域缓存
+  Renderer.prototype.regionMask = function (k) {
+    const city = this.game.city, W = city.W, H = city.H;
+    this._rm = this._rm || {};
+    const key = k + ':' + city.version;
+    if (this._rm[key]) return this._rm[key];
+    const cv = makeCanvas(W, H), c2 = cv.getContext('2d'), img = c2.createImageData(W, H), d = img.data, edges = [];
+    const inR = function (i, j) { return i >= 0 && j >= 0 && i < W && j < H && city.region[j * W + i] === k && city.landFrac[j * W + i] >= 0.3; };
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+      if (!inR(i, j)) continue;
+      const o = (j * W + i) * 4; d[o] = 47; d[o + 1] = 111; d[o + 2] = 168; d[o + 3] = 255;
+      if (!inR(i - 1, j)) edges.push([i, j, i, j + 1]); if (!inR(i + 1, j)) edges.push([i + 1, j, i + 1, j + 1]);
+      if (!inR(i, j - 1)) edges.push([i, j, i + 1, j]); if (!inR(i, j + 1)) edges.push([i, j + 1, i + 1, j + 1]);
+    }
+    c2.putImageData(img, 0, 0);
+    this._rm[key] = { cv: cv, edges: edges };
+    return this._rm[key];
+  };
+  // 高亮：kind 为 rect / circle / region / road，或 multi（items 为多个高亮，各自带名称标签）；dur 为持续秒数
+  Renderer.prototype.drawHighlight = function (ctx) {
+    const hl = this.hl, age = this.time - hl.t0;
+    if (age > hl.dur) { this.hl = null; return; }
+    const fade = Math.min(1, age / 0.3) * Math.min(1, (hl.dur - age) / 0.8), pulse = 0.5 + 0.5 * Math.sin(age * 4.5);
+    ctx.save();
+    for (const it of hl.kind === 'multi' ? hl.items : [hl]) this.drawHighlightOne(ctx, it, age, fade, pulse);
+    ctx.restore();
+  };
+  Renderer.prototype.drawHighlightOne = function (ctx, hl, age, fade, pulse) {
+    const col = TH.night ? [106, 166, 230] : [30, 110, 200], tmp = {}, dpr = this.dpr, M = this.M, z = this.z;
+    ctx.globalAlpha = fade; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const path = (pts, close) => { ctx.beginPath(); pts.forEach((p, i) => { this.P(p[0], p[1], 0, tmp); if (i) ctx.lineTo(tmp.x, tmp.y); else ctx.moveTo(tmp.x, tmp.y); }); if (close) ctx.closePath(); };
+    const outline = (w) => { ctx.strokeStyle = TH.halo; ctx.lineWidth = w + 4; ctx.stroke(); ctx.strokeStyle = U.rgb(col, 0.95); ctx.lineWidth = w; ctx.stroke(); };
+    if (hl.kind === 'rect' || hl.kind === 'circle') {
+      const pts = [];
+      if (hl.kind === 'rect') pts.push([hl.x0, hl.y0], [hl.x1, hl.y0], [hl.x1, hl.y1], [hl.x0, hl.y1]);
+      else for (let a = 0; a < 48; a++) pts.push([hl.x + Math.cos(a / 48 * Math.PI * 2) * hl.r, hl.y + Math.sin(a / 48 * Math.PI * 2) * hl.r]);
+      path(pts, true); ctx.fillStyle = U.rgb(col, 0.12 + 0.1 * pulse); ctx.fill();
+      ctx.setLineDash([10, 6]); ctx.lineDashOffset = -age * 20; outline(3); ctx.setLineDash([]);
+    } else if (hl.kind === 'region') {
+      const rm = this.regionMask(hl.region);
+      ctx.save(); ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
+      ctx.globalAlpha = fade * (0.16 + 0.1 * pulse); ctx.imageSmoothingEnabled = false; ctx.drawImage(rm.cv, 0, 0, rm.cv.width, rm.cv.height); ctx.restore();
+      ctx.beginPath();
+      for (const e of rm.edges) { this.P(e[0], e[1], 0, tmp); ctx.moveTo(tmp.x, tmp.y); this.P(e[2], e[3], 0, tmp); ctx.lineTo(tmp.x, tmp.y); }
+      outline(2.5);
+    } else if (hl.kind === 'road') {
+      ctx.beginPath();
+      for (const p of hl.ways) for (let q = 0; q < p.length; q += 2) { this.P(p[q], p[q + 1], 0, tmp); if (q) ctx.lineTo(tmp.x, tmp.y); else ctx.moveTo(tmp.x, tmp.y); }
+      ctx.strokeStyle = U.rgb(col, 0.25 + 0.2 * pulse); ctx.lineWidth = 14; ctx.stroke();
+      outline(4);
+    }
+    // 名称标签
+    if (hl.label) {
+      const p = this.P(hl.lx, hl.ly, 0);
+      ctx.font = '700 13px ' + FONT; const w = ctx.measureText(hl.label).width + 22, x = p.x - w / 2, y = p.y - 44;
+      ctx.fillStyle = U.rgb(col, 0.96); ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, 26, 13) : ctx.rect(x, y, w, 26); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(p.x - 6, y + 26); ctx.lineTo(p.x + 6, y + 26); ctx.lineTo(p.x, y + 33); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(hl.label, p.x, y + 13.5);
+    }
+  };
   // ---------------- 标注 ----------------
   Renderer.prototype.drawLabels = function (ctx, ui) {
     const g = this.game, z = this.z, v = this.view, city = g.city;
@@ -1878,7 +2126,7 @@
     };
     // 车站名
     const C = this.drawnC;
-    const busyLayer = this.layer === 'cong' || this.layer === 'flow';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
+    const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
     if (C && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
       ctx.globalAlpha = this.labA;
       const fs = z >= 22 ? 12.5 : 11.5;

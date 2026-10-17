@@ -356,8 +356,7 @@
     const N = net ? net.N : 0, R = net ? net.R : 0, nE = net ? net.nE : 0;
     P.freq = new Float32Array(R); P.crowd = new Float32Array(nE).fill(1); P.load = new Float32Array(nE);
     P.stDelay = new Float32Array(N); P.stIn = new Float32Array(N); P.stOut = new Float32Array(N); P.stXfer = new Float32Array(N); P.stBoard = new Float32Array(N);
-    const fmin = CFG.metro.fMin[p < 0 ? 1 : p];
-    for (let r = 0; r < R; r++) P.freq[r] = fmin;
+    for (let r = 0; r < R; r++) P.freq[r] = Model.serviceFloor(net.C.routes[r], p < 0 ? 1 : p);
     if (old && oldNet && net) {
       const keyIdx = new Map(); oldNet.routeKey.forEach(function (k, i) { keyIdx.set(k, i); });
       for (let r = 0; r < R; r++) {
@@ -573,12 +572,12 @@
         const dl = U.clamp((ratio - 0.8) * 10, 0, 12);
         P.stDelay[s] = P.stDelay[s] * 0.5 + dl * 0.5;
       }
-      // 自动调整发车频率
+      // 自动配车：发车频率取「线路最低服务水平」（按站数、站距）与「最大断面客流所需」中的较大者
       for (let r = 0; r < net.R; r++) {
         const rt = net.C.routes[r], re = net.rideEdge[r];
         let mx = 0;
         for (let q = 0; q < re.length; q++) if (P.load[re[q]] > mx) mx = P.load[re[q]];
-        const need = U.clamp(mx / (rt.cap * mc.targetLF), mc.fMin[p], mc.fMax);
+        const need = U.clamp(Math.max(mx / (rt.cap * mc.targetLF), Model.serviceFloor(rt, p)), 1, mc.fMax);
         P.freq[r] = P.freq[r] * 0.55 + need * 0.45;
         for (let q = 0; q < re.length; q++) {
           const e = re[q];
@@ -784,6 +783,17 @@
     }
     return den > 0 ? num / den : 1;
   };
+  // 线路最低服务水平（列/小时）：车站越多、站距越小的城区线越密，站距大的郊区线较疏；非环线保证至少 2 列车在线运行
+  Model.serviceFloor = function (rt, p) {
+    const mc = CFG.metro;
+    if (!rt) return mc.fMin[p];
+    const ns = rt.stIdx.length, sp = rt.lenM / 1000 / Math.max(1, rt.loop ? ns : ns - 1);
+    const fs = U.clamp(1.5 - 0.35 * sp, 0.7, 1.3);          // 平均站距 1 km → 1.15；2.3 km 以上 → 0.7
+    const fn = U.clamp(0.82 + ns / 45, 0.85, 1.3);          // 8 站 → 1.0；22 站以上 → 1.3
+    let f = mc.fMin[p] * fs * fn;
+    if (!rt.loop && rt.cycleSec > 0) f = Math.max(f, 2 * 3600 / rt.cycleSec);
+    return Math.min(f, mc.fMax);
+  };
   Model.prototype.freqAt = function (r, W) {
     if (!this.net || !W.svc) return 0;
     return this.live.per[W.p0].freq[r] * W.w0 + this.live.per[W.p1].freq[r] * W.w1;
@@ -875,7 +885,7 @@
         }
         const roads = [];
         byName.forEach(function (e, nid) {
-          if (e.d0 <= 0) return;
+          if (e.d0 <= 0 || !self.city.roadNames[nid]) return;
           const vc0 = e.n0 / e.d0, vc1 = e.d1 > 0 ? e.n1 / e.d1 : 0;
           roads.push({ name: self.city.roadNames[nid], vc0: vc0, vc1: vc1, delta: vc1 - vc0, w: e.vkt0 });
         });

@@ -9,7 +9,7 @@
     { id: 'pop', name: '人口密度', icon: 'lyPop', color: '#e9641f', desc: '各街区常住人口' },
     { id: 'jobs', name: '住宅与就业', icon: 'lyJobs', color: '#6447dc', desc: '居住与岗位的分布' },
     { id: 'cong', name: '道路拥堵', icon: 'lyCong', color: '#df3030', desc: '主要道路当前的拥堵程度' },
-    { id: 'flow', name: '出行方向', icon: 'lyFlow', color: '#2557d6', desc: '各区之间的主要出行方向' },
+    { id: 'flow', name: '出行方向', icon: 'lyFlow', color: '#2557d6', desc: '各片区的主要出行方向' },
     { id: 'cover', name: '地铁覆盖', icon: 'lyCover', color: '#14a252', desc: '步行可达车站的范围' },
     { id: 'station', name: '车站客流', icon: 'lyStation', color: '#109e90', desc: '进出站与断面客流' },
   ];
@@ -80,7 +80,7 @@
         pill('money', '资金', 'coin', 'b-gold'), pill('pop', '人口', 'people', 'b-blue', 'opt2'), pill('share', '地铁分担率', 'metro', 'b-teal', 'opt3'),
         pill('cong', '拥堵指数', 'car', 'b-orange', 'opt5'), pill('sat', '满意度', 'smile', 'b-green', 'opt4')),
       h('div', { class: 'cluster glass actions' },
-        hb('search', 'search', '搜索车站与线路', function () { self.openSearch(); }, '/'),
+        hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
         taskBtn,
         hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
         hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
@@ -424,11 +424,15 @@
   UI.prototype.setTooltip = function (tip, sx, sy) {
     const el = this.tip;
     if (!tip) { el.classList.remove('on'); return; }
-    const key = tip.title + '|' + tip.lines.join('|');
+    // 空值（null、undefined、空串，或含 "null"/"undefined" 的拼接文字）不显示
+    const ok = function (v) { return v != null && v !== '' && !/(^|[^a-z])(null|undefined|NaN)([^a-z]|$)/.test(String(v)); };
+    const lines = (tip.lines || []).filter(ok), title = ok(tip.title) ? tip.title : '';
+    if (!title && !lines.length) { el.classList.remove('on'); return; }
+    const key = title + '|' + lines.join('|');
     if (key !== this._tipKey) {
       el.innerHTML = '';
-      el.appendChild(h('div', { class: 't' }, tip.title));
-      for (const l of tip.lines) el.appendChild(h('div', { class: 'm' }, l));
+      if (title) el.appendChild(h('div', { class: 't' }, title));
+      for (const l of lines) el.appendChild(h('div', { class: 'm' }, l));
       this._tipKey = key;
     }
     el.classList.toggle('bad', !!tip.bad);
@@ -558,6 +562,7 @@
     if (!this.screen.classList.contains('hidden') && this.screenEsc) { this.screenEsc(); return; }
     if (this.dropdown) { this.dropdown.remove(); this.dropdown = null; return; }
     if (this.searchEl) { this.closeSearch(); return; }
+    if (this.R.hl) { this.R.setHighlight(null); return; }
     if (this.multi) { this.clearMulti(); return; }
     if (this.layer !== 'none' && !this.stack.length) { this.setLayer('none'); return; }
     if (this.stack.length) { this.closePanel(); return; }
@@ -725,7 +730,7 @@
     if (!L || !this.g()) { card.classList.add('hidden'); return; }
     card.innerHTML = '';
     const self = this;
-    const badge = h('span', { class: 'badge' }, ic(L.icon)); badge.style.background = L.color;
+    const badge = h('span', { class: 'badge lc-badge' }, ic(L.icon)); badge.style.background = L.color;
     card.append(h('div', { class: 'lc-head' }, badge, h('div', { class: 'p-title' }, L.name), h('button', { class: 'iconbtn', 'data-tip': '关闭图层', onclick: function () { self.setLayer('none'); } }, ic('close'))),
       h('div', { class: 'lc-body' }, this.legend(L.id)));
     card.classList.remove('hidden');
@@ -745,12 +750,12 @@
     const CC = CM.Renderer.CONG_COLS;
     let note = '';
     switch (id) {
-      case 'pop': grad(['#fff0be', '#fdae61', '#e34a33', '#8c1428'], '0', '6 万人/km²'); note = '每个街区的常住人口密度（每月更新）。'; break;
+      case 'pop': grad(['#ffe296', '#f99e4c', '#de5434'], '0', '6 万人/km²'); note = '每个街区的常住人口密度（每月更新）。'; break;
       case 'jobs': li('#f0963c', '以住宅为主'); li('#9aa0b0', '职住混合'); li('#3468d6', '以就业岗位为主'); note = '颜色越深，人口与岗位越密集。'; break;
-      case 'cong': li(CC[0], '畅通', 'line'); li(CC[1], '缓行', 'line'); li(CC[2], '拥堵', 'line'); li(CC[3], '严重拥堵', 'line'); note = '快速路与主干道当前时刻的饱和度（流量 ÷ 通行能力），线越粗道路等级越高；次干道只在拥堵时显示。'; break;
-      case 'flow': opts('flow', [['all', '全部'], ['car', '汽车'], ['metro', '地铁']]); if (R.layerOpt.flow === 'all') { li('#787e8c', '主要靠汽车', 'line'); li('#2166cc', '地铁占比较高', 'line'); } note = '当前时段各区之间最主要的出行方向（最多 10 条）。线越粗出行越多，圆越大该区出行越多。'; break;
+      case 'cong': li(CC[0], '畅通', 'line'); li(CC[1], '缓行', 'line'); li(CC[2], '拥堵', 'line'); li(CC[3], '严重拥堵', 'line'); note = '各条干道当前时刻的拥堵程度（流量 ÷ 通行能力），随早晚高峰实时变化，夜间与平峰多为畅通；线越粗道路等级越高。'; break;
+      case 'flow': opts('flow', [['all', '全部'], ['car', '汽车'], ['metro', '地铁']]); if (R.layerOpt.flow === 'all') { li('#80869a', '汽车出行', 'line'); li('#2166cc', '其中乘地铁（箭头中间的蓝色部分）', 'line'); } note = '每个片区当前时段最主要的出行方向（第二方向接近时也画出）：箭头从片区指向目的地，尖端标出目的地名称；两个片区互为主要方向时画成双向箭头。线越粗出行越多，新区域开放、修建地铁后会随之变化。'; break;
       case 'cover': li('#1b7837', '步行 5 分钟内'); li('#5aae61', '步行 10 分钟内'); li('#acdc8c', '步行 15 分钟内'); li('#d73027', '人口密集但无地铁'); note = '沿实际道路计算，河流与断路会阻隔。'; break;
-      case 'station': opts('station', [['all', '合计'], ['in', '进站'], ['out', '出站'], ['xfer', '换乘']]); li('rgba(33,102,204,0.6)', '负荷正常'); li('rgba(242,153,74,0.8)', '负荷较高（> 80%）'); li('rgba(214,48,49,0.8)', '超过车站能力'); note = '圆越大客流越大，线路加粗表示断面客流。'; break;
+      case 'station': opts('station', [['all', '合计'], ['in', '进站'], ['out', '出站'], ['xfer', '换乘']]); li('rgba(31,143,191,0.8)', '高峰负荷正常（< 60%）'); li('rgba(240,160,32,0.85)', '负荷较高（60%–100%）'); li('rgba(217,58,58,0.85)', '超过车站能力'); note = (self.g() && self.g().model.stDaily && self.g().compiled.routes.length ? '' : '还没有运营线路或客流仍在计算。') + '典型工作日全天：圆越大客流越大，颜色为高峰小时负荷；线路下方的色带为区间断面客流。'; break;
     }
     box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, note));
     return box;
@@ -1023,7 +1028,6 @@
       h('div', { class: 'dd-head' }, h('img', { src: 'img/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
       item('save', '保存进度', function () { self.manualSave(); }),
       item('folder', '读取存档', function () { self.showSaveManager(true); }),
-      item('gear', '设置', function () { self.showSettings(); }),
       item('help', '操作说明', function () { self.openPage('help', null, { root: true }); }),
       h('hr'),
       item('home', '返回主菜单', function () { self.backToMenu(); }));
@@ -1064,18 +1068,86 @@
     const z = U.clamp(Math.min(this.R.w * 0.55 / (x1 - x0 + 2), this.R.h * 0.55 / (y1 - y0 + 2)), 8, 30);
     this.R.flyTo((x0 + x1) / 2, (y0 + y1) / 2, z);
   };
+  // ---------------- 在地图上定位并高亮（片区、区域、道路、地点） ----------------
+  // 地图上未被遮挡的区域（除去左侧图层栏、右侧详情面板、顶栏与底部工具栏）
+  UI.prototype.mapViewport = function () {
+    let x0 = 0, x1 = this.R.w, y0 = 0, y1 = this.R.h;
+    const box = function (id) { const el = document.getElementById(id); return el && !el.classList.contains('hidden') && el.offsetWidth > 0 ? el.getBoundingClientRect() : null; };
+    const rp = box('rightPanel'), dk = box('dock'), tp = box('hudTop'), tb = box('toolbar');
+    if (rp && rp.left > this.R.w * 0.3) x1 = rp.left - 8;
+    if (dk) x0 = dk.right + 8;
+    if (tp) y0 = tp.bottom + 8;
+    if (tb && tb.top > this.R.h * 0.5) y1 = tb.top - 8;
+    return { x0: x0, y0: y0, x1: x1, y1: y1 };
+  };
+  // 飞到一个范围并让它落在可见区域中央（略偏下，给上方的名称标签留位置）
+  UI.prototype.fitBox = function (x0, y0, x1, y1, maxZ) {
+    const R = this.R, M = R.M, vp = this.mapViewport();
+    let sx0 = 1e9, sx1 = -1e9, sy0 = 1e9, sy1 = -1e9;
+    for (const c of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]) {
+      const sx = M[0] * c[0] + M[1] * c[1], sy = M[2] * c[0] + M[3] * c[1];
+      sx0 = Math.min(sx0, sx); sx1 = Math.max(sx1, sx); sy0 = Math.min(sy0, sy); sy1 = Math.max(sy1, sy);
+    }
+    const z = U.clamp(Math.min((vp.x1 - vp.x0) * 0.7 / (sx1 - sx0 + 1), (vp.y1 - vp.y0 - 50) * 0.75 / (sy1 - sy0 + 1)), 7, maxZ || 30);
+    const dx = R.w / 2 - (vp.x0 + vp.x1) / 2, dy = R.h / 2 - ((vp.y0 + vp.y1) / 2 + 18), det = M[0] * M[3] - M[1] * M[2] || 1;
+    R.flyTo((x0 + x1) / 2 + (M[3] * dx - M[1] * dy) / det / z, (y0 + y1) / 2 + (M[0] * dy - M[2] * dx) / det / z, z);
+  };
+  UI.prototype.locateZone = function (z, label) {
+    const g = this.g(), m = g.model, Z = CFG.ZONE, zi = z % m.ZW, zj = (z / m.ZW) | 0;
+    const x0 = zi * Z, y0 = zj * Z;
+    this.R.setHighlight({ kind: 'rect', x0: x0, y0: y0, x1: x0 + Z, y1: y0 + Z, lx: x0 + Z / 2, ly: y0, label: label || g.zoneName(z) });
+    this.fitBox(x0 - 2, y0 - 2, x0 + Z + 2, y0 + Z + 2, 26);
+  };
+  UI.prototype.locatePoint = function (x, y, label, r, pad) {
+    r = r || 1.2; pad = pad || 2;
+    this.R.setHighlight({ kind: 'circle', x: x, y: y, r: r, lx: x, ly: y - r, label: label });
+    this.fitBox(x - r - pad, y - r - pad, x + r + pad, y + r + pad, 26);
+  };
+  UI.prototype.locateRegion = function (k) {
+    const g = this.g(), rg = g.city.regions[k]; if (!rg || !rg.bbox) return;
+    const b = rg.bbox;
+    this.R.setHighlight({ kind: 'region', region: k, lx: rg.cx, ly: rg.cy, label: rg.name.replace(/（.*）/, '') });
+    this.fitBox(b[0], b[1], b[2], b[3], 22);
+  };
+  UI.prototype.locateRoad = function (name) {
+    const city = this.g().city, ways = [];
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    city.roadGroups.forEach(function (gr) { if (gr.name !== name) return; for (const p of gr.ways) ways.push(p); x0 = Math.min(x0, gr.bbox[0]); y0 = Math.min(y0, gr.bbox[1]); x1 = Math.max(x1, gr.bbox[2]); y1 = Math.max(y1, gr.bbox[3]); });
+    if (!ways.length) return;
+    const p = ways[0], m = (p.length / 4 | 0) * 2;
+    this.R.setHighlight({ kind: 'road', ways: ways, lx: p[m], ly: p[m + 1], label: name });
+    this.fitBox(x0, y0, x1, y1, 24);
+  };
   UI.prototype.openSearch = function () {
     const g = this.g(); if (!g) return;
     if (this.searchEl) { this.closeSearch(); return; }
     if (this.dropdown) { this.dropdown.remove(); this.dropdown = null; }
-    const self = this, favs = g.favs;
+    const self = this, favs = g.favs, city = g.city, D = CM.DATA;
     favs.names = favs.names || {};
-    const input = h('input', { type: 'search', placeholder: '搜索车站或线路名称', 'aria-label': '搜索车站或线路', autocomplete: 'off' });
+    const input = h('input', { type: 'search', placeholder: '搜索车站、线路、道路、区域或地名', 'aria-label': '搜索车站、线路、道路、区域或地名', autocomplete: 'off' });
     const list = h('div', { class: 'srch-list', role: 'listbox' });
     const pop = h('div', { class: 'search-pop' }, h('div', { class: 'srch-in' }, ic('search'), input, h('kbd', null, 'Esc')), list);
     const r = this.hbtns.search.getBoundingClientRect();
     pop.style.top = (r.bottom + 8) + 'px'; pop.style.right = Math.max(8, window.innerWidth - r.right - 40) + 'px';
     let items = [], cur = 0;
+    // 地理条目（区域、城区、地标、道路、地名）：打开时生成一次
+    const RANK = { lines: 0, stations: 1, region: 2, district: 2, landmark: 3, road: 4, place: 5 };
+    const geo = [];
+    city.regions.forEach(function (rg, k) {
+      if (!rg.name || !rg.cells || !rg.bbox) return;
+      geo.push({ kind: 'region', id: k, name: rg.name, sub: '区域 · ' + (rg.scenic ? '风景区' : city.regionOpen[k] ? '已开放' : '尚未开放（参考 ' + rg.open + ' 年）'), icon: 'map' });
+    });
+    for (const d of city.districtLabels || []) geo.push({ kind: 'district', name: d[0], sub: '城区', x: d[1], y: d[2], icon: 'map' });
+    D.landmarks.forEach(function (lm, k) { geo.push({ kind: 'landmark', name: lm.name, sub: '地标' + (city.landmarkOn[k] ? '' : ' · 尚未建成（' + lm.year + ' 年）'), x: lm.x, y: lm.y, icon: 'building' }); });
+    const roads = new Map(), CLS = ['', '支路', '次干道', '主干道', '快速路'];
+    city.roadGroups.forEach(function (gr, k) {
+      if (!gr.name || !city.roadsBuilt[k]) return;
+      const e = roads.get(gr.name);
+      if (!e) roads.set(gr.name, { kind: 'road', name: gr.name, cls: gr.cls, icon: 'car' }); else e.cls = Math.max(e.cls, gr.cls);
+    });
+    roads.forEach(function (e) { e.sub = '道路 · ' + (CLS[e.cls] || '道路'); geo.push(e); });
+    const seen = new Set();
+    for (const p of D.places) if (!seen.has(p[0])) { seen.add(p[0]); geo.push({ kind: 'place', name: p[0], sub: '地名', x: p[1], y: p[2], icon: 'locate' }); }
     const entries = function () {
       const net = g.draft ? g.draft.net : g.net, out = [];
       for (const id in net.stations) {
@@ -1094,13 +1166,18 @@
       if (it.gone) return;
       self.closeSearch();
       if (it.st) { self.select({ kind: 'station', id: it.id }); self.flyTo(it.x, it.y, Math.max(self.R.cam.zoom, 24)); }
-      else { self.openPage('line', it.id, { replaceTop: self.topIs(['station', 'line', 'road', 'zone']) }); self.flyToStations(it.stations); }
+      else if (it.line) { self.openPage('line', it.id, { replaceTop: self.topIs(['station', 'line', 'road', 'zone']) }); self.flyToStations(it.stations); }
+      else if (it.kind === 'region') self.locateRegion(it.id);
+      else if (it.kind === 'road') self.locateRoad(it.name);
+      else if (it.kind === 'district') self.locatePoint(it.x, it.y, it.name, 4, 4);
+      else self.locatePoint(it.x, it.y, it.name, it.kind === 'landmark' ? 0.8 : 1.2);
     };
+    const canFav = function (it) { return it.kind === 'stations' || it.kind === 'lines'; };
     const row = function (it, k) {
-      const star = h('button', { class: 'iconbtn fav' + (self.isFav(it.kind, it.id) ? ' on' : ''), 'data-tip': self.isFav(it.kind, it.id) ? '取消收藏' : '收藏', onclick: function (e) { e.stopPropagation(); self.toggleFav(it.kind, it.id); render(); input.focus(); } }, ic(self.isFav(it.kind, it.id) ? 'starOn' : 'star'));
+      const star = canFav(it) ? h('button', { class: 'iconbtn fav' + (self.isFav(it.kind, it.id) ? ' on' : ''), 'data-tip': self.isFav(it.kind, it.id) ? '取消收藏' : '收藏', onclick: function (e) { e.stopPropagation(); self.toggleFav(it.kind, it.id); render(); input.focus(); } }, ic(self.isFav(it.kind, it.id) ? 'starOn' : 'star')) : null;
+      const mark0 = it.line ? h('span', { class: 'swatch', style: { background: it.color } }) : it.st ? h('span', { class: 'st-dot', style: { borderColor: it.color || 'var(--muted)' } }) : h('span', { class: 'srch-ic' }, ic(it.icon));
       return h('div', { class: 'srch-item' + (k === cur ? ' on' : '') + (it.gone ? ' gone' : ''), role: 'option', onclick: function () { open(it); }, onmouseenter: function () { cur = k; mark(); } },
-        it.line ? h('span', { class: 'swatch', style: { background: it.color } }) : h('span', { class: 'st-dot', style: { borderColor: it.color || 'var(--muted)' } }),
-        h('div', { class: 'grow' }, h('div', { class: 'srch-name' }, it.name), h('div', { class: 'tiny muted' }, it.sub)), star);
+        mark0, h('div', { class: 'grow' }, h('div', { class: 'srch-name' }, it.name), h('div', { class: 'tiny muted' }, it.sub)), star);
     };
     const mark = function () { Array.prototype.forEach.call(list.querySelectorAll('.srch-item'), function (el, k) { el.classList.toggle('on', k === cur); }); };
     const render = function () {
@@ -1113,15 +1190,16 @@
           fav.push(e || { kind: kind, id: id, name: favs.names[id] || (kind === 'lines' ? '线路' : '车站'), sub: '已拆除，无法定位', gone: true });
         }
         if (fav.length) { list.appendChild(h('div', { class: 'srch-h' }, '收藏')); fav.forEach(function (it) { items.push(it); list.appendChild(row(it, items.length - 1)); }); }
-        else list.appendChild(h('div', { class: 'note', style: { padding: '8px 10px' } }, '输入车站或线路名称搜索。在车站或线路详情中点击 ☆ 可收藏常看的对象，收藏会显示在这里。'));
+        else list.appendChild(h('div', { class: 'note', style: { padding: '8px 10px' } }, '输入名称搜索车站、线路、道路、区域、地标或地名，选中后在地图上定位并高亮。在车站或线路详情中点击 ☆ 可收藏，收藏会显示在这里。'));
         const lines = all.filter(function (x) { return x.line && !self.isFav('lines', x.id); });
         if (lines.length) { list.appendChild(h('div', { class: 'srch-h' }, '全部线路')); lines.forEach(function (it) { items.push(it); list.appendChild(row(it, items.length - 1)); }); }
         return;
       }
-      const hits = all.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0; });
-      hits.sort(function (a, b) { const fa = self.isFav(a.kind, a.id) ? 0 : 1, fb = self.isFav(b.kind, b.id) ? 0 : 1; if (fa !== fb) return fa - fb; const pa = a.name.toLowerCase().indexOf(q) === 0 ? 0 : 1, pb = b.name.toLowerCase().indexOf(q) === 0 ? 0 : 1; if (pa !== pb) return pa - pb; if (a.line !== b.line) return a.line ? -1 : 1; return a.name.length - b.name.length; });
-      if (!hits.length) { list.appendChild(h('div', { class: 'note', style: { padding: '8px 10px' } }, '没有名称包含「' + input.value.trim() + '」的车站或线路。')); return; }
-      hits.slice(0, 40).forEach(function (it) { items.push(it); list.appendChild(row(it, items.length - 1)); });
+      const hits = all.concat(geo).filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0; });
+      const score = function (x) { const n = x.name.toLowerCase(); return (canFav(x) && self.isFav(x.kind, x.id) ? 0 : 1000) + (n === q ? 0 : n.indexOf(q) === 0 ? 100 : 200) + RANK[x.kind] * 10; };
+      hits.sort(function (a, b) { return score(a) - score(b) || a.name.length - b.name.length; });
+      if (!hits.length) { list.appendChild(h('div', { class: 'note', style: { padding: '8px 10px' } }, '没有名称包含「' + input.value.trim() + '」的车站、线路、道路、区域或地名。')); return; }
+      hits.slice(0, 50).forEach(function (it) { items.push(it); list.appendChild(row(it, items.length - 1)); });
     };
     input.addEventListener('input', render);
     input.addEventListener('keydown', function (e) {
@@ -1180,13 +1258,12 @@
     const wrap = h('div', { class: 'start-wrap' },
       title, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
-        btn('play', '开始游戏', function () { self.showNewGame(); }, { primary: true }),
-        btn('clock', '继续游戏', function () { if (latest) self.loadSlot(latest.slotId); }, { disabled: !latest, sub: latest ? latest.date[0] + '年' + latest.date[1] + '月' : '暂无存档' }),
-        btn('folder', '读取存档', function () { self.showSaveManager(false); }),
+        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),
+        btn('clock', '继续游戏', function () { if (latest) self.loadSlot(latest.slotId); }, { disabled: !latest, sub: latest ? ((CM.MAPS[latest.map || 'gz'] || {}).name || '') + ' · ' + latest.date[0] + '年' + latest.date[1] + '月' : '暂无存档' }),
         btn('gear', '设置', function () { self.showSettings(); }),
         btn('power', '退出', function () { self.quitGame(); })),
       !storageOk ? h('div', { class: 'callout bad', style: { marginTop: '14px' } }, ic('error'), h('div', { class: 'ct' }, '当前浏览器禁止本地存储，进度将无法自动保存。')) : null,
-      h('div', { class: 'start-foot' }, '从 1990 年的广州开始，规划地铁、改变出行、塑造城市。', h('br'),
+      h('div', { class: 'start-foot' }, '规划地铁、改变出行、塑造城市。新玩家可先玩「新手教程 · 青湾」。', h('br'),
         h('a', { href: 'LICENSE.txt', target: '_blank', rel: 'noopener' }, '© 2026 VinsonFung · 仅限非商业使用'), h('br'),
         h('a', { href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, '地图 © OpenStreetMap 贡献者 · ODbL'), ' · v' + CFG.GAME_VERSION));
     this.startTheme = h('button', { class: 'start-theme', onclick: function () { self.toggleTheme(); } });
@@ -1248,48 +1325,91 @@
         h('button', { class: 'btn primary sm', onclick: back }, '完成')));
     this.openScreen(card, back);
   };
-  // 开始游戏：选择模式即开始（进度名称自动生成，可在存档中重命名）
-  UI.prototype.showNewGame = function () {
-    const self = this;
-    const go = function (mode) { snd('build'); CM.newGame({ mode: mode, name: (mode === 'free' ? '自由建造' : '经营挑战') + ' · 广州 1990' }); };
-    const mk = function (id, icon, badge, title, desc, points, primary) {
-      return h('button', { class: 'mode-card' + (primary ? ' on' : ''), onclick: function () { go(id); } },
-        h('div', { class: 'mc-top' }, h('span', { class: 'badge ' + badge }, ic(icon)), h('h4', null, title), primary ? h('span', { class: 'tag info' }, '推荐') : null),
-        h('div', { class: 'mc-desc' }, desc),
-        h('ul', null, points.map(function (t) { return h('li', null, t); })),
-        h('div', { class: 'mc-go' }, '开始', ic('chev', 14)));
+  // 开始游戏 → 选择地图：每张地图可开始新游戏（选择模式）、继续该地图最近的进度，或读取该地图的存档
+  UI.prototype.showNewGame = function () { this.showMapSelect(); };
+  UI.prototype.showMapSelect = function (selId) {
+    const self = this, order = CM.MAP_ORDER;
+    let sel = selId && CM.MAPS[selId] ? selId : (this._mapSel && CM.MAPS[this._mapSel] ? this._mapSel : order[0]);
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    const grid = h('div', { class: 'map-grid', role: 'listbox', 'aria-label': '地图' });
+    const detail = h('div', { class: 'map-detail' });
+    const fmtDate = function (sl) { return sl.date[0] + '年' + sl.date[1] + '月'; };
+    const cards = {};
+    const drawDetail = function () {
+      const mp = CM.MAPS[sel], games = CM.Save.list(sel), latest = CM.Save.latest(sel);
+      self._mapSel = sel;
+      for (const id in cards) { cards[id].classList.toggle('on', id === sel); cards[id].setAttribute('aria-selected', id === sel ? 'true' : 'false'); }
+      detail.innerHTML = '';
+      const start = function (mode) {
+        snd('build');
+        if (mp.tutorial) CM.newGame({ map: sel, mode: 'free', tutorial: true, name: '新手教程 · ' + mp.data.city });
+        else CM.newGame({ map: sel, mode: mode, name: (mode === 'free' ? '自由建造' : '经营挑战') + ' · ' + mp.data.city + ' ' + mp.cfg.START.y });
+      };
+      const modeBtn = function (mode, icon, badge, title, desc, primary) {
+        return h('button', { class: 'map-mode' + (primary ? ' primary' : ''), onclick: function () { start(mode); } },
+          h('span', { class: 'badge ' + badge }, ic(icon)), h('span', { class: 'grow' }, h('b', null, title), h('small', null, desc)), ic('chev', 16));
+      };
+      const news = h('div', { class: 'map-actions' });
+      if (mp.tutorial) news.appendChild(modeBtn('free', 'play', 'b-teal', '开始教程', '从头开始 12 个引导任务（不限资金）', true));
+      else {
+        news.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '新游戏 · 经营挑战', '初始资金 ' + U.fmtMoney(CFG.economy.startFunds) + '，历史与动态任务，亏损或满意度过低会失败', true));
+        news.appendChild(modeBtn('free', 'sparkle', 'b-teal', '新游戏 · 自由建造', '资金不限，任务仅供参考，专注规划与观察', false));
+      }
+      const cont = h('button', { class: 'map-mode', disabled: latest ? null : true, onclick: function () { if (latest) self.loadSlot(latest.slotId); } },
+        h('span', { class: 'badge b-blue' }, ic('clock')), h('span', { class: 'grow' }, h('b', null, mp.tutorial ? '继续教程' : '继续游戏'), h('small', null, latest ? latest.name + ' · ' + fmtDate(latest) : '该地图还没有存档')), ic('chev', 16));
+      // 读取存档只在这里（每张地图各自的存档）；没有存档时也可进入，导入存档文件
+      const load = h('button', { class: 'map-mode', onclick: function () { self.showSaveManager(false, sel); } },
+        h('span', { class: 'badge b-slate' }, ic('folder')), h('span', { class: 'grow' }, h('b', null, '读取存档'), h('small', null, games.length ? games.length + ' 个进度，共 ' + games.reduce(function (n, g) { return n + g.slots.length; }, 0) + ' 个存档 · 可导入存档文件' : '暂无存档 · 可导入存档文件')), ic('chev', 16));
+      news.append(cont, load);
+      detail.append(
+        h('div', { class: 'map-dh' }, h('h3', null, mp.title || mp.name), mp.tutorial ? h('span', { class: 'tag info' }, '新手推荐') : h('span', { class: 'tag hist' }, '真实地理')),
+        h('div', { class: 'map-desc' }, mp.desc),
+        h('div', { class: 'map-facts' }, mp.facts.map(function (f) { return h('div', null, h('span', { class: 'muted' }, f[0]), h('b', null, f[1])); })),
+        news);
     };
-    const card = h('div', { class: 'card wide newgame' },
-      h('div', { class: 'card-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回', onclick: function () { self.showStart(); } }, ic('back')), h('h2', null, '选择游戏模式')),
-      h('div', { class: 'mode-cards' },
-        mk('challenge', 'trophy', 'b-gold', '经营挑战', '在预算内规划地铁，靠政府拨款与票款维持运营。', ['初始资金 ' + U.fmtMoney(CFG.economy.startFunds), '历史参考任务与动态任务', '长期亏损或满意度过低会失败'], true),
-        mk('free', 'sparkle', 'b-teal', '自由建造', '不限资金，专注线路规划与观察城市变化。', ['资金不限', '任务仅供参考', '随时可调整整个网络'])),
-      h('div', { class: 'note', style: { marginTop: '14px' } }, '1990 年的广州尚无地铁，城市集中在越秀、荔湾、东山与海珠北部。进入游戏时默认暂停，可先规划线路。'));
-    this.openScreen(card, function () { self.showStart(); });
-  };  UI.prototype.showSaveManager = function (inGame) {
+    for (const id of order) {
+      const mp = CM.MAPS[id], n = CM.Save.list(id).length;
+      const img = h('img', { alt: '', src: CM.mapThumb(id, theme) || '' });
+      const card = h('button', { class: 'map-card', role: 'option', onclick: function () { if (sel !== id) { sel = id; snd('soft'); drawDetail(); } }, ondblclick: function () { sel = id; drawDetail(); } },
+        h('div', { class: 'map-thumb' }, img, mp.tutorial ? h('span', { class: 'map-badge' }, ic('help', 14), '教程') : null),
+        h('div', { class: 'map-meta' }, h('b', null, mp.title || mp.name), h('small', null, mp.sub), h('small', { class: 'faint' }, n ? n + ' 个进度' : '尚无存档')));
+      cards[id] = card;
+      grid.appendChild(card);
+    }
+    drawDetail();
+    const back = function () { self.showStart(); };
+    const card = h('div', { class: 'card wide mapsel' },
+      h('div', { class: 'card-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图')),
+      grid, detail,
+      h('div', { class: 'note', style: { marginTop: '12px' } }, '每张地图的进度与存档各自独立。进入游戏时默认暂停，可先规划线路。'));
+    this.openScreen(card, back);
+  };
+  // mapId：只显示该地图的进度（从地图选择页进入时）
+  UI.prototype.showSaveManager = function (inGame, mapId) {
     const self = this;
     const fileIn = h('input', { type: 'file', accept: '.json,.cmsave,application/json', style: { display: 'none' }, onchange: function (e) { const f = e.target.files[0]; if (f) self.importFile(f, true); e.target.value = ''; } });
     const list = h('div');
     const draw = function () {
       list.innerHTML = '';
-      const games = CM.Save.list();
-      if (!games.length) list.appendChild(h('div', { class: 'note' }, '暂无存档。'));
+      const games = CM.Save.list(mapId);
+      if (!games.length) list.appendChild(h('div', { class: 'note' }, mapId ? '该地图暂无存档。' : '暂无存档。'));
       for (const gm of games) {
         const grp = h('div', { class: 'game-group' });
-        grp.appendChild(h('div', { class: 'h' }, ic(gm.mode === 'free' ? 'sparkle' : 'trophy'), gm.name, h('span', { class: 'tag' }, gm.mode === 'free' ? '自由建造' : '经营挑战'), h('span', { class: 'grow' }),
+        grp.appendChild(h('div', { class: 'h' }, ic(gm.mode === 'free' ? 'sparkle' : 'trophy'), gm.name, h('span', { class: 'tag' }, gm.mode === 'free' ? '自由建造' : '经营挑战'), mapId ? null : h('span', { class: 'tag info' }, (CM.MAPS[gm.map || 'gz'] || { name: gm.map }).name), h('span', { class: 'grow' }),
           h('button', { class: 'btn sm ghost', onclick: function () { const n = prompt('新的进度名称', gm.name); if (n && n.trim()) { CM.Save.rename(gm.gameId, n.trim()); if (self.g() && self.g().id === gm.gameId) self.g().name = n.trim(); draw(); } } }, ic('pencil'), '重命名'),
-          h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { CM.Save.removeGame(gm.gameId); self.showSaveManager(inGame); }, true, 'trash'); } }, ic('trash'), '删除进度')));
+          h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { CM.Save.removeGame(gm.gameId); self.showSaveManager(inGame, mapId); }, true, 'trash'); } }, ic('trash'), '删除进度')));
         for (const sl of gm.slots) grp.appendChild(self.slotRow(sl, inGame));
         list.appendChild(grp);
       }
     };
     draw();
     this.screenRefresh = draw;
-    const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档'),
+    const back = function () { if (inGame) self.closeScreen(); else if (mapId) self.showMapSelect(mapId); else self.showStart(); };
+    const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档' + (mapId && CM.MAPS[mapId] ? ' · ' + CM.MAPS[mapId].name : '')),
       h('div', { class: 'note' }, '每个进度相互独立；自动存档在两个位置轮换写入，手动存档最多 ' + CFG.saves.maxManual + ' 个。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
       list, fileIn,
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { fileIn.click(); } }, ic('import'), '导入存档文件'), h('button', { class: 'btn primary', onclick: function () { if (inGame) self.closeScreen(); else self.showStart(); } }, inGame ? '关闭' : '返回')));
-    this.openScreen(card, function () { if (inGame) self.closeScreen(); else self.showStart(); });
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { fileIn.click(); } }, ic('import'), '导入存档文件'), h('button', { class: 'btn primary', onclick: back }, inGame ? '关闭' : '返回')));
+    this.openScreen(card, back);
   };
   UI.prototype.importFile = function (file, keepScreen) {
     const self = this;
@@ -1297,7 +1417,7 @@
     const rd = new FileReader();
     rd.onload = function () {
       CM.Save.importText(String(rd.result)).then(function (r) {
-        self.toast('已导入存档「' + r.name + '」', 'good');
+        self.toast('已导入存档「' + r.name + '」（地图：' + ((CM.MAPS[r.map] || {}).name || r.map) + '）', 'good');
         if (keepScreen && self.screenRefresh) self.screenRefresh();
         else self.confirm('导入成功', '存档「' + r.name + '」已加入存档列表。是否立即载入？', '载入', function () { self.loadSlot(r.slotId); }, false, 'import');
       }).catch(function (e) {
@@ -1317,10 +1437,11 @@
     });
   };
   // 返回主菜单：先确认最新状态已成功保存；保存失败时保留当前游戏
-  UI.prototype.backToMenu = function () {
+  // after：返回后要打开的界面（默认主菜单）
+  UI.prototype.backToMenu = function (after) {
     const self = this;
     const g = this.g();
-    const go = function () { CM.endGame(); self.showStart(); };
+    const go = function () { CM.endGame(); if (typeof after === 'function') after(); else self.showStart(); };
     if (!g) { go(); return; }
     const leave = function () {
       if (g.speed > 0) self.setSpeed(0);   // 先暂停，保证保存的就是离开时的状态

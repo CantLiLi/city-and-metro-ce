@@ -231,7 +231,7 @@
     }
     // 动态任务（开局一年后开始）
     if (!this.nextDyn) this.nextDyn = ym + 12;
-    if (ym >= this.nextDyn &&this.active.filter(function (t) { return t.kind === 'dyn'; }).length < 2 && g.compiled.stations.length >= 0) {
+    if (!D.noDynTasks && ym >= this.nextDyn && this.active.filter(function (t) { return t.kind === 'dyn'; }).length < 2 && g.compiled.stations.length >= 0) {
       const t = this.generate(g);
       if (t) { this.active.push(t); out.push({ type: 'issued', task: t }); }
       this.nextDyn = ym + 6;

@@ -256,10 +256,10 @@
         if (!id) continue;
         const f = id > 30000 ? Geo.waterLines[id - 30001] : Geo.water[id - 1];
         if (f && f.name) return f.name;
-        if (f) return '珠江';
+        if (f) return D.riverName || '珠江';
       }
     }
-    return '珠江';
+    return D.riverName || '珠江';
   };
 
   // 地标场地：旋转矩形（米）内的格

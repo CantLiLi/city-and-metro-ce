@@ -33,9 +33,21 @@
     return f;
   }
 
+  // 编码：与 dec 相反（坐标 ×64 取整后差分，zigzag，每 5 位一个字符）；虚构地图（新手教程）用它把坐标写成同样的格式
+  Geo.enc = function (pts) {
+    let s = '', px = 0, py = 0;
+    const put = function (v) { let u = v < 0 ? ~(v << 1) : (v << 1); while (u >= 32) { s += String.fromCharCode((32 | (u & 31)) + 63); u >>>= 5; } s += String.fromCharCode(u + 63); };
+    for (let k = 0; k + 1 < pts.length; k += 2) { const x = Math.round(pts[k] * 64), y = Math.round(pts[k + 1] * 64); put(x - px); put(y - py); px = x; py = y; }
+    return s;
+  };
+  // 解码结果按数据源缓存：切换地图时不必重新解码
+  const cache = new Map();
+  const KEYS = ['names', 'water', 'waterLines', 'roads', 'streets', 'rail', 'parks', 'reserves', 'woods', 'admin', 'places', 'streetBk'];
   Geo.init = function () {
-    if (Geo.ready) return Geo;
+    if (Geo.ready && Geo.src === CM.GEO) return Geo;
     const G = CM.GEO, names = G.names;
+    const hit = cache.get(G);
+    if (hit) { for (const k of KEYS) Geo[k] = hit[k]; Geo.src = G; Geo.ready = true; return Geo; }
     Geo.names = names;
     Geo.water = []; Geo.waterLines = [];
     for (const row of G.water) {
@@ -51,7 +63,9 @@
     Geo.admin = (G.admin || []).map(function (r) { const f = polyFeat(r.slice(1), names); f.level = r[0]; return f; });
     Geo.places = G.places || [];
     Geo.streetBk = Geo.buckets(Geo.streets, 4, CM.CFG.W, CM.CFG.H);
-    Geo.ready = true;
+    const saved = {}; for (const k of KEYS) saved[k] = Geo[k];
+    cache.set(G, saved);
+    Geo.src = G; Geo.ready = true;
     return Geo;
   };
 

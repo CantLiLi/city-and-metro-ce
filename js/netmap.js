@@ -85,6 +85,22 @@
     else if (type === 'surface') s += '<path d="' + d + '" class="nm-surf"/>';      // 地面：白色枕木纹
     return s + '</g>';
   }
+  // 车站标志与地图一致：普通站为白底圆、线路色描边；换乘站（站内换乘或站外步行换乘）为更大的白底圆 +
+  // 深色外环 + 按各线路颜色分段的内环 + ⇄ 换乘箭头（上箭头向右、下箭头向左）
+  function stationMark(s, x, y, lines, net, inter, tip) {
+    const attrs = 'data-st="' + s.id + '" data-lines="' + lines.join(' ') + '"', f = function (v) { return v.toFixed(1); };
+    if (!inter) return '<circle ' + attrs + ' cx="' + f(x) + '" cy="' + f(y) + '" r="5.5" class="nm-st" stroke="' + net.lines[lines[0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
+    const r = 11, ow = 3.3, rr = r - ow / 2 - 1.5, n = lines.length, gap = n > 1 ? 0.22 : 0;
+    let out = '<g ' + attrs + ' class="nm-x"><title>' + U.esc(tip) + '</title><circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
+    if (n === 1) out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + f(rr) + '" class="nm-xa" stroke="' + net.lines[lines[0]].color + '"/>';
+    else for (let k = 0; k < n; k++) {
+      const a0 = -Math.PI / 2 + k * Math.PI * 2 / n + gap / 2, a1 = -Math.PI / 2 + (k + 1) * Math.PI * 2 / n - gap / 2;
+      out += '<path class="nm-xa" stroke="' + net.lines[lines[k]].color + '" d="M' + f(x + rr * Math.cos(a0)) + ' ' + f(y + rr * Math.sin(a0)) + 'A' + f(rr) + ' ' + f(rr) + ' 0 ' + (a1 - a0 > Math.PI ? 1 : 0) + ' 1 ' + f(x + rr * Math.cos(a1)) + ' ' + f(y + rr * Math.sin(a1)) + '"/>';
+    }
+    const gs = r * 0.36, a = gs * 0.42, hd = gs * 0.5;
+    out += '<path class="nm-xg" d="M' + f(x - gs) + ' ' + f(y - a) + 'L' + f(x + gs) + ' ' + f(y - a) + 'L' + f(x + gs - hd) + ' ' + f(y - a - hd) + 'M' + f(x + gs) + ' ' + f(y + a) + 'L' + f(x - gs) + ' ' + f(y + a) + 'L' + f(x - gs + hd) + ' ' + f(y + a + hd) + '"/>';
+    return out + '</g>';
+  }
   function build(g) {
     const net = useDraft && g.draft ? g.draft.net : g.net;
     const xfers = walkTransfers(g, net);
@@ -164,9 +180,7 @@
       const tx = best.anchor === 'start' ? best.b[0] : (best.anchor === 'end' ? best.b[2] : (best.b[0] + best.b[2]) / 2);
       lab += '<text data-st="' + s.id + '" x="' + tx.toFixed(1) + '" y="' + (best.b[1] + 12).toFixed(1) + '" text-anchor="' + best.anchor + '" class="nm-label' + (xfer || walk ? ' x' : '') + '" data-lines="' + linesOf[i].join(' ') + '">' + U.esc(s.name) + '</text>';
       const tip = s.name + (xfer ? '（站内换乘：' + linesOf[i].map(function (l) { return net.lines[l].name; }).join('、') + '）' : '') + (walk ? '（可步行换乘）' : '') + ' · ' + TYPE_NAME[s.type] + '站 · 点击在地图上定位';
-      if (xfer) dots += '<circle data-st="' + s.id + '" data-lines="' + linesOf[i].join(' ') + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="9" class="nm-st x"><title>' + U.esc(tip) + '</title></circle>';
-      else if (walk) dots += '<circle data-st="' + s.id + '" data-lines="' + linesOf[i].join(' ') + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="7.5" class="nm-st w"><title>' + U.esc(tip) + '</title></circle>';
-      else dots += '<circle data-st="' + s.id + '" data-lines="' + linesOf[i].join(' ') + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="5.5" class="nm-st" stroke="' + net.lines[linesOf[i][0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
+      dots += stationMark(s, x, y, linesOf[i], net, xfer || walk, tip);
     }
     svg += '<g class="nm-dots">' + dots + '</g><g class="nm-labels">' + lab + '</g></svg>';
     const wrap = h('div', { class: 'nm-canvas', html: svg });
@@ -186,20 +200,39 @@
     const svg = root && root.querySelector('.nm-svg'); if (!svg || !view) return;
     svg.setAttribute('viewBox', view.x.toFixed(1) + ' ' + view.y.toFixed(1) + ' ' + view.w.toFixed(1) + ' ' + view.h.toFixed(1));
   }
+  // 平滑缩放：滚轮与按钮只改变目标视野，逐帧缓动过去（与地图的缩放手感一致），光标下的位置保持不动
+  let tgt = null, raf = 0, lastT = 0;
+  function tween(t) {
+    raf = 0; if (!tgt || !view) { tgt = null; return; }
+    const dt = Math.min(0.05, Math.max(0.001, ((t || performance.now()) - (lastT || t || 0)) / 1000)); lastT = t;
+    const k = 1 - Math.exp(-dt * 14);
+    view.x += (tgt.x - view.x) * k; view.y += (tgt.y - view.y) * k; view.w += (tgt.w - view.w) * k; view.h += (tgt.h - view.h) * k;
+    const eps = view.w * 0.0015;
+    if (Math.abs(tgt.w - view.w) < eps && Math.abs(tgt.x - view.x) < eps && Math.abs(tgt.y - view.y) < eps) { Object.assign(view, tgt); tgt = null; }
+    setView();
+    if (tgt) raf = requestAnimationFrame(tween); else lastT = 0;
+  }
+  function animateTo(v) { tgt = v; if (!raf) { lastT = performance.now(); raf = requestAnimationFrame(tween); } }
+  function zoomAt(f, clientX, clientY) {
+    const svg = root && root.querySelector('.nm-svg'); if (!svg || !view) return;
+    const r = svg.getBoundingClientRect(), base = tgt || view;
+    if (clientX == null) { clientX = r.left + r.width / 2; clientY = r.top + r.height / 2; }
+    const s = Math.max(base.w / r.width, base.h / r.height);
+    const ox = (r.width - base.w / s) / 2, oy = (r.height - base.h / s) / 2;
+    const mx = base.x + (clientX - r.left - ox) * s, my = base.y + (clientY - r.top - oy) * s;
+    const nw = U.clamp(base.w * f, view.W * 0.08, view.W * 2), k = nw / base.w;
+    animateTo({ x: mx - (mx - base.x) * k, y: my - (my - base.y) * k, w: nw, h: base.h * k });
+  }
+  function fitView() { if (view) animateTo({ x: 0, y: 0, w: view.W, h: view.H }); }
   function bindPanZoom(canvas) {
     const svg = canvas.querySelector('.nm-svg'); if (!svg) return;
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
-      const r = svg.getBoundingClientRect(), f = Math.exp(e.deltaY * 0.0015);
-      const s = Math.max(view.w / r.width, view.h / r.height);
-      const ox = (r.width - view.w / s) / 2, oy = (r.height - view.h / s) / 2;
-      const mx = view.x + (e.clientX - r.left - ox) * s, my = view.y + (e.clientY - r.top - oy) * s;
-      const nw = U.clamp(view.w * f, view.W * 0.12, view.W * 2), k = nw / view.w;
-      view.x = mx - (mx - view.x) * k; view.y = my - (my - view.y) * k; view.w = nw; view.h *= k;
-      setView();
+      const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      zoomAt(Math.exp(U.clamp(d, -240, 240) * 0.0022), e.clientX, e.clientY);
     }, { passive: false });
     let drag = null;
-    canvas.addEventListener('pointerdown', function (e) { drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointerdown', function (e) { if (tgt) { tgt = null; } drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; canvas.setPointerCapture(e.pointerId); });
     canvas.addEventListener('pointermove', function (e) {
       if (!drag) return;
       const r = svg.getBoundingClientRect(), s = Math.max(view.w / r.width, view.h / r.height);
@@ -210,8 +243,8 @@
       const d = drag; drag = null; canvas.classList.remove('grabbing');
       if (!d || d.moved) return;
       const t = document.elementFromPoint(e.clientX, e.clientY);
-      const sid = t && t.getAttribute && t.getAttribute('data-st');
-      if (sid) locate(sid);
+      const el = t && t.closest ? t.closest('[data-st]') : null;
+      if (el) locate(el.getAttribute('data-st'));
     });
   }
   function locate(sid) {
@@ -228,8 +261,75 @@
     return h('div', { class: 'nm-legend' },
       h('span', { html: sw('underground') }), '地下', h('span', { html: sw('elevated') }), '高架', h('span', { html: sw('surface') }), '地面',
       h('span', { class: 'nm-lg-gap' }),
-      h('span', { html: '<svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" class="nm-st x"/></svg>' }), '站内换乘',
-      h('span', { html: '<svg width="40" height="20" viewBox="0 0 40 20"><path d="M8 10H32" class="nm-walk-p"/><circle cx="8" cy="10" r="5.5" class="nm-st w"/><circle cx="32" cy="10" r="5.5" class="nm-st w"/></svg>' }), '站外步行换乘');
+      h('span', { html: '<svg width="26" height="26" viewBox="-13 -13 26 26">' + LG_X + '</svg>' }), '换乘站',
+      h('span', { html: '<svg width="58" height="26" viewBox="-13 -13 58 26"><path d="M0 0H32" class="nm-walk-p"/>' + LG_X + '<g transform="translate(32 0)">' + LG_X + '</g></svg>' }), '站外步行换乘');
+  }
+  // 图例里的换乘站标志（两条线路）
+  const LG_X = stationMark({ id: '' }, 0, 0, ['a', 'b'], { lines: { a: { color: '#f3d03e' }, b: { color: '#00629b' } } }, true, '换乘站').replace(/ data-st="[^"]*" data-lines="[^"]*"/, '');
+
+  // ---------------- 导出 PNG：完整网络（不受当前缩放与聚焦影响）+ 标题、日期与线路图例 ----------------
+  function exportCSS(font) {
+    return 'text{font-family:' + font + '}.nm-elev{fill:none;stroke:#fff;stroke-width:2.2}.nm-surf{fill:none;stroke:rgba(255,255,255,.95);stroke-width:3;stroke-dasharray:2 5;stroke-linecap:butt}' +
+      '.nm-walk path{fill:none;stroke:#25334a;stroke-width:3;stroke-dasharray:2 4;stroke-linecap:round;opacity:.8}.nm-st{fill:#fff;stroke-width:3.2}' +
+      '.nm-xo{fill:#fff;stroke:#25334a;stroke-width:3.3}.nm-xa{fill:none;stroke-width:2.3}.nm-xg{fill:none;stroke:#25334a;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}' +
+      '.nm-label{font-size:12.5px;fill:#1f2a3a;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.nm-label.x{font-weight:700}.nm-badge-t{font-size:12px;font-weight:800;fill:#fff}';
+  }
+  function exportPNG() {
+    const g = game(), svg = root && root.querySelector('.nm-svg');
+    if (!g || !svg || !view) return;
+    const net = useDraft && g.draft ? g.draft.net : g.net, D = CM.DATA;
+    const font = getComputedStyle(document.body).fontFamily || 'sans-serif';
+    const W = view.W, H = view.H;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute('viewBox', '0 0 ' + W.toFixed(0) + ' ' + H.toFixed(0));
+    clone.setAttribute('width', W.toFixed(0)); clone.setAttribute('height', H.toFixed(0));
+    clone.classList.remove('focusing');
+    clone.querySelectorAll('.on').forEach(function (el) { el.classList.remove('on'); });
+    const st = document.createElementNS('http://www.w3.org/2000/svg', 'style'); st.textContent = exportCSS(font);
+    clone.insertBefore(st, clone.firstChild);
+    const img = new Image();
+    img.onload = function () {
+      const sc = Math.min(2, 7000 / Math.max(W, H)), M0 = 48 * sc;
+      const lines = M.sortIds(Object.keys(net.lines)).map(function (lid) { return { L: net.lines[lid], tp: M.lineTopo(net, lid) }; }).filter(function (o) { return o.tp.topo !== 'empty'; });
+      const cw = Math.max(W * sc + 2 * M0, 960 * sc), cols = Math.max(1, Math.floor((cw - 2 * M0) / (220 * sc)));
+      const headH = 108 * sc, footH = (Math.ceil(lines.length / cols) * 34 + 70) * sc;
+      const ch = headH + H * sc + footH;
+      const cv = document.createElement('canvas'); cv.width = Math.round(cw); cv.height = Math.round(ch);
+      const c = cv.getContext('2d');
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = '#1f2a3a'; c.textBaseline = 'alphabetic';
+      c.font = '800 ' + (30 * sc) + 'px ' + font; c.fillText((D.city || '') + '地铁线路示意图', M0, 56 * sc);
+      c.font = (15 * sc) + 'px ' + font; c.fillStyle = '#5d6b80';
+      let nSt = 0; for (const id in net.stations) if (M.stationLines(net, id).length) nSt++;
+      c.fillText('游戏时间 ' + g.clock.y + ' 年 ' + g.clock.m + ' 月' + (useDraft ? '（含建设草案）' : '') + ' · ' + lines.length + ' 条线路 · ' + nSt + ' 座车站 · 《城市与地铁》', M0, 84 * sc);
+      c.drawImage(img, (cw - W * sc) / 2, headH, W * sc, H * sc);
+      // 线路图例
+      let y = headH + H * sc + 18 * sc;
+      c.strokeStyle = '#e3e8ef'; c.lineWidth = 1 * sc; c.beginPath(); c.moveTo(M0, y); c.lineTo(cw - M0, y); c.stroke();
+      y += 30 * sc;
+      lines.forEach(function (o, k) {
+        const x = M0 + (k % cols) * 220 * sc, yy = y + Math.floor(k / cols) * 34 * sc;
+        c.fillStyle = o.L.color; c.beginPath(); c.roundRect ? c.roundRect(x, yy - 14 * sc, 30 * sc, 20 * sc, 6 * sc) : c.rect(x, yy - 14 * sc, 30 * sc, 20 * sc); c.fill();
+        c.fillStyle = '#fff'; c.font = '800 ' + (12 * sc) + 'px ' + font; c.textAlign = 'center'; c.fillText(String(o.L.num || ''), x + 15 * sc, yy + 1 * sc);
+        c.textAlign = 'left'; c.fillStyle = '#1f2a3a'; c.font = '600 ' + (14 * sc) + 'px ' + font; c.fillText(o.L.name, x + 40 * sc, yy);
+        const nw = c.measureText(o.L.name).width;
+        c.fillStyle = '#7a8799'; c.font = (12 * sc) + 'px ' + font; c.fillText(o.tp.stations.length + ' 站', x + 48 * sc + nw, yy);
+      });
+      c.fillStyle = '#9aa5b5'; c.font = (12 * sc) + 'px ' + font; c.textAlign = 'right';
+      c.fillText('线型：实线为地下，带白色中线为高架，带白色枕木纹为地面；⇄ 圆环为换乘站，虚线相连为站外步行换乘', cw - M0, ch - 20 * sc);
+      c.textAlign = 'left';
+      cv.toBlob(function (blob) {
+        if (!blob) { ui.toast('导出失败：浏览器无法生成图片', 'bad'); return; }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '地铁线路示意图-' + (D.city || '城市') + '-' + g.clock.y + '年' + g.clock.m + '月.png';
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+        ui.toast('已导出线路示意图（' + cv.width + '×' + cv.height + ' PNG）', 'good');
+      }, 'image/png');
+    };
+    img.onerror = function () { ui.toast('导出失败：无法绘制示意图', 'bad'); };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
   }
 
   function render() {
@@ -248,8 +348,15 @@
       hasDraft ? h('div', { class: 'seg-ctl sm' }, [[false, '正式网络'], [true, '含草案']].map(function (o) { return h('button', { class: useDraft === o[0] ? 'on' : '', 'data-silent': '1', onclick: function () { if (useDraft !== o[0]) { useDraft = o[0]; focus = null; render(); } } }, o[1]); })) : null,
       h('div', { class: 'grow' }),
       h('span', { class: 'tiny muted nm-hint' }, '滚轮缩放 · 拖动平移 · 点击车站定位'),
+      h('div', { class: 'nm-tools' },
+        h('button', { class: 'hbtn', 'data-tip': '放大', onclick: function () { zoomAt(0.7); } }, CM.icon('plus')),
+        h('button', { class: 'hbtn', 'data-tip': '缩小', onclick: function () { zoomAt(1 / 0.7); } }, CM.icon('minus')),
+        h('button', { class: 'hbtn', 'data-tip': '显示全部', onclick: fitView }, CM.icon('expand'))),
+      h('button', { class: 'btn sm', 'data-tip': '导出完整线路示意图（含标题与线路图例）', onclick: exportPNG }, CM.icon('export'), '导出 PNG'),
       h('button', { class: 'hbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { NetMap.close(); } }, CM.icon('close')));
+    tgt = null;
     const canvas = build(g);
+    if (!canvas.classList.contains('nm-canvas')) head.querySelectorAll('.nm-tools button, .btn').forEach(function (b) { b.disabled = true; });
     const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend());
     const body = h('div', { class: 'nm-body' }, bar, canvas);
     const win = h('div', { class: 'stats-win nm-win', onclick: function (e) { e.stopPropagation(); } }, head, body);
@@ -267,7 +374,8 @@
       root.classList.remove('hidden');
       render();
     },
-    close: function () { if (root) { root.classList.add('hidden'); root.innerHTML = ''; } },
+    close: function () { tgt = null; if (root) { root.classList.add('hidden'); root.innerHTML = ''; } },
+    exportPNG: function () { exportPNG(); },
     isOpen: function () { return !!root && !root.classList.contains('hidden'); },
     refresh: function () { if (NetMap.isOpen()) render(); },
   };

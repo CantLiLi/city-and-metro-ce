@@ -278,10 +278,16 @@
             const re = mnet.rideEdge[ri];
             let mx = 0; for (let q = 0; q < re.length; q++) mx = Math.max(mx, g.model.edgeLoadAt(re[q], w));
             const capH = f * r.cap;
+            // 配车：全日各时段所需列车的最大值，以及本时段的依据（站数、站距、客流）
+            let fleet = 0; for (let p = 0; p < 4; p++) fleet = Math.max(fleet, Math.ceil(r.cycleSec * g.model.live.per[p].freq[ri] / 3600));
+            const ns = r.stIdx.length, sp = r.lenM / 1000 / Math.max(1, r.loop ? ns : ns - 1);
+            const floor = CM.Model.serviceFloor(r, w.p0), byLoad = mx / (r.cap * CFG.metro.targetLF);
             rows.innerHTML = '';
             rows.appendChild(self.kv([
               ['当前发车', f > 0 ? U.fmtNum(f, 1) + ' 列/小时（间隔 ' + U.fmtNum(60 / f, 1) + ' 分钟）' : '停运（06:00–24:00 运营）'],
               ['运行列车', f > 0 ? Math.ceil(r.cycleSec / (3600 / f)) + ' 列（周转 ' + Math.round(r.cycleSec / 60) + ' 分钟）' : '—'],
+              ['配属列车', fleet + ' 列（全日各时段所需的最大值）'],
+              ['配车依据', ns + ' 站 · 平均站距 ' + U.fmtNum(sp, 1) + ' km → 最低 ' + U.fmtNum(floor, 1) + ' 列/时；客流需要 ' + U.fmtNum(byLoad, 1) + ' 列/时' + (byLoad > floor ? '（按客流）' : '（按服务水平）')],
               ['列车编组', r.cars + ' 节（受沿线最小车站限制），定员 ' + U.fmtInt(r.cap) + ' 人'],
               ['单向运力', f > 0 ? U.fmtInt(capH) + ' 人/小时' : '—'],
               ['最大断面客流', U.fmtInt(mx) + ' 人/小时', capH > 0 && mx > capH ? 'bad' : ''],
@@ -295,7 +301,7 @@
           const drawChart = function () { chart.innerHTML = ''; chart.appendChild(self.loadChart(r, ri, W())); };
           drawChart(); self.live.push(function () { if (Math.random() < 0.25) drawChart(); });
           b.appendChild(chart);
-          b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '运力由系统按客流自动调整（最小间隔 2 分钟）；达到上限后体现为拥挤，需要升级车站以加长编组或修建平行线路分流。'));
+          b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '列车数由系统自动调配：车站越多、站距越小的城区线基础班次越密，站距大的郊区线较疏，每条线路至少 2 列；客流超过时按最大断面客流加车（最小间隔 2 分钟）。达到上限后体现为拥挤，需要升级车站以加长编组或修建平行线路分流。'));
           return b;
         }, routes.length === 1));
       }
@@ -471,7 +477,7 @@
     const x = model.zCx[z], y = model.zCy[z];
     const rg = g.city.regionAt(x, y);
     if (rg) el.appendChild(h('div', { class: 'note', style: { marginTop: '8px' } }, '所属区域：' + rg.name + (g.city.regionOpen[g.city.regions.indexOf(rg)] ? '（已开放）' : '（尚未开放，参考 ' + rg.open + ' 年）')));
-    el.appendChild(h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm ghost', onclick: function () { self.flyTo(x, y, 24); } }, '定位')));
+    el.appendChild(h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(z); } }, '定位')));
     return { title: g.zoneName(z), el: el };
   };
 
@@ -546,7 +552,7 @@
         if (rg.scenic) return;
         const open = city.regionOpen[k], dt = city.regionOpenDate[k];
         const cx = rg.cx != null ? rg.cx : 60, cy = rg.cy != null ? rg.cy : 48;
-        b.appendChild(h('div', { class: 'list-item clickable', onclick: function () { self.flyTo(cx, cy, 14); } },
+        b.appendChild(h('div', { class: 'list-item clickable', onclick: function () { self.locateRegion(k); } },
           h('span', { class: 'tag ' + (open ? 'good' : '') }, open ? '已开放' : '未开放'),
           h('div', { class: 'grow small' }, rg.name, h('div', { class: 'tiny muted' }, open ? (dt ? dt[0] + '年' + dt[1] + '月开放' : '') : '参考 ' + rg.open + ' 年' + (rg.pop ? '；人口达 ' + U.fmtPeople(rg.pop) + ' 时可提前 3 年内开放' : '')))));
       });
@@ -670,9 +676,9 @@
         b.appendChild(h('div', { class: 'tiny', style: { marginTop: '4px' } }, '截止 ' + t.deadline[0] + '年' + t.deadline[1] + '月（' + (left > 0 ? '剩 ' + left + ' 个月' : '本月到期') + '）' + (t.sustain ? '；需连续满足 ' + t.sustain + ' 个月' : '') + '；进度每月初评估'));
         b.appendChild(h('div', { class: 'tiny', style: { marginTop: '2px' } }, ch ? '奖励：拨款 ' + U.fmtMoney(t.reward) + '、满意度 +4；未完成：12 个月拨款 ×' + CFG.economy.failGrantFactor + '、满意度 ' + CFG.economy.failSat : '自由模式：无奖励与后果'));
         const locs = [];
-        if (t.anchors) for (const a of t.anchors) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.flyTo(a.x, a.y, 16); } }, '⊙ ' + a.name));
-        if (t.zone !== undefined) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.flyTo(g.model.zCx[t.zone], g.model.zCy[t.zone], 20); } }, '⊙ 定位片区'));
-        if (t.station) { const s = g.net.stations[t.station]; if (s) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.flyTo(s.x, s.y, 26); } }, '⊙ ' + s.name)); }
+        if (t.anchors) for (const a of t.anchors) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locatePoint(a.x, a.y, a.name, a.r || 2); } }, '⊙ ' + a.name));
+        if (t.zone !== undefined) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(t.zone); } }, '⊙ 定位片区（' + g.zoneName(t.zone).replace(/^片区（(.*)）$/, '$1').replace(/（.*）/, '') + '）'));
+        if (t.station) { const s = g.net.stations[t.station]; if (s) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locatePoint(s.x, s.y, s.name, 0.8); } }, '⊙ ' + s.name)); }
         if (locs.length) b.appendChild(h('div', { class: 'row', style: { flexWrap: 'wrap', marginTop: '4px', gap: '2px' } }, locs));
       } else {
         b.appendChild(h('div', { class: 'tiny ' + (t.status === 'done' ? 'good' : 'bad') }, (t.status === 'done' ? '已完成' : '未完成') + '（' + t.closedAt[0] + '年' + t.closedAt[1] + '月）'));
@@ -726,7 +732,7 @@
   // ======================== 页面：帮助 ========================
   UI.prototype.page_help = function () {
     const el = h('div');
-    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图'], ['/', '搜索车站与线路'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
+    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图（可平滑缩放、导出 PNG）'], ['点击行驶中的列车', '跟随这列车；H 隐藏 / 显示界面，Esc 或拖动地图退出'], ['/', '搜索车站、线路、道路、区域与地名'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
     const t = h('table', { class: 'tbl' });
     for (const r of rows) t.appendChild(h('tr', null, h('td', null, h('kbd', null, r[0])), h('td', { style: { textAlign: 'left' } }, r[1])));
     el.appendChild(t);

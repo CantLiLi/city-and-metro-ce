@@ -22,9 +22,11 @@
   Game.create = function (opts) {
     const g = new Game();
     g.id = U.uid('g');
-    g.name = opts.name || '广州 1990';
+    g.mapId = CM.mapId || 'gz';   // 当前地图（CM.useMap 已切换好数据）
+    g.name = opts.name || ((D.city || '广州') + ' ' + CFG.START.y);
     g.mode = opts.mode;
-    g.seed = opts.seed || 19900101;
+    g.seed = opts.seed || (CFG.START.y * 10000 + 101);
+    if (opts.tutorial) g.tutorial = { step: 0, done: [], started: Date.now() };
     g.createdAt = Date.now();
     g.clock = Object.assign({}, CFG.START);
     g.city = new CM.City();
@@ -393,7 +395,7 @@
   // ---------------- 存档 ----------------
   Game.prototype.serialize = function () {
     return {
-      meta: { gameId: this.id, name: this.name, mode: this.mode, seed: this.seed, createdAt: this.createdAt, gameVersion: CFG.GAME_VERSION },
+      meta: { gameId: this.id, name: this.name, mode: this.mode, seed: this.seed, createdAt: this.createdAt, gameVersion: CFG.GAME_VERSION, map: this.mapId || 'gz' },
       clock: Object.assign({}, this.clock),
       city: this.city.serialize(),
       net: this.net,
@@ -403,12 +405,15 @@
       history: this.history.slice(-1200),
       firedEvents: this.firedEvents,
       favs: this.favs,
+      tutorial: this.tutorial || null,
     };
   };
   Game.restore = function (s) {
     const g = new Game();
     const m = s.meta;
     g.id = m.gameId; g.name = m.name; g.mode = m.mode; g.seed = m.seed; g.createdAt = m.createdAt;
+    g.mapId = m.map || 'gz';   // 调用前 CM.useMap 已切换到该地图
+    if (s.tutorial) g.tutorial = s.tutorial;
     g.clock = Object.assign({}, s.clock);
     g.city = new CM.City();
     g.city.generate(g.seed, CFG.START.y);

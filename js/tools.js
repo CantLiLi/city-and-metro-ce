@@ -69,7 +69,7 @@
       if (!this.ptr.moved && Math.hypot(e.clientX - this.ptr.sx, e.clientY - this.ptr.sy) > 4) this.ptr.moved = true;
       if (this.drag) { this.dragTo(e.clientX, e.clientY); }
       else if (this.ptr.extend) { /* 拖动延长手柄：只更新绘线预览 */ }
-      else if (this.ptr.moved || this.ptr.pan) { R.panBy(dx, dy); this.ptr.pan = true; }
+      else if (this.ptr.moved || this.ptr.pan) { if (CM.Follow && CM.Follow.active()) CM.Follow.stop(); R.panBy(dx, dy); this.ptr.pan = true; }
       this.ptr.x = e.clientX; this.ptr.y = e.clientY;
     }
     if (e.target !== R.cv && !this.ptr) { this.hover = null; this.ui.setTooltip(null); return; }
@@ -82,6 +82,8 @@
     if (p.extend) { if (p.moved && this.tool === 'line' && this.chain) this.onClick(e.clientX, e.clientY, false); return; }
     if (p.pan && p.moved) return;
     if (p.button === 2) { this.onRight(e); return; }
+    // 选择工具下点击行驶中的列车：进入跟随模式（车站优先）
+    if (p.button === 0 && !p.moved && this.tool === 'select' && CM.Follow && !this.R.pickStation(e.clientX, e.clientY)) { const tr = CM.Follow.pick(e.clientX, e.clientY); if (tr) { CM.Follow.start(tr); return; } }
     if (p.button === 0 && !p.moved) this.onClick(e.clientX, e.clientY, e.shiftKey || e.altKey, e.ctrlKey || e.metaKey || e.shiftKey);
   };
 
@@ -112,15 +114,17 @@
         if (this.tool === 'demolish') this.demolishTip(tip, { kind: 'station', id: st });
       } else if (seg && net.segments[seg]) {
         const sg = net.segments[seg], ln = net.lines[sg.line];
-        tip = { title: (ln ? ln.name : '') + ' · ' + net.stations[sg.a].name + '—' + net.stations[sg.b].name, lines: [CFG.metro.typeName[sg.type] + '轨道'] };
+        tip = { title: (ln && ln.name ? ln.name + ' · ' : '') + net.stations[sg.a].name + '—' + net.stations[sg.b].name, lines: [CFG.metro.typeName[sg.type] + '轨道'] };
         if (this.tool === 'demolish') this.demolishTip(tip, { kind: 'seg', id: seg });
         if (this.tool === 'edit') tip.lines.push('点击选中后可拖动控制点调整线形');
+      } else if (this.tool === 'select' && CM.Follow && CM.Follow.pick(sx, sy)) {
+        tip = CM.Follow.describe(CM.Follow.pick(sx, sy));
       } else if (this.tool === 'select' && R.tEase < 0.5) {
         const L = R.pickLink(w.x, w.y, 0.22);
         if (L && L.name) {
           const W = g.model.weights(g.clock.minute);
           const r0 = g.model.arcVolAt(2 * L.id, W) / g.model.cap(2 * L.id), r1 = g.model.arcVolAt(2 * L.id + 1, W) / g.model.cap(2 * L.id);
-          tip = { title: g.city.roadNames[L.name], lines: ['当前饱和度（流量/通行能力）：' + U.fmtPct(Math.max(r0, r1), 0), '点击查看道路详情'] };
+          tip = { title: g.city.roadNames[L.name] || ['', '支路', '次干道', '主干道', '快速路'][L.cls] || '道路', lines: ['当前饱和度（流量/通行能力）：' + U.fmtPct(Math.max(r0, r1), 0), '点击查看道路详情'] };
         }
       }
     } else if (this.tool === 'station') {
@@ -451,6 +455,11 @@
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.ui.undo(); return; }
     if ((e.ctrlKey || e.metaKey) && k === 'enter') { e.preventDefault(); if (g.draft) this.ui.confirmDraft(); return; }   // Ctrl+Enter 确认建设
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // 跟随列车时：H 隐藏/显示界面，Esc 退出跟随
+    if (CM.Follow && CM.Follow.active()) {
+      if (k === 'h') { CM.Follow.toggleUI(); return; }
+      if (k === 'escape') { CM.Follow.stop(); return; }
+    }
     this.keys.add(k);
     switch (k) {
       case ' ': e.preventDefault(); this.ui.togglePause(); break;
@@ -490,7 +499,7 @@
     if (K.has('d') || K.has('arrowright')) dx -= sp;
     if (K.has('w') || K.has('arrowup')) dy += sp;
     if (K.has('s') || K.has('arrowdown')) dy -= sp;
-    if (dx || dy) this.R.panBy(dx, dy);
+    if (dx || dy) { if (CM.Follow && CM.Follow.active()) CM.Follow.stop(); this.R.panBy(dx, dy); }
   };
 
   // ---------------- 覆盖层绘制 ----------------

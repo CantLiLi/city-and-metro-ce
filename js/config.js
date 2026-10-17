@@ -2,7 +2,7 @@
 // 全局参数。PRD 中标注"待确认"的数值在此给出可调整的默认值（DEFAULT），评审确认后只需修改本文件。
 (function (CM) {
   CM.CFG = {
-    GAME_VERSION: '1.3.0',
+    GAME_VERSION: '1.4.0',
     SAVE_FORMAT: 'city-metro-save',
     SAVE_VERSION: 2,
     SAVE_MIN_VERSION: 2,   // 1.1 起地图改为真实地理，旧版存档的城市数据与之不兼容

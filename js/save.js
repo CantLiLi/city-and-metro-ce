@@ -97,7 +97,7 @@
     const key = P + 'slot.' + slotId + '.' + Date.now().toString(36);
     const meta = {
       slotId: slotId, key: key, gameId: game.id, kind: kind, label: opts.label || (kind === 'auto' ? '自动存档' : '手动存档'),
-      date: [game.clock.y, game.clock.m, game.clock.d], savedAt: env.savedAt, size: str.length, mode: game.mode, name: game.name,
+      date: [game.clock.y, game.clock.m, game.clock.d], savedAt: env.savedAt, size: str.length, mode: game.mode, name: game.name, map: game.mapId || 'gz',
       stations: game.compiled.stations.length, funds: game.econ.isFree() ? null : game.econ.funds,
     };
     // 先写数据，再写索引；任一步失败都不影响已有存档
@@ -105,7 +105,7 @@
       return store.get(key, where).then(function (back) {
         if (!back || back.length !== str.length) { store.del(key, where); return { ok: false, error: '写入后校验失败' }; }
         const idx2 = readIndex();
-        idx2.games[game.id] = { gameId: game.id, name: game.name, mode: game.mode, createdAt: game.createdAt, updatedAt: env.savedAt };
+        idx2.games[game.id] = { gameId: game.id, name: game.name, mode: game.mode, map: game.mapId || 'gz', createdAt: game.createdAt, updatedAt: env.savedAt };
         meta.store = where;
         idx2.slots[slotId] = meta;
         try { writeIndex(idx2); }
@@ -115,17 +115,18 @@
       });
     }).catch(function (e) { return { ok: false, error: errMsg(e) }; });
   };
-  Save.list = function () {
+  // mapId：只列出该地图的进度（不传则列出全部）
+  Save.list = function (mapId) {
     const idx = readIndex();
-    const games = Object.values(idx.games).map(function (g) {
+    const games = Object.values(idx.games).filter(function (g) { return !mapId || (g.map || 'gz') === mapId; }).map(function (g) {
       const slots = Object.values(idx.slots).filter(function (s) { return s.gameId === g.gameId; }).sort(function (a, b) { return b.savedAt - a.savedAt; });
       return Object.assign({}, g, { slots: slots, latest: slots[0] ? slots[0].savedAt : 0 });
     }).filter(function (g) { return g.slots.length; });
     games.sort(function (a, b) { return b.latest - a.latest; });
     return games;
   };
-  Save.latest = function () {
-    const g = Save.list()[0];
+  Save.latest = function (mapId) {
+    const g = Save.list(mapId)[0];
     return g ? g.slots[0] : null;
   };
   Save.parseEnvelope = function (text) {
@@ -139,9 +140,12 @@
     try { payload = JSON.parse(env.body); } catch (e) { throw new Error('存档内容损坏'); }
     const ok = payload && payload.meta && payload.clock && payload.city && payload.net && payload.econ && payload.tasks;
     if (!ok) throw new Error('存档缺少必要数据');
+    // 存档所属地图（1.4 版之前的存档都是广州）：按该地图的网格尺寸校验
+    const mp = CM.MAPS && CM.MAPS[payload.meta.map || 'gz'];
+    if (!mp) throw new Error('存档使用的地图「' + payload.meta.map + '」在当前版本中不存在');
     for (const k of ['pop', 'jobs', 'bh', 'taken', 'lu', 'street', 'urbanYear']) {
       const a = payload.city[k];
-      if (!a || !a.b || a.n !== CFG.W * CFG.H) throw new Error('城市数据不完整或尺寸不符');
+      if (!a || !a.b || a.n !== mp.cfg.W * mp.cfg.H) throw new Error('城市数据不完整或尺寸不符');
     }
     return { env: env, payload: payload };
   };
@@ -212,10 +216,10 @@
     const key = P + 'slot.' + slotId + '.' + Date.now().toString(36);
     return store.put(key, str).then(function (where) {
       const idx2 = readIndex();
-      idx2.games[gameId] = { gameId: gameId, name: name, mode: p.meta.mode, createdAt: p.meta.createdAt, updatedAt: env.savedAt };
-      idx2.slots[slotId] = { slotId: slotId, key: key, store: where, gameId: gameId, kind: 'manual', label: '导入的存档', date: [p.clock.y, p.clock.m, p.clock.d], savedAt: env.savedAt, size: str.length, mode: p.meta.mode, name: name, stations: Object.keys(p.net.stations || {}).length, funds: p.econ.mode === 'free' ? null : p.econ.funds };
+      idx2.games[gameId] = { gameId: gameId, name: name, mode: p.meta.mode, map: p.meta.map || 'gz', createdAt: p.meta.createdAt, updatedAt: env.savedAt };
+      idx2.slots[slotId] = { slotId: slotId, key: key, store: where, gameId: gameId, kind: 'manual', label: '导入的存档', date: [p.clock.y, p.clock.m, p.clock.d], savedAt: env.savedAt, size: str.length, mode: p.meta.mode, map: p.meta.map || 'gz', name: name, stations: Object.keys(p.net.stations || {}).length, funds: p.econ.mode === 'free' ? null : p.econ.funds };
       try { writeIndex(idx2); } catch (e) { store.del(key, where); throw new Error(errMsg(e)); }
-      return { slotId: slotId, gameId: gameId, name: name };
+      return { slotId: slotId, gameId: gameId, name: name, map: p.meta.map || 'gz' };
     }, function (e) { throw new Error(errMsg(e)); });
   };
   Save.usage = function () {
