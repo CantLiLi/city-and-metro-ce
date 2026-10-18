@@ -2119,7 +2119,7 @@
   // 车站客流图层：用典型工作日的全天数据（夜间停运时同样可看）。圆的大小 = 车站日客流，颜色 = 高峰小时负荷；
   // 线路下方的半透明色带 = 区间日断面客流（双向合计）；客流较大的车站标出数值
   Renderer.prototype.stationFlowData = function () {
-    const model = this.game.model, net = model.net, sd = model.stDaily;
+    const model = this.game.model, net = model.net, sd = model.dailyStale ? null : model.stDaily;
     if (!net || !sd || !net.N) return null;
     const kind = this.layerOpt.station, key = model.cycles + ':' + net.N + ':' + net.R + ':' + kind;
     if (this._sf && this._sfKey === key) return this._sf;

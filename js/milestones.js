@@ -98,7 +98,7 @@
       if (!((lm.h || 0) >= 300 || BIG.indexOf(lm.kind) >= 0 || lm.major)) return;
       // 已有同年历史事件提到该地标时不重复记录
       if ((D.events || []).some(function (e) { return e.y === lm.year && e.title.indexOf(lm.name) >= 0; })) return;
-      add(g, 'lm-' + (lm.id || k), { cat: 'city', icon: 'building', title: lm.name + '落成', desc: lm.h ? '高约 ' + lm.h + ' m' : '' });
+      add(g, 'lm-' + (lm.id || k), { cat: 'city', icon: 'building', title: lm.name + '落成', desc: lm.h ? '高约 ' + lm.h + ' m，成为城市新的地标。' : '新的城市地标出现在地图上，周边的出行也会随之增加。' });
     });
   }
   // 系统填海形成的新土地

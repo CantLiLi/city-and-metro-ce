@@ -231,15 +231,32 @@
       const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
       zoomAt(Math.exp(U.clamp(d, -240, 240) * 0.0022), e.clientX, e.clientY);
     }, { passive: false });
-    let drag = null;
-    canvas.addEventListener('pointerdown', function (e) { if (tgt) { tgt = null; } drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; canvas.setPointerCapture(e.pointerId); });
+    let drag = null, pinch = null;
+    const pts = new Map();   // 触屏：两指缩放
+    const two = function () { const p = Array.from(pts.values()); return { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; };
+    canvas.addEventListener('pointerdown', function (e) {
+      if (tgt) { tgt = null; }
+      if (e.pointerType === 'touch') { pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { pinch = two(); drag = null; return; } }
+      drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; canvas.setPointerCapture(e.pointerId);
+    });
+    const lift = function (e) { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+    canvas.addEventListener('pointercancel', function (e) { lift(e); drag = null; });
     canvas.addEventListener('pointermove', function (e) {
+      if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size >= 2) {
+        const t = two(), r = svg.getBoundingClientRect(), s = Math.max(view.w / r.width, view.h / r.height);
+        view.x -= (t.x - pinch.x) * s; view.y -= (t.y - pinch.y) * s; setView();
+        zoomAt(pinch.d / t.d, t.x, t.y);
+        pinch = t; return;
+      }
       if (!drag) return;
       const r = svg.getBoundingClientRect(), s = Math.max(view.w / r.width, view.h / r.height);
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
       if (drag.moved) { view.x = drag.vx - (e.clientX - drag.x) * s; view.y = drag.vy - (e.clientY - drag.y) * s; setView(); canvas.classList.add('grabbing'); }
     });
     canvas.addEventListener('pointerup', function (e) {
+      const wasPinch = !!pinch || pts.size > 1; lift(e);
+      if (wasPinch) { drag = null; return; }
       const d = drag; drag = null; canvas.classList.remove('grabbing');
       if (!d || d.moved) return;
       const t = document.elementFromPoint(e.clientX, e.clientY);
@@ -332,6 +349,7 @@
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
   }
 
+  let fresh = true;
   function render() {
     const g = game(); if (!g || !root) return;
     const hasDraft = !!(g.draft && g.draftEval() && g.draftEval().changed);
@@ -359,7 +377,9 @@
     if (!canvas.classList.contains('nm-canvas')) head.querySelectorAll('.nm-tools button, .btn').forEach(function (b) { b.disabled = true; });
     const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend());
     const body = h('div', { class: 'nm-body' }, bar, canvas);
-    const win = h('div', { class: 'stats-win nm-win', onclick: function (e) { e.stopPropagation(); } }, head, body);
+    // 只有打开时播放入场动画；打开后切换正式 / 含草案或网络变化时就地重绘，不闪动
+    const win = h('div', { class: 'stats-win nm-win' + (fresh ? '' : ' static'), onclick: function (e) { e.stopPropagation(); } }, head, body);
+    fresh = false;
     root.appendChild(win);
     root.onclick = function () { NetMap.close(); };
     if (canvas.classList.contains('nm-canvas')) bindPanZoom(canvas);
@@ -372,6 +392,7 @@
       ui = u;
       if (!root) { root = h('div', { id: 'netmap', class: 'hidden' }); document.getElementById('app').appendChild(root); }
       root.classList.remove('hidden');
+      fresh = true;
       render();
     },
     close: function () { tgt = null; if (root) { root.classList.add('hidden'); root.innerHTML = ''; } },

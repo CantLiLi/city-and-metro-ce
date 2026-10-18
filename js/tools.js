@@ -37,9 +37,10 @@
   // ---------------- 事件绑定 ----------------
   Tools.prototype.bind = function () {
     const cv = this.R.cv, self = this;
-    cv.addEventListener('pointerdown', function (e) { self.onDown(e); });
-    window.addEventListener('pointermove', function (e) { self.onMove(e); });
-    window.addEventListener('pointerup', function (e) { self.onUp(e); });
+    cv.addEventListener('pointerdown', function (e) { if (self.touchDown(e)) return; self.onDown(e); });
+    window.addEventListener('pointermove', function (e) { if (self.touchMove(e)) return; self.onMove(e); });
+    window.addEventListener('pointerup', function (e) { if (self.touchUp(e)) return; self.onUp(e); });
+    window.addEventListener('pointercancel', function (e) { if (self.touchUp(e)) return; self.ptr = null; if (self.drag) { const g = self.game(); self.drag = null; if (g) g.endLive(false); } });
     cv.addEventListener('wheel', function (e) { e.preventDefault(); if (!self.game()) return; const k = e.deltaMode === 1 ? 40 : 1; self.R.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * k * 0.0016)); }, { passive: false });
     cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     cv.addEventListener('dblclick', function (e) { self.onDbl(e); });
@@ -47,9 +48,43 @@
     window.addEventListener('keyup', function (e) { self.keys.delete(e.key.toLowerCase()); });
     window.addEventListener('blur', function () { self.keys.clear(); });
   };
+  // ---------------- 触屏：双指缩放与平移 ----------------
+  // 第二根手指按下时进入缩放：取消单指的点击 / 拖动，按两指距离缩放、按中点平移；返回 true 表示事件已处理
+  Tools.prototype.touchDown = function (e) {
+    if (e.pointerType !== 'touch') return false;
+    const T = this.touches || (this.touches = new Map());
+    T.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (T.size < 2) return false;
+    if (this.drag) { const g = this.game(); this.drag = null; if (g) g.endLive(true); }
+    this.ptr = null; this.ui.setTooltip(null);
+    const p = Array.from(T.values());
+    this.pinch = { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2 };
+    if (CM.Follow && CM.Follow.active()) CM.Follow.stop();
+    return true;
+  };
+  Tools.prototype.touchMove = function (e) {
+    const T = this.touches;
+    if (e.pointerType !== 'touch' || !T || !T.has(e.pointerId)) return false;
+    T.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!this.pinch || T.size < 2 || !this.game()) return false;
+    const p = Array.from(T.values()), d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
+    this.R.panBy(mx - this.pinch.mx, my - this.pinch.my);
+    this.R.zoomAt(mx, my, d / this.pinch.d);
+    this.pinch.d = d; this.pinch.mx = mx; this.pinch.my = my;
+    return true;
+  };
+  Tools.prototype.touchUp = function (e) {
+    const T = this.touches;
+    if (e.pointerType !== 'touch' || !T) return false;
+    T.delete(e.pointerId);
+    if (!this.pinch) return false;
+    if (T.size < 2) this.pinch = null;   // 松开一指后不再把剩下的手指当作点击
+    this.ptr = null;
+    return true;
+  };
   Tools.prototype.onDown = function (e) {
     const g = this.game(); if (!g || this.ui.blocking()) return;
-    this.R.cv.setPointerCapture && this.R.cv.setPointerCapture(e.pointerId);
+    try { if (this.R.cv.setPointerCapture) this.R.cv.setPointerCapture(e.pointerId); } catch (err) { /* 指针已失效时忽略 */ }
     this.ptr = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: false, shift: e.shiftKey, alt: e.altKey, t: performance.now() };
     if (e.button === 1) { this.ptr.pan = true; e.preventDefault(); return; }
     // 延长手柄：进入绘线，拖到目标位置松开即连线（只点击则从该端点开始逐站绘制）
@@ -66,7 +101,7 @@
     this.mouse = { x: e.clientX, y: e.clientY };
     if (this.ptr) {
       const dx = e.clientX - this.ptr.x, dy = e.clientY - this.ptr.y;
-      if (!this.ptr.moved && Math.hypot(e.clientX - this.ptr.sx, e.clientY - this.ptr.sy) > 4) this.ptr.moved = true;
+      if (!this.ptr.moved && Math.hypot(e.clientX - this.ptr.sx, e.clientY - this.ptr.sy) > (e.pointerType === 'touch' ? 10 : 4)) this.ptr.moved = true;
       if (this.drag) { this.dragTo(e.clientX, e.clientY); }
       else if (this.ptr.extend) { /* 拖动延长手柄：只更新绘线预览 */ }
       else if (this.ptr.moved || this.ptr.pan) { if (CM.Follow && CM.Follow.active()) CM.Follow.stop(); R.panBy(dx, dy); this.ptr.pan = true; }
@@ -74,6 +109,7 @@
     }
     if (e.target !== R.cv && !this.ptr) { this.hover = null; this.ui.setTooltip(null); return; }
     this.updateHover(e.clientX, e.clientY, e.shiftKey || e.altKey);
+    if (e.pointerType === 'touch') this.ui.setTooltip(null);   // 触屏没有悬停：拖动地图时不显示提示
   };
   Tools.prototype.onUp = function (e) {
     const g = this.game(); const p = this.ptr; this.ptr = null;

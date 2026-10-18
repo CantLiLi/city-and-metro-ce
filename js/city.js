@@ -186,13 +186,19 @@
     const N = this.N, W = this.W, FW = this.FW, BW = this.BW, BH = this.BH, Geo = CM.Geo, old = this.landFrac;
     this.buildWater();
     this.terrainVer++;
+    const fresh = new Set();
     for (let c = 0; c < N; c++) {
       if (old[c] === this.landFrac[c]) continue;
       this.dirty.add(c);
-      if (this.landFrac[c] < 0.5 || this.regions[this.region[c]].scenic) continue;
+      if (this.landFrac[c] < 0.5) continue;
+      // 风景区内成陆的格与开局时一样作为山林保护（不能留作“陆地上的水域”）
+      if (this.regions[this.region[c]].scenic) { if (this.lu[c] === LU.WATER) { this.plan[c] = LU.HILL; this.lu[c] = LU.HILL; fresh.add(c); } continue; }
       if (this.plan[c] === LU.WATER) this.plan[c] = this.planFor(c);
-      if (!keepLu && this.lu[c] === LU.WATER) this.lu[c] = LU.RURAL;
+      // 读档时（keepLu）用地已恢复，通常不会再有“陆地上的水域用地”；若填海年份在新版数据中提前，这里同样补成陆地
+      if (this.lu[c] === LU.WATER) { this.lu[c] = LU.RURAL; fresh.add(c); }
     }
+    // 已落成地标场地内刚成陆的格同样受保护（不会变成普通农田再被开发）
+    if (fresh.size) for (let k = 0; k < D.landmarks.length; k++) if (this.landmarkOn[k]) this.protectLandmark(k, fresh);
     // 建筑避让：已成陆处去掉水域标记，补上街道
     const wm = this.wmask, bm = this.bmask;
     for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) { const i = y * BW + x; if (bm[i] === 3 && !wm[((y >> 1) * FW) + (x >> 1)]) bm[i] = 0; }
@@ -345,24 +351,33 @@
     const u = dx * Math.cos(a) + dy * Math.sin(a), v = -dx * Math.sin(a) + dy * Math.cos(a);
     return Math.abs(u) <= lm.w / 2 / CFG.CELL_M && Math.abs(v) <= lm.d / 2 / CFG.CELL_M;
   };
+  // 地标按落成年份出现；建在填海土地上的地标要等场地成陆（中心所在格为陆地）后才出现
   City.prototype.activateLandmarks = function (year) {
     let changed = false;
     for (let k = 0; k < D.landmarks.length; k++) {
       const lm = D.landmarks[k];
       if (this.landmarkOn[k] || lm.year > year) continue;
+      const c0 = this.cellAt(lm.x, lm.y);
+      if (c0 >= 0 && this.landFrac[c0] < 0.5) continue;
       this.landmarkOn[k] = 1; changed = true;
-      for (const c of this.landmarkCells(lm)) {
-        if (this.lu[c] === LU.WATER) continue;
-        this.protectedId[c] = k + 1;
-        // 校园：保留为学校与机构用地（照常生成校舍与人口），只受保护
-        if (lm.kind === 'campus') { this.lu[c] = LU.INST; this.plan[c] = LU.INST; this.street[c] = 1; this.dirty.add(c); continue; }
-        this.lu[c] = LU.LANDMARK;
-        this.pop[c] = 0; this.jobs[c] = Math.min(this.jobs[c], 300);
-        this.street[c] = 1;
-        this.dirty.add(c);
-      }
+      this.protectLandmark(k, null);
     }
     return changed;
+  };
+  // 地标场地内的陆地格设为受保护（cells 为 null 时处理全部场地格，否则只处理其中的格，如刚成陆的格）
+  City.prototype.protectLandmark = function (k, cells) {
+    const lm = D.landmarks[k];
+    for (const c of this.landmarkCells(lm)) {
+      if (cells && !cells.has(c)) continue;
+      if (this.lu[c] === LU.WATER) continue;
+      this.protectedId[c] = k + 1;
+      // 校园：保留为学校与机构用地（照常生成校舍与人口），只受保护
+      if (lm.kind === 'campus') { this.lu[c] = LU.INST; this.plan[c] = LU.INST; this.street[c] = 1; this.dirty.add(c); continue; }
+      this.lu[c] = LU.LANDMARK;
+      this.pop[c] = 0; this.jobs[c] = Math.min(this.jobs[c], 300);
+      this.street[c] = 1;
+      this.dirty.add(c);
+    }
   };
 
   // ---------------- 道路 ----------------

@@ -385,6 +385,8 @@
     }
     this.net = net;
     this.gen = null;
+    // 车站日客流（stDaily）按旧网络统计，到下一次 computeDaily 前与新网络的车站编号不对应
+    if (!keepState || !this.stDaily || this.stDaily.inn.length !== net.N) this.dailyStale = true;
     if (!keepState) this.sinceChange = 0;
     this.version++;
   };
@@ -737,6 +739,7 @@
         for (let r = 0; r < net.R; r++) { const be = net.boardEdge[r]; for (let q = 0; q < be.length; q++) rBoard[r] += P.load[be[q]] * h; }
       }
       this.stDaily = { inn: sIn, out: sOut, xfer: sX, peak: peak, routeBoard: rBoard };
+      this.dailyStale = false;
     }
     // 小区可达性（用于城市发展）
     const za = this.live.per[0].zAccess;

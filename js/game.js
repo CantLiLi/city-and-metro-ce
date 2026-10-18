@@ -85,7 +85,7 @@
     const t = o.task;
     if (o.type === 'issued') { this.logEvent({ tag: '任务', title: '新任务：' + t.title, desc: t.desc }); this.emit('toast', { kind: 'info', text: '新任务：' + t.title }); }
     else if (o.type === 'done') { this.logEvent({ tag: '任务', title: '任务完成：' + t.title, desc: this.econ.mode === 'challenge' ? '获得奖励拨款 ' + U.fmtMoney(t.reward) : '' }); this.emit('toast', { kind: 'good', text: '任务完成：' + t.title }); }
-    else if (o.type === 'failed') { this.logEvent({ tag: '任务', title: '任务未完成：' + t.title, desc: this.econ.mode === 'challenge' ? '后果：未来 12 个月拨款 ×0.85，满意度下降' : '自由建造模式下无后果' }); this.emit('toast', { kind: 'bad', text: '任务未完成：' + t.title }); }
+    else if (o.type === 'failed') { this.logEvent({ tag: '任务', title: '任务未完成：' + t.title, desc: this.econ.mode === 'challenge' ? '后果：未来 ' + CFG.economy.failGrantMonths + ' 个月（含本月）拨款 ×' + CFG.economy.failGrantFactor + '，满意度下降' : '自由建造模式下无后果' }); this.emit('toast', { kind: 'bad', text: '任务未完成：' + t.title }); }
   };
 
   // ---------------- 时钟 ----------------
@@ -356,6 +356,12 @@
     for (const id in d.net.stations) { const s = d.net.stations[id], o = this.net.stations[id]; if (o && !s.site) s.site = [o.x, o.y]; }
     for (const id of ev.siteReset || []) { const s = d.net.stations[id]; if (s) s.site = [s.x, s.y]; }
     for (const id in d.net.segments) if (!this.net.segments[id]) d.net.segments[id].built = [this.clock.y, this.clock.m];
+    // 轨道的“已付费长度”：之后的免费小幅调整以此为基准累计
+    for (const id in d.net.segments) { const v = ev.paidLen && ev.paidLen[id]; if (v != null) d.net.segments[id].paidLen = Math.round(v); }
+    // 收藏：记下被拆除或改名对象的最新名称（读档后已拆除的收藏仍显示原名）
+    const fv = this.favs; fv.names = fv.names || {};
+    for (const id of fv.stations) { const s = d.net.stations[id] || this.net.stations[id]; if (s) fv.names[id] = s.name; }
+    for (const id of fv.lines) { const L = d.net.lines[id] || this.net.lines[id]; if (L) fv.names[id] = L.name; }
     M.normalizeLines(d.net);
     for (const id in d.net.segments) d.net.segments[id].base = null;
     const summary = ev.changes.add.length + ' 项新建、' + ev.changes.mod.length + ' 项修改、' + ev.changes.del.length + ' 项拆除';
@@ -364,6 +370,8 @@
     this.rev++;
     this.compiled = M.compile(this.net, this.city);
     this.model.cancelPredict();
+    // 沿线拆迁减少了人口与就业：立即重算小区人口岗位与出行需求，不等到月度结算
+    if (ev.demolitions.length) { this.model.buildZones(); this.model.buildDemand(); }
     this.model.setNetwork(this.compiled);
     this.draft = null;
     this.logEvent({ tag: '建设', title: '建设完成并投入运营', desc: summary + (ev.total > 0 ? '，费用 ' + U.fmtMoney(ev.total) : '，无费用') });
@@ -465,7 +473,7 @@
     g.model.fare = g.econ.fare;
     g.tasks = CM.Tasks.restore(s.tasks);
     g.events = s.events || []; g.history = s.history || []; g.firedEvents = s.firedEvents || {};
-    g.favs = { stations: (s.favs && s.favs.stations) || [], lines: (s.favs && s.favs.lines) || [] };
+    g.favs = { stations: (s.favs && s.favs.stations) || [], lines: (s.favs && s.favs.lines) || [], names: (s.favs && s.favs.names) || {} };
     g.mapInit = s.mapInit || null;
     g.milestones = s.milestones || null;
     g.model.solveNow(2);

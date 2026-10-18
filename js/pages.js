@@ -86,7 +86,10 @@
     const C = g.model.net ? g.model.net.C : null;
     const k = C && official ? C.sIndex.get(id) : undefined;
     const serviced = k !== undefined && !!C.serviced[k];
-    if (serviced && g.model.stDaily) {
+    if (serviced && (!g.model.stDaily || g.model.dailyStale)) {
+      // 新网络刚投入运营：车站客流还按旧网络统计，算完后页面自动刷新（见 UI.tick）
+      el.appendChild(h('div', { class: 'note' }, '客流数据计算中…（新网络投入运营后几秒内完成）'));
+    } else if (serviced) {
       const sd = g.model.stDaily;
       const grid = h('div', { class: 'stat-grid' });
       const sIn = this.stat('日进站', '—'), sOut = this.stat('日出站', '—'), sX = this.stat('日换乘', '—'), sP = this.stat('当前小时负荷', '—');
@@ -94,7 +97,9 @@
       el.appendChild(grid);
       const cap = CFG.metro.stationCap[C.stations[k].size];
       this.live.push(function () {
-        sIn.setV(U.fmtPeople(sd.inn[k]) + ' 人次', '典型工作日'); sOut.setV(U.fmtPeople(sd.out[k]) + ' 人次', '典型工作日'); sX.setV(U.fmtPeople(sd.xfer[k]) + ' 人次', '站内换乘');
+        const d2 = g.model.stDaily;   // 每次读取最新统计（模型收敛过程中会不断替换）
+        if (!d2 || g.model.dailyStale || g.model.net.C !== C || k >= d2.inn.length) return;
+        sIn.setV(U.fmtPeople(d2.inn[k]) + ' 人次', '典型工作日'); sOut.setV(U.fmtPeople(d2.out[k]) + ' 人次', '典型工作日'); sX.setV(U.fmtPeople(d2.xfer[k]) + ' 人次', '站内换乘');
         const W = g.model.weights(g.clock.minute);
         const f = g.model.stFlowAt(k, W, 'stIn') + g.model.stFlowAt(k, W, 'stOut') + g.model.stFlowAt(k, W, 'stXfer');
         sP.setV(U.fmtPct(f / cap, 0), U.fmtInt(f) + ' / ' + U.fmtInt(cap) + ' 人次/时', f / cap > 1 ? 'bad' : (f / cap > 0.8 ? 'warn' : 'muted'));
@@ -178,7 +183,8 @@
   };
   // 拥挤诊断：区分车站容量不足与列车运力不足，给出对应的处理入口
   UI.prototype.crowdBlock = function (id, k) {
-    const g = this.g(), self = this, model = g.model, mnet = model.net, C = mnet.C, sd = model.stDaily, mc = CFG.metro;
+    const g = this.g(), self = this, model = g.model, mnet = model.net, C = mnet.C, sd = model.dailyStale ? null : model.stDaily, mc = CFG.metro;
+    if (!sd || k >= sd.peak.length) return null;
     const st = C.stations[k], cap = mc.stationCap[st.size], stR = sd.peak[k] / cap;
     const ord = ['S', 'M', 'L'], next = function (sz) { return ord[Math.min(2, ord.indexOf(sz) + 1)]; };
     const trains = [];
@@ -259,10 +265,10 @@
     const routes = mnet ? mnet.C.routes.map(function (r, i) { return [r, i]; }).filter(function (a) { return a[0].lineId === lid; }) : [];
     if (routes.length && g.net.lines[lid]) {
       const W = function () { return g.model.weights(g.clock.minute); };
-      const daily = g.model.stDaily;
+      const daily = g.model.dailyStale ? null : g.model.stDaily;
       let board = 0; if (daily) for (const r of routes) board += daily.routeBoard[r[1]];
       const grid = h('div', { class: 'stat-grid' });
-      grid.append(this.stat('日客运量（上车）', U.fmtPeople(board) + ' 人次', '典型工作日'));
+      grid.append(this.stat('日客运量（上车）', daily ? U.fmtPeople(board) + ' 人次' : '计算中…', '典型工作日'));
       const oi = g.econ.opsIndex(g.clock.y);
       let ckm = 0;
       for (const r of routes) for (let p = 0; p < 4; p++) ckm += g.model.live.per[p].freq[r[1]] * 2 * r[0].lenM / 1000 * r[0].cars * (p === 3 ? 5 : g.model.pHours[p]);
@@ -487,7 +493,7 @@
     const el = h('div');
     const hist = g.history;
     const defs = {
-      pop: { title: '人口', val: function () { return U.fmtPeople(g.city.totals().pop); }, series: function (r) { return r.pop; }, def: '地图范围内的常住人口。', scope: '统计范围：全图（约 30 km × 24 km）；更新：每月城市发展结算；2020 年前为参考统计的估算，之后为模拟。', factors: ['历史人口增长参考曲线', '区域开放（时间与人口共同决定）', '地铁覆盖率提高可吸引更多人口（最多约 +6%）', '各街区的可达性、地铁车站邻近度与规划用地'] },
+      pop: { title: '人口', val: function () { return U.fmtPeople(g.city.totals().pop); }, series: function (r) { return r.pop; }, def: '地图范围内的常住人口。', scope: '统计范围：全图（约 ' + U.fmtNum(CFG.W * CFG.CELL_M / 1000, 0) + ' km × ' + U.fmtNum(CFG.H * CFG.CELL_M / 1000, 0) + ' km）；更新：每月城市发展结算；' + (CM.DATA.fictional ? '虚构城市，人口按模拟规则发展。' : CFG.growth.histEnd + ' 年前为参考统计的估算，之后为模拟。'), factors: ['历史人口增长参考曲线', '区域开放（时间与人口共同决定）', '地铁覆盖率提高可吸引更多人口（最多约 +6%）', '各街区的可达性、地铁车站邻近度与规划用地'] },
       share: { title: '地铁分担率', val: function () { return U.fmtPct(d.metroShare || 0); }, series: function (r) { return r.share; }, pct: true, def: '采用地铁的完整出行次数 ÷（汽车 + 地铁完整出行总次数）。换乘不重复计为新出行。', scope: '时间窗口：典型工作日全天（各时段汇总）；首版仅模拟汽车与地铁两种方式。', factors: ['起终点步行接驳时间（沿道路计算）', '候车时间（由发车间隔决定）与换乘次数', '车厢拥挤与车站拥挤', '票价与居民时间价值', '汽车出行时间（道路拥堵）与停车费用'] },
       cong: { title: '道路拥堵指数', val: function () { return (d.cong || 1).toFixed(2) + '（全日） / ' + (d.congAM || 1).toFixed(2) + '（早高峰）'; }, series: function (r) { return r.cong; }, def: '道路实际行驶时间 ÷ 自由流行驶时间，按车公里加权汇总。1.0 表示畅通，1.5 以上明显拥堵。', scope: '统计范围：全图主要道路；顶栏显示当前游戏时刻的数值，此处为典型工作日汇总。', factors: ['人口与出行需求增长', '汽车拥有水平（随年代上升）', '地铁对汽车出行的吸引（不按固定比例下降）', '道路与桥梁的系统建设'] },
       commute: { title: '平均通勤时间', val: function () { return U.fmtNum(d.commute || 0, 1) + ' 分钟'; }, series: function (r) { return r.commute; }, def: '家—工作出行的门到门平均时间。', scope: '包含步行接驳、候车、乘车、换乘、停车取车；时间窗口：典型工作日早晚通勤。', factors: ['道路拥堵', '地铁线路的直达性与换乘便利', '居住与就业分布（城市扩张会拉长通勤）'] },
@@ -550,8 +556,12 @@
     const ms = CM.Milestones ? CM.Milestones.state(g).list.filter(function (r) { return r.id !== 'start'; }) : [];
     const last = ms[ms.length - 1];
     el.appendChild(h('button', { class: 'ms-link', onclick: function () { self.openStats('milestones'); } },
-      h('span', { class: 'ms-medal sm' }, CM.icon('trophy', 18)),
-      h('div', { class: 'grow' }, h('b', null, '城市里程碑 · ' + ms.length + ' 个'), h('small', null, last ? '最近：' + last.title + '（' + last.y + '年' + last.m + '月）' : '首条地铁开通、人口与客流跨越关口等关键节点会记录在这里')),
+      h('span', { class: 'ms-medal sm' }, CM.icon('book', 18)),
+      h('div', { class: 'grow' }, h('b', null, '城市纪事 · ' + ms.length + ' 个里程碑'), h('small', null, last ? '最近：' + last.title + '（' + last.y + '年' + last.m + '月）' : '首条地铁开通、人口与客流跨越关口等关键节点会记录在这里')),
+      CM.icon('chev', 16)));
+    if (D.briefing) el.appendChild(h('button', { class: 'ms-link alt', onclick: function () { self.showBriefing(); } },
+      h('span', { class: 'ms-medal sm alt' }, CM.icon('briefing', 18)),
+      h('div', { class: 'grow' }, h('b', null, '开局简报'), h('small', null, CFG.START.y + ' 年这座城市的交通格局与你的起点')),
       CM.icon('chev', 16)));
     el.appendChild(this.sec('dt-data', '数据来源与真实性', '', function () { return self.dataNote(); }));
     return { title: '日期与城市发展', el: el };
@@ -596,8 +606,10 @@
     if (!free) {
       el.appendChild(this.sec('fi-rule', '拨款与失败条件', '', function () {
         const b = h('div');
-        b.appendChild(h('div', { class: 'small' }, '下月拨款预计 ' + U.fmtMoney(E.grantFor(g.clock.y, g.clock.m))));
-        for (const f of E.grantFactors(g.clock.y, g.clock.m)) b.appendChild(h('div', { class: 'chg small' }, h('span', null, f.label), h('span', { class: 'num' }, '×' + f.f.toFixed(2))));
+        // 下月：按下个月的拨款基数与届时仍生效的调整计算（满意度取当前值）
+        const ny = g.clock.m === 12 ? g.clock.y + 1 : g.clock.y, nm = g.clock.m % 12 + 1;
+        b.appendChild(h('div', { class: 'small' }, '下月（' + ny + '年' + nm + '月）拨款预计 ' + U.fmtMoney(E.grantFor(ny, nm))));
+        for (const f of E.grantFactors(ny, nm)) b.appendChild(h('div', { class: 'chg small' }, h('span', null, f.label), h('span', { class: 'num' }, '×' + f.f.toFixed(2))));
         const lim = CFG.economy.debtLimit * E.costIndex(g.clock.y);
         b.appendChild(self.kv([['连续负余额', E.negMonths + ' / ' + CFG.economy.negMonthsLimit + ' 个月', E.negMonths ? 'warn' : ''], ['负债下限', U.fmtMoney(lim)], ['满意度低于 ' + CFG.economy.satFail, E.lowSatMonths + ' / ' + CFG.economy.satFailMonths + ' 个月', E.lowSatMonths ? 'warn' : '']]));
         b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '拨款随满意度（×0.6–1.4）与任务结果变化。允许短期亏损；长期负余额、低于负债下限或满意度长期过低会导致挑战失败。'));
@@ -661,7 +673,7 @@
         b.appendChild(h('div', { class: 'progress', style: { margin: '6px 0 4px' } }, h('i', { style: { width: Math.round(U.clamp(ev.value, 0, 1) * 100) + '%' } })));
         b.appendChild(h('div', { class: 'tiny muted' }, ev.text));
         b.appendChild(h('div', { class: 'tiny', style: { marginTop: '4px' } }, '截止 ' + t.deadline[0] + '年' + t.deadline[1] + '月（' + (left > 0 ? '剩 ' + left + ' 个月' : '本月到期') + '）' + (t.sustain ? '；需连续满足 ' + t.sustain + ' 个月' : '') + '；进度每月初评估'));
-        b.appendChild(h('div', { class: 'tiny', style: { marginTop: '2px' } }, ch ? '奖励：拨款 ' + U.fmtMoney(t.reward) + '、满意度 +4；未完成：12 个月拨款 ×' + CFG.economy.failGrantFactor + '、满意度 ' + CFG.economy.failSat : '自由模式：无奖励与后果'));
+        b.appendChild(h('div', { class: 'tiny', style: { marginTop: '2px' } }, ch ? '奖励：拨款 ' + U.fmtMoney(t.reward) + '、满意度 +4（6 个月）；未完成：' + CFG.economy.failGrantMonths + ' 个月拨款 ×' + CFG.economy.failGrantFactor + '、满意度 ' + CFG.economy.failSat : '自由模式：无奖励与后果'));
         const locs = [];
         if (t.anchors) for (const a of t.anchors) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locatePoint(a.x, a.y, a.name, a.r || 2); } }, '⊙ ' + a.name));
         if (t.zone !== undefined) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(t.zone); } }, '⊙ 定位片区（' + g.zoneName(t.zone).replace(/^片区（(.*)）$/, '$1').replace(/（.*）/, '') + '）'));

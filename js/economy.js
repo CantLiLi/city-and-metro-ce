@@ -53,6 +53,7 @@
     this.lastDay = { fare: fareWan, ops: ops };
   };
 
+  // 拨款与满意度调整（mods）：until 为最后一个生效的月份（含当月），N 个月的效果记为 ym + N − 1
   Economy.prototype.grantFor = function (y, m) {
     const ym = U.ymIndex(y, m);
     let f = 0.6 + 0.8 * this.sat / 100, mf = 1;
@@ -124,11 +125,11 @@
   };
 
   Economy.prototype.serialize = function () {
-    return { mode: this.mode, funds: this.funds, fare: this.fare, cur: this.cur, ledger: this.ledger, sat: this.sat, mods: this.mods, negMonths: this.negMonths, lowSatMonths: this.lowSatMonths, failed: this.failed };
+    return { mode: this.mode, funds: this.funds, fare: this.fare, cur: this.cur, ledger: this.ledger, sat: this.sat, mods: this.mods, negMonths: this.negMonths, lowSatMonths: this.lowSatMonths, failed: this.failed, satFactors: this.satFactors, lastDay: this.lastDay };
   };
   Economy.restore = function (s) {
     const e = new Economy(s.mode, s.cur.y, s.cur.m);
-    Object.assign(e, { funds: s.funds, fare: Economy.normFare(s.fare), cur: s.cur, ledger: s.ledger || [], sat: s.sat, mods: s.mods || [], negMonths: s.negMonths || 0, lowSatMonths: s.lowSatMonths || 0, failed: s.failed || null });
+    Object.assign(e, { funds: s.funds, fare: Economy.normFare(s.fare), cur: s.cur, ledger: s.ledger || [], sat: s.sat, mods: s.mods || [], negMonths: s.negMonths || 0, lowSatMonths: s.lowSatMonths || 0, failed: s.failed || null, satFactors: s.satFactors || null, lastDay: s.lastDay || null });
     return e;
   };
   // 票制统一为全网单一票价；旧存档的里程计价按起步价换算
@@ -198,7 +199,7 @@
     if (t.type === 'stationCrowd') {
       const i = C.sIndex.get(t.station);
       if (i === undefined) return { ok: false, value: 0, text: '车站已拆除' };
-      const peak = model.stDaily ? model.stDaily.peak[i] : 0;
+      const peak = model.stDaily && !model.dailyStale ? model.stDaily.peak[i] || 0 : 0;
       const cap = CFG.metro.stationCap[C.stations[i].size];
       const v = peak / cap;
       return { ok: v <= t.target, value: U.clamp((t.start - v) / Math.max(0.01, t.start - t.target), 0, 1), text: '高峰负荷 ' + U.fmtPct(v, 0) + ' / 目标 ≤ ' + U.fmtPct(t.target, 0) };
@@ -254,15 +255,15 @@
       if (complete) {
         t.status = 'done'; t.closedAt = [y, m];
         this.active.splice(this.active.indexOf(t), 1); this.done.push(t);
-        if (challenge) { g.econ.income('reward', t.reward); g.econ.mods.push({ kind: 'sat', delta: 4, until: ym + 6, reason: '完成任务「' + t.title + '」' }); }
+        if (challenge) { g.econ.income('reward', t.reward); g.econ.mods.push({ kind: 'sat', delta: 4, until: ym + 5, reason: '完成任务「' + t.title + '」' }); }
         out.push({ type: 'done', task: t });
       } else if (ym >= U.ymIndex(t.deadline[0], t.deadline[1])) {
         t.status = 'failed'; t.closedAt = [y, m];
         this.active.splice(this.active.indexOf(t), 1); this.failed.push(t);
         if (challenge) {
           const E = CFG.economy;
-          g.econ.mods.push({ kind: 'grant', factor: E.failGrantFactor, until: ym + E.failGrantMonths, reason: '任务未完成：' + t.title });
-          g.econ.mods.push({ kind: 'sat', delta: E.failSat, until: ym + 12, reason: '任务未完成：' + t.title });
+          g.econ.mods.push({ kind: 'grant', factor: E.failGrantFactor, until: ym + E.failGrantMonths - 1, reason: '任务未完成：' + t.title });
+          g.econ.mods.push({ kind: 'sat', delta: E.failSat, until: ym + E.failGrantMonths - 1, reason: '任务未完成：' + t.title });
         }
         out.push({ type: 'failed', task: t });
       }
@@ -306,7 +307,7 @@
       }
     }
     // 车站拥挤
-    if (model.stDaily && g.compiled.stations.length) {
+    if (model.stDaily && !model.dailyStale && g.compiled.stations.length) {
       let bs = -1, br = 0;
       g.compiled.stations.forEach(function (s, i) {
         if (!free('st:' + s.id, 'stationCrowd')) return;

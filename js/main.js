@@ -107,8 +107,9 @@
       CM.Tutorial.attach(ui, g);
     } else if (isNew) {
       ui.doAutosave();
-      ui.toast('欢迎来到 ' + CFG.START.y + ' 年的' + (CM.DATA.city || '城市') + '！游戏已暂停：先规划第一条线路，再按空格或 ▶ 开始。', 'info');
-      ui.openPage('tasks', null, { root: true });
+      // 开局简报：这座城市当时的交通格局（东京为接管银座线）；关闭后打开任务面板
+      const tip = function () { ui.toast('游戏已暂停：先规划线路，再按空格或 ▶ 开始。', 'info'); ui.openPage('tasks', null, { root: true }); };
+      if (CM.DATA.briefing && ui.showBriefing) ui.showBriefing(tip); else tip();
     } else {
       ui.markSaved(g, Date.now());
       ui.toast('存档已载入（' + g.clock.y + '年' + g.clock.m + '月），按空格继续', 'good');

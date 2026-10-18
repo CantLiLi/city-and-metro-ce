@@ -323,8 +323,9 @@
   };
   M.removeSegment = function (net, segId) { delete net.segments[segId]; return M.normalizeLines(net); };
   M.removeStation = function (net, sid) {
-    const st = net.stations[sid];
+    const st = net.stations[sid], notes = [];
     const byLine = new Map();
+    const ctrlLen = function (pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += U.dist(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]); return L; };
     for (const id in net.segments) {
       const s = net.segments[id];
       if (s.a === sid || s.b === sid) { if (!byLine.has(s.line)) byLine.set(s.line, []); byLine.get(s.line).push(s); }
@@ -342,7 +343,17 @@
         delete net.segments[s1.id]; delete net.segments[s2.id];
         if (o1 !== o2 && !M.findSeg(net, lid, o1, o2)) {
           const id = M.newId(net, 'g');
-          net.segments[id] = { id: id, line: lid, a: o1, b: o2, pts: p1.concat([[st.x, st.y]], p2), type: s1.type, base: Array.from(new Set(base)) };
+          // 两侧建设方式不同时（如一侧地下、一侧高架），合并后的轨道沿用较长一侧的方式；另一侧在草案中按改建计费
+          let type = s1.type;
+          if (s1.type !== s2.type) {
+            const A = net.stations[o1], B = net.stations[o2];
+            const l1 = ctrlLen([[A.x, A.y]].concat(p1, [[st.x, st.y]])), l2 = ctrlLen([[st.x, st.y]].concat(p2, [[B.x, B.y]]));
+            type = l1 >= l2 ? s1.type : s2.type;
+            const other = type === s1.type ? s2.type : s1.type;
+            const ln = net.lines[lid];
+            notes.push((ln ? ln.name + ' ' : '') + A.name + '—' + B.name + ' 两侧建设方式不同，合并后统一为' + CFG.metro.typeName[type] + '，原' + CFG.metro.typeName[other] + '部分按改建计费');
+          }
+          net.segments[id] = { id: id, line: lid, a: o1, b: o2, pts: p1.concat([[st.x, st.y]], p2), type: type, base: Array.from(new Set(base)) };
         }
       } else {
         for (const s of segs) delete net.segments[s.id];
@@ -351,7 +362,7 @@
       if (line && line.root === sid) line.root = null;
     }
     delete net.stations[sid];
-    return M.normalizeLines(net);
+    return notes.concat(M.normalizeLines(net) || []);
   };
   // 拆除预览：按实际拆除规则在副本上执行，比较前后网络（直连保留、断开环线、取消支线、失去换乘或服务）
   M.demolishImpact = function (net, target) {
@@ -539,6 +550,7 @@
 
     // 车站
     res.siteReset = [];   // 确认后需记录新“付费选址”的车站（新建、改建、搬迁）
+    res.paidLen = {};     // 确认后各轨道的“已付费长度”（米）：免费的小幅调整按它累计，累计超出免费额度即按延长收费
     for (const id in draft.stations) {
       const s = draft.stations[id], o = off.stations[id];
       const c = city.cellAt(s.x, s.y);
@@ -629,18 +641,30 @@
       let full = false;
       if (!base || !base.length) { full = true; res.changes.add.push('新建轨道 ' + lbl + '（' + U.fmtKm(g.lenM) + '，' + CFG.metro.typeName[s.type] + '）'); res.affectedLines.add(s.line); }
       else {
-        const btype = off.segments[base[0]].type;
-        if (btype !== s.type) { full = true; res.changes.mod.push('轨道 ' + lbl + ' 改为' + CFG.metro.typeName[s.type] + '（按新建计费）'); res.affectedLines.add(s.line); }
+        // 原轨道可能不止一段（拆除中间站后合并），逐段比较建设方式：全部不同按新建计费；部分不同则对不同的那部分按改建计费
+        const diffT = base.filter(function (b) { return off.segments[b].type !== s.type; });
+        if (diffT.length === base.length) { full = true; res.changes.mod.push('轨道 ' + lbl + ' 改为' + CFG.metro.typeName[s.type] + '（按新建计费）'); res.affectedLines.add(s.line); }
         else {
           const key = base.slice().sort().join('+');
-          if (!groups.has(key)) groups.set(key, { base: base, segs: [], lbl: lbl, type: s.type });
-          groups.get(key).segs.push({ s: s, g: g });
+          if (!groups.has(key)) groups.set(key, { base: base, segs: [], lbl: lbl, type: s.type, changed: false });
+          const gr = groups.get(key);
+          gr.segs.push({ s: s, g: g });
           const stMoved = function (sid) { const a = draft.stations[sid], b = off.stations[sid]; return !b || a.x !== b.x || a.y !== b.y; };
           const changed = !o || o.a !== s.a || o.b !== s.b || o.line !== s.line || JSON.stringify(o.pts) !== JSON.stringify(s.pts) || stMoved(s.a) || stMoved(s.b);
-          if (changed) { res.affectedLines.add(s.line); touched.add(id); }
+          if (changed) { res.affectedLines.add(s.line); touched.add(id); gr.changed = true; }
+          if (diffT.length) {
+            const pg = { lenM: 0, waterM: 0, hillM: 0, protM: 0 }, from = new Set();
+            for (const b of diffT) { const og = offGeom[b]; pg.lenM += og.lenM; pg.waterM += og.waterM; pg.hillM += og.hillM; pg.protM += og.protM; from.add(CFG.metro.typeName[off.segments[b].type]); }
+            res.changes.mod.push('轨道 ' + lbl + ' 中原为' + Array.from(from).join('、') + '的 ' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '（按新建计费）');
+            item('construction', '改建轨道 ' + lbl + '（' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '）', M.trackCost(pg, s.type, year), id);
+            const dm = M.trackDemolition(city, g, s.type, year, U.clamp(pg.lenM / Math.max(1, g.lenM), 0, 1));
+            item('demolition', '沿线拆迁 ' + lbl, dm.cost, id);
+            res.demolitions.push.apply(res.demolitions, dm.cells);
+            res.affectedLines.add(s.line); touched.add(id); gr.changed = true; gr.retyped = true;
+          }
         }
       }
-      if (full) touched.add(id);
+      if (full) { touched.add(id); res.paidLen[id] = g.lenM; }
       if (full) {
         item('construction', (base && base.length ? '改建轨道 ' : '新建轨道 ') + lbl + '（' + U.fmtKm(g.lenM) + (g.waterM > 1 ? '，' + (s.type === 'underground' ? '越江隧道 ' : '跨江桥梁 ') + U.fmtKm(g.waterM) : '') + '）', M.trackCost(g, s.type, year), id);
         const dm = M.trackDemolition(city, g, s.type, year);
@@ -718,25 +742,34 @@
       if (!hit) continue;
       conflict({ type: 'level', kind: 'seg', ref: touched.has(s1.id) ? s1.id : s2.id, x: hit[0], y: hit[1], msg: '两条地面轨道平面交叉（' + (draft.lines[s1.line] ? draft.lines[s1.line].name : '') + ' 与 ' + (draft.lines[s2.line] ? draft.lines[s2.line].name : '') + '）', how: '地铁不能平面交叉。把其中一段改为高架或地下形成立体交叉，或在交叉处设换乘站。', fixes: [{ label: '改为高架', op: 'segType', seg: touched.has(s1.id) ? s1.id : s2.id, value: 'elevated' }, { label: '改为地下', op: 'segType', seg: touched.has(s1.id) ? s1.id : s2.id, value: 'underground' }] });
     }
+    // 线形调整：与“已付费长度”比较（旧存档没有记录时按已建长度），免费的小幅调整会累计，
+    // 多次小改累计超过免费额度时按累计增加的长度收费（与车站“自上次付费选址累计”的规则一致）
     groups.forEach(function (gr) {
-      let baseLen = 0, baseWater = 0, baseHill = 0, baseProt = 0, dLen = 0, dWater = 0, dHill = 0, dProt = 0;
-      for (const b of gr.base) { const g = offGeom[b]; baseLen += g.lenM; baseWater += g.waterM; baseHill += g.hillM; baseProt += g.protM; }
+      let baseLen = 0, basePaid = 0, baseWater = 0, baseHill = 0, baseProt = 0, dLen = 0, dWater = 0, dHill = 0, dProt = 0;
+      for (const b of gr.base) { const g = offGeom[b], pl = off.segments[b].paidLen; baseLen += g.lenM; basePaid += pl != null ? pl : g.lenM; baseWater += g.waterM; baseHill += g.hillM; baseProt += g.protM; }
       for (const x of gr.segs) { dLen += x.g.lenM; dWater += x.g.waterM; dHill += x.g.hillM; dProt += x.g.protM; }
-      const extra = dLen - baseLen;
-      if (Math.abs(extra) > 1 || gr.segs.length !== gr.base.length) {
-        if (extra > C.freeLengthM) {
+      const step = dLen - baseLen, extra = dLen - basePaid;   // 本次变化；自上次付费以来的累计变化
+      const shaped = gr.changed || gr.segs.length !== gr.base.length;
+      let charged = false;
+      if (shaped || Math.abs(step) > 1) {
+        if (extra > C.freeLengthM && step > 1) {
+          charged = true;
           const pseudo = { lenM: extra, waterM: Math.max(0, dWater - baseWater), hillM: Math.max(0, dHill - baseHill), protM: Math.max(0, dProt - baseProt) };
-          res.changes.mod.push('调整线形 ' + gr.lbl + '：增加 ' + U.fmtKm(extra));
-          item('construction', '延长/调整轨道 ' + gr.lbl + '（+' + U.fmtKm(extra) + '）', M.trackCost(pseudo, gr.type, year), gr.segs[0].s.id);
+          const acc = Math.abs(extra - step) > 1 ? '（含此前免费调整累计 ' + U.fmtKm(extra - step) + '）' : '';
+          res.changes.mod.push('调整线形 ' + gr.lbl + '：增加 ' + U.fmtKm(extra) + acc);
+          item('construction', '延长/调整轨道 ' + gr.lbl + '（+' + U.fmtKm(extra) + acc + '）', M.trackCost(pseudo, gr.type, year), gr.segs[0].s.id);
           for (const x of gr.segs) {
             const dm = M.trackDemolition(city, x.g, gr.type, year, U.clamp(extra / Math.max(1, dLen), 0, 1));
             item('demolition', '沿线拆迁 ' + gr.lbl, dm.cost, x.s.id);
             res.demolitions.push.apply(res.demolitions, dm.cells);
           }
-        } else if (Math.abs(extra) > 1) {
-          res.changes.mod.push('调整线形 ' + gr.lbl + '（' + (extra >= 0 ? '+' : '') + Math.round(extra) + ' m，小范围调整免费）');
+        } else if (Math.abs(step) > 1) {
+          res.changes.mod.push('调整线形 ' + gr.lbl + '（' + (step >= 0 ? '+' : '') + Math.round(step) + ' m' + (Math.abs(extra - step) > 1 ? '，自上次付费累计 ' + (extra >= 0 ? '+' : '') + Math.round(extra) + ' m' : '') + '，累计不超过 ' + C.freeLengthM + ' m 免费）');
+        } else if (gr.changed && !gr.retyped) {
+          res.changes.mod.push('调整线形 ' + gr.lbl + '（长度基本不变，免费）');
         }
       }
+      for (const x of gr.segs) res.paidLen[x.s.id] = charged ? x.g.lenM : basePaid * x.g.lenM / Math.max(1, dLen);
     });
     for (const id in off.segments) {
       if (draft.segments[id] || usedBase.has(id)) continue;

@@ -8,7 +8,7 @@
     light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
     dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
   };
-  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['finance', '财政', 'wallet'], ['milestones', '里程碑', 'flag']];
+  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['finance', '财政', 'wallet'], ['milestones', '城市纪事', 'book']];
   let ui = null, tab = 'overview', range = 'all', isOpen = false, charts = [], body = null, sig = '';
 
   function pal() { return PALETTE[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']; }
@@ -275,7 +275,7 @@
 
   // 线路与车站客流排名（概览、交通页共用）
   function lineItems(g) {
-    const mnet = g.model.net, sd = g.model.stDaily;
+    const mnet = g.model.net, sd = g.model.dailyStale ? null : g.model.stDaily;
     if (!mnet || !sd || !mnet.C.routes.length) return [];
     const byLine = new Map();
     mnet.C.routes.forEach(function (rt, i) {
@@ -285,7 +285,7 @@
     return Array.from(byLine.values()).sort(function (a, b) { return b.v - a.v; }).map(function (o) { return { name: o.name, v: o.v, color: o.color }; });
   }
   function stationItems(g) {
-    const mnet = g.model.net, sd = g.model.stDaily, P = pal();
+    const mnet = g.model.net, sd = g.model.dailyStale ? null : g.model.stDaily, P = pal();
     if (!mnet || !sd) return [];
     const C = mnet.C, st = [];
     for (let k = 0; k < C.stations.length; k++) st.push({ k: k, v: (sd.inn[k] || 0) + (sd.out[k] || 0) + (sd.xfer[k] || 0) });
@@ -344,88 +344,252 @@
       lineChart({ title: '收入与支出', sub: (E.ledger.length > 36 ? '按年' : '按月') + '合计：收入 = 拨款 + 票款 + 奖励；支出 = 建设 + 运营', icon: 'wallet', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }), series: [{ name: '收入', color: P[2], vals: rows.map(function (o) { return inc(o.r); }) }, { name: '支出', color: P[1], vals: rows.map(function (o) { return exp(o.r); }) }], fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, empty: '尚无完整月份的记录。' }));
     el.appendChild(cg);
   }
-  // ---------- 里程碑：城市发展与地铁建设的关键节点（时间线 + 下一个目标） ----------
-  let msFilter = 'all';
+  // ---------- 城市纪事：里程碑书页（文字 + 简笔画）、翻页与时间轴 ----------
+  let msFilter = 'all', msAt = null, msFlip = null;
+  // 简笔画的笔触：轻微抖动的墨线（SVG 滤镜，全局一份）
+  function ensureSketchDefs() {
+    if (document.getElementById('sk-defs')) return;
+    const d = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    d.id = 'sk-defs'; d.setAttribute('width', '0'); d.setAttribute('height', '0'); d.setAttribute('aria-hidden', 'true');
+    d.style.position = 'absolute';
+    d.innerHTML = '<filter id="skf" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="2.2"/></filter>';
+    document.body.appendChild(d);
+  }
+  // 简笔画（200×130）：墨线为当前文字色，.w 为类别色淡彩，.c 为类别色线条，.wf 为纸色填充
+  const WAVES = function (y) { let s = 'M12 ' + y; for (let x = 12; x < 186; x += 24) s += 'c4-4 8-4 12 0s8 4 12 0'; return s; };
+  const SK = {
+    city: '<circle class="w" cx="146" cy="56" r="22"/><path d="M146 24v-7M168 36l5-5M124 36l-5-5M178 56h7M107 56h7"/><path d="M18 110h164"/><path d="M28 110V72h16v38M44 110V58h18v52M62 110V84h12v26M86 110V64h18v46M104 110V78h12v32M122 110V52h16v58M138 110V88h14v22M160 110V74h16v36"/><path d="M50 66h6M50 76h6M50 86h6M128 62h4M128 72h4M128 82h4M92 74h6M92 84h6"/>',
+    train: '<path d="M22 120V68a78 56 0 0 1 156 0v52"/><rect class="w" x="66" y="40" width="68" height="64" rx="12"/><rect x="66" y="40" width="68" height="64" rx="12"/><rect x="76" y="50" width="48" height="22" rx="4"/><path d="M100 50v22M86 34h28"/><circle cx="81" cy="88" r="4"/><circle cx="119" cy="88" r="4"/><path d="M78 104l-16 16M122 104l16 16M58 120h84"/>',
+    xfer: '<path class="c" d="M14 40C70 40 120 92 186 92" stroke-width="7"/><path d="M14 94C70 94 120 40 186 40" stroke-width="7" opacity=".45"/><circle class="wf" cx="100" cy="66" r="16"/><path d="M92 62h15l-4-4M108 71H93l4 4"/>',
+    cross: '<path class="w" d="M10 96h180v26H10z"/><path d="' + WAVES(106) + '"/><path d="M10 74h180"/><path d="M30 74c20-34 50-34 70 0c20-34 50-34 70 0"/><path d="M30 74v24M100 74v24M170 74v24"/><rect class="w" x="54" y="57" width="72" height="14" rx="5"/><rect x="54" y="57" width="72" height="14" rx="5"/><path d="M64 63h8M80 63h8M96 63h8M112 63h8"/>',
+    loop: '<ellipse class="c" cx="100" cy="66" rx="74" ry="42" stroke-width="6"/><rect x="70" y="52" width="16" height="30" rx="2"/><rect x="92" y="42" width="16" height="40" rx="2"/><rect x="114" y="56" width="16" height="26" rx="2"/><circle class="wf" cx="26" cy="66" r="6"/><circle class="wf" cx="174" cy="66" r="6"/><circle class="wf" cx="100" cy="24" r="6"/><circle class="wf" cx="100" cy="108" r="6"/>',
+    km: '<path d="M58 124L94 28M142 124L106 28"/><path d="M65 108h70M71 91h58M77 76h46M82 63h36M87 51h26M91 41h18"/><path d="M160 116V72"/><rect class="w" x="146" y="54" width="32" height="18" rx="3"/><rect x="146" y="54" width="32" height="18" rx="3"/><path d="M154 63h16"/><path d="M18 116h40M142 116h40"/>',
+    network: '<path class="c" d="M18 100L70 60h60l52-36" stroke-width="5"/><path d="M28 22l42 38 40 40 72 4" stroke-width="5" opacity=".5"/><path d="M130 60l22 50" stroke-width="5" opacity=".3"/><circle class="wf" cx="70" cy="60" r="8"/><circle class="wf" cx="130" cy="60" r="7"/><circle class="wf" cx="110" cy="100" r="6"/><circle class="wf" cx="18" cy="100" r="5"/><circle class="wf" cx="182" cy="24" r="5"/>',
+    people: '<path d="M18 114h164"/><path d="M24 114V80h14v34M38 114V66h16v48M138 114V72h16v42M154 114V86h12v28M166 114V62h14v52" opacity=".5"/><circle cx="78" cy="60" r="8"/><path d="M78 68v24M78 76l-12 9M78 76l12 9M78 92l-9 18M78 92l9 18"/><circle class="w" cx="104" cy="52" r="9"/><circle cx="104" cy="52" r="9"/><path d="M104 61v30M104 70l-13 11M104 70l13 11M104 91l-10 19M104 91l10 19"/><circle cx="128" cy="64" r="7"/><path d="M128 71v21M128 78l-10 8M128 78l10 8M128 92l-8 18M128 92l8 18"/>',
+    ride: '<path d="M14 100h172"/><rect class="w" x="22" y="30" width="156" height="52" rx="10"/><rect x="22" y="30" width="156" height="52" rx="10"/><path d="M36 42h22v20H36zM68 42h22v20H68zM110 42h22v20h-22zM142 42h22v20h-22z"/><path d="M99 36v42M22 72h156"/><circle cx="56" cy="106" r="4"/><path d="M56 110v12"/><circle cx="96" cy="104" r="4"/><path d="M96 108v14"/><circle cx="140" cy="106" r="4"/><path d="M140 110v12"/>',
+    pie: '<circle cx="78" cy="66" r="40"/><path class="w" d="M78 66V26a40 40 0 0 1 38 28z"/><path d="M78 66V26M78 66l38-12"/><circle cx="150" cy="44" r="10"/><path d="M150 54v32M150 64l-16 13M150 64l16 13M150 86l-12 24M150 86l12 24"/>',
+    pin: '<circle cx="100" cy="64" r="54" stroke-dasharray="5 7" opacity=".5"/><circle class="w" cx="100" cy="64" r="34"/><circle cx="100" cy="64" r="34" opacity=".6"/><path class="wf" d="M100 92c-14-16-22-26-22-38a22 22 0 0 1 44 0c0 12-8 22-22 38z"/><circle cx="100" cy="54" r="8"/>',
+    tower: '<path d="M100 8v18M85 120L100 26l15 94M74 120h52M91 70h18M88 92h24M95 48h10"/><path class="w" d="M89 60h22v10H89z"/><path d="M28 120V92h20v28M152 120V84h22v36M16 120h168"/>',
+    stadium: '<ellipse class="w" cx="100" cy="80" rx="78" ry="30"/><ellipse cx="100" cy="80" rx="78" ry="30"/><ellipse cx="100" cy="76" rx="52" ry="16"/><path d="M22 80v14c0 16 35 28 78 28s78-12 78-28V80"/><path d="M40 54V36M160 54V36M34 36h12M154 36h12"/>',
+    station: '<path d="M18 112h164"/><rect class="w" x="34" y="58" width="132" height="54"/><rect x="34" y="58" width="132" height="54"/><path d="M24 60l76-36 76 36"/><circle cx="100" cy="44" r="9"/><path d="M100 39v5l3 2"/><path d="M54 78h18v34M90 78h20v34M128 78h18v34"/>',
+    reclaim: '<path class="w" d="M66 84c12-16 42-24 72-20 20 3 36 10 46 20v20H66z"/><path d="M66 84c12-16 42-24 72-20 20 3 36 10 46 20"/><path d="' + WAVES(98) + '"/><path d="' + WAVES(114) + '"/><path d="M120 66V18M120 18h48M120 30l12-12M162 18v20M158 38h8M112 66h16"/>',
+    news: '<rect class="w" x="40" y="20" width="120" height="94" rx="4"/><rect x="40" y="20" width="120" height="94" rx="4"/><path d="M52 34h96" stroke-width="5"/><path d="M52 50h42M52 60h42M52 70h42M52 82h96M52 92h96M52 102h68"/><rect x="104" y="46" width="44" height="28" rx="2"/><path d="M108 70l10-11 8 7 6-5 12 9"/>',
+    road: '<path d="M18 100h164"/><path d="M78 100l20-60M122 100l-20-60"/><path d="M100 92v-7M100 78v-7M100 64v-6M100 52v-4"/><circle class="w" cx="152" cy="40" r="14"/><path d="M30 100c10-14 22-18 34-12M140 100c8-10 20-12 30-6" opacity=".5"/>',
+  };
+  function sketchKind(r) {
+    const id = r.id || '';
+    if (id === 'start') return 'city';
+    if (id === 'inherit' || id === 'first-line') return 'train';
+    if (id === 'first-xfer') return 'xfer';
+    if (id === 'first-cross') return 'cross';
+    if (id === 'first-loop') return 'loop';
+    if (id === 'blank') return 'road';
+    const pre = id.split('-')[0];
+    if (pre === 'km') return 'km';
+    if (pre === 'lines') return 'network';
+    if (pre === 'pop') return 'people';
+    if (pre === 'ride') return 'ride';
+    if (pre === 'share') return 'pie';
+    if (pre === 'cover') return 'pin';
+    if (pre === 'reclaim') return 'reclaim';
+    const t = r.title || '';
+    if (pre === 'lm') {
+      const lm = (CM.DATA.landmarks || []).find(function (l) { return 'lm-' + (l.id || '') === id; });
+      const k = lm ? lm.kind : '';
+      return k === 'stadium' ? 'stadium' : (k === 'rail' ? 'station' : 'tower');
+    }
+    if (/奥运|亚运|竞技|体育/.test(t)) return 'stadium';
+    if (/站|新干线|铁路/.test(t)) return 'station';
+    if (/塔|大厦|落成/.test(t)) return 'tower';
+    if (/填海|海港|隧道/.test(t)) return 'cross';
+    return 'news';
+  }
+  function sketch(r) { return '<svg class="sk" viewBox="0 0 200 130" aria-hidden="true"><g filter="url(#skf)">' + SK[sketchKind(r)] + '</g></svg>'; }
+
   function pageMilestones(g, el) {
     const MS = CM.Milestones; if (!MS) return;
-    const st = MS.state(g), list = st.list.slice(), CAT = MS.CAT;
-    const counts = {}; for (const r of list) counts[r.cat] = (counts[r.cat] || 0) + 1;
-    const real = list.filter(function (r) { return r.id !== 'start'; });
-    // 概览：数量与分类
-    el.appendChild(h('div', { class: 'ms-hero' },
-      h('div', { class: 'ms-medal' }, CM.icon('trophy', 30)),
-      h('div', { class: 'grow' }, h('div', { class: 'ms-count' }, h('b', null, String(real.length)), ' 个里程碑'),
-        h('div', { class: 'ms-sub' }, real.length ? '最近：' + real[real.length - 1].title + '（' + real[real.length - 1].y + '年' + real[real.length - 1].m + '月）' : '建成第一条地铁、人口与客流跨越关口时，都会记录在这里。')),
-      h('div', { class: 'ms-cats' }, Object.keys(CAT).map(function (k) { return h('span', null, h('i', { style: { background: CAT[k].color } }), CAT[k].name, h('b', null, String(counts[k] || 0))); }))));
-    // 下一个目标
-    const nx = MS.next(g);
-    if (nx.length) {
-      const row = h('div', { class: 'ms-next' });
-      for (const o of nx) {
-        const f = U.clamp(o.cur / o.goal, 0, 1);
-        row.appendChild(h('div', { class: 'ms-goal' }, h('div', { class: 'ms-gh' }, h('span', { class: 'ms-gi', style: { color: o.color } }, CM.icon(o.icon, 16)), h('span', null, '下一个 · ' + o.label)),
-          h('div', { class: 'ms-gt' }, o.text), h('div', { class: 'ms-bar' }, h('i', { style: { width: (f * 100).toFixed(1) + '%', background: o.color } }))));
-      }
-      el.appendChild(h('div', { class: 'ms-sec' }, '下一个目标'));
-      el.appendChild(row);
-    }
-    // 筛选
-    const chips = h('div', { class: 'ms-chips' }, [['all', '全部']].concat(Object.keys(CAT).map(function (k) { return [k, CAT[k].name]; })).map(function (o) {
-      return h('button', { class: msFilter === o[0] ? 'on' : '', 'data-silent': '1', onclick: function () { msFilter = o[0]; CM.Sound && CM.Sound.play('soft'); render(); } }, o[0] !== 'all' ? h('i', { style: { background: CAT[o[0]].color } }) : null, o[1]);
+    ensureSketchDefs();
+    const CAT = MS.CAT, all = MS.state(g).list.slice();
+    const list = all.filter(function (r) { return msFilter === 'all' || r.cat === msFilter; });
+    const per = window.innerWidth < 820 ? 1 : 2;
+    const real = all.filter(function (r) { return r.id !== 'start'; });
+    const counts = {}; for (const r of all) counts[r.cat] = (counts[r.cat] || 0) + 1;
+    const lastSpread = function () { return Math.max(0, Math.floor((list.length - 1) / per) * per); };
+    if (msAt == null || msAt >= list.length) msAt = lastSpread();
+    msAt = Math.floor(msAt / per) * per;
+    // 顶部：书名、数量与分类筛选
+    const chips = h('div', { class: 'fchips' }, [['all', '全部', null]].concat(Object.keys(CAT).map(function (k) { return [k, CAT[k].name, CAT[k].color]; })).map(function (o) {
+      return h('button', { class: 'fchip' + (msFilter === o[0] ? ' on' : ''), 'data-silent': '1', onclick: function () { if (msFilter === o[0]) return; msFilter = o[0]; msAt = null; CM.Sound && CM.Sound.play('soft'); refresh(true); } },
+        o[2] ? h('i', { style: { background: o[2] } }) : null, o[1], h('small', null, String(o[0] === 'all' ? all.length : (counts[o[0]] || 0))));
     }));
-    el.appendChild(h('div', { class: 'ms-sec row between' }, h('span', null, '时间线'), chips));
-    // 时间线：按年分组，最新在上
-    const shown = list.filter(function (r) { return msFilter === 'all' || r.cat === msFilter; }).reverse();
-    if (!shown.length) { el.appendChild(h('div', { class: 'empty-chart' }, '这一类还没有里程碑。')); return; }
-    const tl = h('div', { class: 'ms-tl' });
-    let year = null, grp = null, col = null;
-    for (const r of shown) {
-      if (r.y !== year) { year = r.y; col = h('div', { class: 'ms-items' }); grp = h('div', { class: 'ms-year' }, h('div', { class: 'ms-yl' }, String(year)), col); tl.appendChild(grp); }
+    el.appendChild(h('div', { class: 'ms-head2' },
+      h('div', { class: 'ms-ttl' }, h('span', { class: 'badge b-gold' }, CM.icon('book')),
+        h('div', null, h('h3', null, (CM.DATA.city || '城市') + '纪事'), h('small', null, real.length ? real.length + ' 个里程碑 · 最近：' + real[real.length - 1].title : '首条地铁开通、人口与客流跨越关口时，都会写进这本纪事'))),
+      chips));
+    if (!list.length) { el.appendChild(h('div', { class: 'empty-chart' }, '这一类还没有里程碑。')); return; }
+
+    // 书：每页一个里程碑（宽屏两页一开），左右翻页
+    const book = h('div', { class: 'book' + (per === 1 ? ' single' : '') });
+    const prev = h('button', { class: 'book-nav', 'data-tip': '上一页', 'data-key': '←', 'aria-label': '上一页', onclick: function () { flip(-1); } }, CM.icon('arrowL'));
+    const next = h('button', { class: 'book-nav', 'data-tip': '下一页', 'data-key': '→', 'aria-label': '下一页', onclick: function () { flip(1); } }, CM.icon('arrowR'));
+    const tag = function (r) { return r.tag === '史实' ? h('span', { class: 'tag hist' }, '史实') : (r.tag === '模拟' ? h('span', { class: 'tag sim' }, '模拟') : null); };
+    const pageEl = function (r, i) {
       const c = CAT[r.cat] || CAT.history;
-      col.appendChild(h('div', { class: 'ms-item' + (r.big ? ' big' : '') + (r.id === 'start' ? ' origin' : ''), style: { '--mc': c.color } },
-        h('span', { class: 'ms-dot' }, CM.icon(r.icon || 'flag', r.big ? 18 : 15)),
-        h('div', { class: 'ms-card' },
-          h('div', { class: 'ms-t' }, r.title, r.tag && r.tag !== '史实' ? h('span', { class: 'tag ' + (r.tag === '模拟' ? 'sim' : (r.tag === '估算' ? 'est' : '')) }, r.tag) : (r.tag === '史实' ? h('span', { class: 'tag hist' }, '史实') : null)),
-          r.desc ? h('div', { class: 'ms-d' }, r.desc) : null,
-          h('div', { class: 'ms-w' }, r.m + '月' + (r.d && r.d > 1 ? r.d + '日' : ''), ' · ', c.name))));
-    }
-    el.appendChild(tl);
+      return h('article', { class: 'pg' + (r.big ? ' big' : ''), style: { '--mc': c.color } },
+        h('div', { class: 'pg-top' }, h('span', { class: 'pg-date' }, r.y + ' 年 ' + r.m + ' 月'), h('span', { class: 'pg-cat' }, h('i'), c.name)),
+        h('div', { class: 'pg-art', html: sketch(r) }),
+        h('h3', { class: 'pg-title' }, r.title),
+        r.desc ? h('p', { class: 'pg-desc' }, r.desc) : null,
+        h('div', { class: 'pg-foot' }, tag(r), h('span', { class: 'grow' }), h('span', { class: 'pg-no' }, '— ' + (i + 1) + ' —')));
+    };
+    const blankEl = function () {
+      const nx = MS.next(g);
+      return h('article', { class: 'pg blank', style: { '--mc': CAT.metro.color } },
+        h('div', { class: 'pg-top' }, h('span', { class: 'pg-date' }, '下一页'), h('span', { class: 'pg-cat' }, h('i'), '未完待续')),
+        h('div', { class: 'pg-art', html: sketch({ id: 'blank' }) }),
+        h('h3', { class: 'pg-title' }, '未完待续'),
+        h('p', { class: 'pg-desc' }, '新的线路、人口与客流关口，都会写进这本纪事。'),
+        nx.length ? h('div', { class: 'pg-goals' }, nx.slice(0, 3).map(function (o) {
+          const f = U.clamp(o.cur / o.goal, 0, 1);
+          return h('div', null, h('span', null, '下一个 · ' + o.label), h('b', null, o.text), h('div', { class: 'ms-bar' }, h('i', { style: { width: (f * 100).toFixed(1) + '%', background: o.color } })));
+        })) : null);
+    };
+    const drawBook = function (dir) {
+      const sp = h('div', { class: 'spread' + (dir > 0 ? ' turn-next' : (dir < 0 ? ' turn-prev' : '')) });
+      for (let k = 0; k < per; k++) { const i = msAt + k; sp.appendChild(i < list.length ? pageEl(list[i], i) : blankEl()); }
+      book.replaceChildren(sp);
+      prev.disabled = msAt <= 0; next.disabled = msAt + per >= list.length;
+    };
+    // 时间轴：每个里程碑一个点（等间距），年份变化处标年份；当前一开的点高亮，点击跳到对应页
+    const track = h('div', { class: 'tl-track' });
+    const dots = [];
+    let py = null;
+    list.forEach(function (r, i) {
+      const c = CAT[r.cat] || CAT.history;
+      const b = h('button', { class: 'tl-dot' + (r.big ? ' big' : ''), role: 'tab', 'data-silent': '1', 'data-tip': r.y + '年' + r.m + '月 · ' + r.title, style: { '--mc': c.color }, onclick: function () { go2(Math.floor(i / per) * per); } }, h('i'));
+      dots.push(b);
+      track.appendChild(h('div', { class: 'tl-it' + (r.y !== py ? ' yr' : '') }, h('span', { class: 'tl-y' }, r.y !== py ? String(r.y) : ''), b));
+      py = r.y;
+    });
+    const tlBox = h('div', { class: 'tl-box' }, track);
+    const syncTl = function (smooth) {
+      dots.forEach(function (d, i) { d.classList.toggle('on', i >= msAt && i < msAt + per); });
+      const d = dots[msAt]; if (!d) return;
+      const x = d.parentNode.offsetLeft - tlBox.clientWidth / 2 + 20;
+      if (tlBox.scrollTo) tlBox.scrollTo({ left: Math.max(0, x), behavior: smooth ? 'smooth' : 'auto' }); else tlBox.scrollLeft = x;
+    };
+    const go2 = function (at) {
+      at = U.clamp(at, 0, lastSpread());
+      if (at === msAt) return;
+      const dir = at > msAt ? 1 : -1;
+      msAt = at; CM.Sound && CM.Sound.play('swoosh');
+      drawBook(dir); syncTl(true);
+    };
+    const flip = function (dir) { go2(msAt + dir * per); };
+    msFlip = flip;
+    // 拖动 / 轻扫翻页
+    let sx = null;
+    book.addEventListener('pointerdown', function (e) { sx = e.clientX; });
+    book.addEventListener('pointerup', function (e) { if (sx == null) return; const dx = e.clientX - sx; sx = null; if (Math.abs(dx) > 50) flip(dx < 0 ? 1 : -1); });
+    el.appendChild(h('div', { class: 'book-area' }, prev, book, next));
+    el.appendChild(h('div', { class: 'tl-wrap' }, h('div', { class: 'tl-h' }, CM.icon('calYear', 15), '时间轴', h('span', { class: 'tiny muted' }, '　点击跳到对应页；← → 或左右轻扫翻页')), tlBox));
+    drawBook(0);
+    requestAnimationFrame(function () { syncTl(false); });
   }
   const PAGES = { overview: pageOverview, traffic: pageTraffic, finance: pageFinance, milestones: pageMilestones };
+  const NOTES = {
+    milestones: '只记录关键节点：地铁建设的「第一次」与里程关口、客流与分担率关口、人口关口、本地图的重大历史事件、地标落成与填海成陆。',
+    _: '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。',
+  };
 
-  // ---------- 外框 ----------
-  function go(t) { if (t === tab) return; tab = t; CM.Sound && CM.Sound.play('soft'); render(); }
-  function render() {
-    const g = game(); if (!g || !ui) return;
+  // ---------- 外框：窗口与标签只建一次；切换标签或刷新数据只替换内容区（不重播入场动画，图表同步绘制，不闪动） ----------
+  let win = null, tabBtns = {}, tabInd = null;
+  function build() {
     const root = ui.statsEl;
-    const keepScroll = body && body.dataset.tab === tab ? body.scrollTop : 0;
     root.innerHTML = '';
-    charts = [];
-    if (!PAGES[tab] || (tab === 'finance' && g.econ.isFree())) tab = 'overview';
-    const tabs = h('div', { class: 'stats-tabs' }, TABS.filter(function (t) { return t[0] !== 'finance' || !g.econ.isFree(); }).map(function (t) { return h('button', { class: t[0] === tab ? 'on' : '', 'data-silent': '1', onclick: function () { go(t[0]); } }, CM.icon(t[2]), t[1]); }));
+    tabBtns = {};
+    const tabs = h('div', { class: 'tabs', role: 'tablist' });
+    tabInd = h('span', { class: 'tabs-ind' });
+    tabs.appendChild(tabInd);
+    for (const t of TABS) {
+      const b = h('button', { role: 'tab', 'data-silent': '1', onclick: function () { go(t[0]); } }, CM.icon(t[2]), h('span', null, t[1]));
+      tabBtns[t[0]] = b; tabs.appendChild(b);
+    }
     const head = h('div', { class: 'stats-head' }, h('span', { class: 'badge b-blue' }, CM.icon('chart')), h('h2', null, '城市统计'), tabs, h('div', { class: 'grow' }),
       h('button', { class: 'hbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { Stats.close(); } }, CM.icon('close')));
-    body = h('div', { class: 'stats-body' }); body.dataset.tab = tab;
-    const g2 = g;
-    PAGES[tab](g2, body);
-    body.appendChild(h('div', { class: 'tiny muted', style: { marginTop: '14px' } }, tab === 'milestones' ? '只记录关键节点：地铁建设的「第一次」与里程关口、客流与分担率关口、人口关口、本地图的重大历史事件与地标落成。' : '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。'));
-    const win = h('div', { class: 'stats-win', onclick: function (e) { e.stopPropagation(); } }, head, body);
+    body = h('div', { class: 'stats-body' });
+    win = h('div', { class: 'stats-win', onclick: function (e) { e.stopPropagation(); } }, head, body);
     root.appendChild(win);
     root.onclick = function () { Stats.close(); };
-    requestAnimationFrame(function () { for (const d of charts) d(); if (keepScroll) body.scrollTop = keepScroll; });
+  }
+  function syncTabs(g, instant) {
+    const free = g.econ.isFree();
+    if (tab === 'finance' && free) tab = 'overview';
+    for (const k in tabBtns) {
+      tabBtns[k].style.display = k === 'finance' && free ? 'none' : '';
+      tabBtns[k].classList.toggle('on', k === tab); tabBtns[k].setAttribute('aria-selected', k === tab ? 'true' : 'false');
+    }
+    const b = tabBtns[tab];
+    if (!b || !b.offsetWidth) return;
+    if (instant) tabInd.style.transition = 'none';
+    tabInd.style.width = b.offsetWidth + 'px'; tabInd.style.transform = 'translateX(' + b.offsetLeft + 'px)';
+    tabInd.classList.add('ready');
+    if (instant) { void tabInd.offsetWidth; tabInd.style.transition = ''; }
+  }
+  function renderBody(g, swap, keepScroll) {
+    charts = [];
+    if (!PAGES[tab]) tab = 'overview';
+    const page = h('div', { class: 'stats-page' + (swap ? ' swap-in' : '') });
+    PAGES[tab](g, page);
+    page.appendChild(h('div', { class: 'tiny muted stats-note' }, NOTES[tab] || NOTES._));
+    const st = keepScroll ? body.scrollTop : 0;
+    body.replaceChildren(page);
+    body.dataset.tab = tab;
+    redrawCharts();
+    body.scrollTop = st;
     sig = signature(g);
   }
-  function signature(g) { return g.history.length + '|' + g.econ.ledger.length + '|' + g.netVersion + '|' + (g.model.stDaily ? 1 : 0) + '|' + document.documentElement.dataset.theme + '|' + (g.milestones ? g.milestones.list.length : 0); }
+  function render() {
+    const g = game(); if (!g || !ui) return;
+    if (!win || !ui.statsEl.contains(win)) build();
+    syncTabs(g, true);
+    renderBody(g, false, true);
+  }
+  function go(t) {
+    if (t === tab) return;
+    const g = game(); if (!g) return;
+    tab = t; CM.Sound && CM.Sound.play('soft');
+    syncTabs(g, false);
+    renderBody(g, true, false);
+  }
+  // 需要重画的条件：图表最后一点是“当前”值（标注到日）；纪事页只随里程碑与主题变化
+  function signature(g) {
+    const th = document.documentElement.dataset.theme, n = g.milestones ? g.milestones.list.length : 0;
+    if (tab === 'milestones') return 'ms|' + n + '|' + th + '|' + (window.innerWidth < 820 ? 1 : 2);
+    return g.clock.y + '-' + g.clock.m + '-' + g.clock.d + '|' + (g.model.dailyStale ? 0 : 1) + '|' + g.history.length + '|' + g.econ.ledger.length + '|' + g.netVersion + '|' + th + '|' + n;
+  }
   function redrawCharts() { for (const d of charts) d(); }
   let rT = null;
-  window.addEventListener('resize', function () { if (!isOpen) return; clearTimeout(rT); rT = setTimeout(redrawCharts, 120); });
+  window.addEventListener('resize', function () {
+    if (!isOpen) return;
+    clearTimeout(rT);
+    rT = setTimeout(function () { const g = game(); if (!g) return; if (signature(g) !== sig) renderBody(g, false, true); else redrawCharts(); syncTabs(g, true); }, 120);
+  });
+  // 纪事页：← → 翻页（统计面板打开时优先于地图平移）
+  window.addEventListener('keydown', function (e) {
+    if (!isOpen || tab !== 'milestones' || !msFlip || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    e.preventDefault(); e.stopPropagation();
+    msFlip(e.key === 'ArrowRight' ? 1 : -1);
+  }, true);
+  function refresh(swap) { const g = game(); if (g && isOpen) renderBody(g, !!swap, false); }
 
   const Stats = {
-    open: function (u, t) { ui = u; if (t) tab = t; isOpen = true; ui.statsEl.classList.remove('hidden'); render(); },
+    open: function (u, t) { ui = u; if (t) { tab = t; if (t === 'milestones') msAt = null; } isOpen = true; ui.statsEl.classList.remove('hidden'); build(); render(); },
     close: function () { if (!isOpen) return; isOpen = false; if (ui) { ui.statsEl.classList.add('hidden'); CM.Sound && CM.Sound.play('close'); } },
     isOpen: function () { return isOpen; },
     redraw: function () { if (isOpen) render(); },
-    tick: function () { const g = game(); if (!isOpen || !g) return; if (signature(g) !== sig) render(); },
+    tick: function () { const g = game(); if (!isOpen || !g) return; if (signature(g) !== sig) renderBody(g, false, true); },
   };
   CM.Stats = Stats;
 })(window.CM);
