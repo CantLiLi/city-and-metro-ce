@@ -202,12 +202,24 @@
     this.econ.openMonth(y, m);
     this.tasks.monthly(this).forEach((o) => this.logTask(o));
     this.econ.payGrant(y, m);
+    this.econ.serviceDebt(y, m);   // 债券：到期利息与本金、逾期处理（每月一次，不会重复结算）
     this.recordHistory();
     if (CM.Milestones) CM.Milestones.onMonth(this);
     if (this.draft) { this.draft.evalVer = -1; this.invalidatePrediction('城市状态已更新（' + y + '年' + m + '月），请重新计算预测'); }
     this.emit('month', { y: y, m: m });
   };
 
+  // ---------------- 债券融资（经营挑战） ----------------
+  Game.prototype.issueBond = function (kind, term, amount) {
+    if (this.jumping || this.pending) return { ok: false, error: '正在结算，请稍候再发行债券' };
+    const r = this.econ.issueBond(kind, term, amount, { y: this.clock.y, m: this.clock.m, d: this.clock.d });
+    if (!r.ok) return r;
+    const b = r.bond, D0 = CM.Economy.BOND_DEF[kind];
+    this.rev++;
+    this.logEvent({ tag: '经营', title: '发行' + D0.name + ' ' + U.fmtMoney(b.amount), desc: term + ' 年期，年利率 ' + (b.rate * 100).toFixed(2) + '%，每年付息、' + (b.issued[0] + term) + '年' + b.issued[1] + '月到期还本；资金进入建设专项资金，只能用于地铁建设及改扩建。' });
+    this.emit('finance');
+    return r;
+  };
   Game.prototype.recordHistory = function () {
     const d = this.model.daily || {};
     const tot = this.city.totals();
@@ -215,6 +227,7 @@
     this.history.push({
       y: this.clock.y, m: this.clock.m, pop: tot.pop, jobs: tot.jobs, share: d.metroShare || 0, cong: d.cong || 1, commute: d.commute || 0,
       riders: d.metro || 0, sat: this.econ.sat, funds: this.econ.isFree() ? null : this.econ.funds, coverage: d.coverage || 0,
+      debt: this.econ.isFree() ? null : this.econ.debtTotal(), capex: this.econ.isFree() ? null : this.econ.capex,
       fare: last ? last.fare : 0, ops: last ? last.ops : 0, grant: last ? last.grant : 0, stations: this.compiled.stations.length,
       trips: d.trips || 0, crowd: d.crowdShare || 0,
     });
@@ -340,7 +353,7 @@
     if (!ev) return { ok: false, reason: '没有草案' };
     if (!ev.changed) return { ok: false, reason: '草案没有变化' };
     if (ev.conflicts.length) return { ok: false, reason: '存在 ' + ev.conflicts.length + ' 处冲突，需先解决' };
-    if (!this.econ.canAfford(ev.total)) return { ok: false, reason: '资金不足：需要 ' + U.fmtMoney(ev.total) + '，当前 ' + U.fmtMoney(this.econ.funds) };
+    if (!this.econ.canAffordBuild(ev.total)) return { ok: false, reason: '资金不足：需要 ' + U.fmtMoney(ev.total) + '，当前一般资金 ' + U.fmtMoney(this.econ.funds) + (this.econ.capex > 0.5 ? ' + 建设专项资金 ' + U.fmtMoney(this.econ.capex) : '') };
     if (this.jumping || this.pending) return { ok: false, reason: '正在结算，请稍候' };
     return { ok: true };
   };
@@ -349,7 +362,8 @@
     if (!can.ok) return can;
     const ev = this.draftEval(), d = this.draft;
     // 扣费（按类别记入当月收支）
-    for (const k of ['construction', 'demolition', 'upgrade', 'relocation']) this.econ.spend(k, ev.byKind[k]);
+    // 建设费用先从建设专项资金（债券募集）支付，不足部分用一般资金
+    this.econ.spendBuild(ev.byKind, '地铁建设（' + ev.changes.add.length + ' 项新建、' + ev.changes.mod.length + ' 项修改）', { y: this.clock.y, m: this.clock.m, d: this.clock.d });
     for (const dm of ev.demolitions) this.city.demolish(dm.c, dm.frac);
     for (const id in d.net.stations) if (!this.net.stations[id]) d.net.stations[id].built = [this.clock.y, this.clock.m];
     // 新建、改建与搬迁后的位置成为新的“付费选址”，之后的免费微调以此为基准

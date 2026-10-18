@@ -82,8 +82,61 @@
     this.th = TH; this.themeName = 'light';
     this.mapLabelsOn = true; this.agentsOn = true;
     this.fx = [];
+    this.detail = { tier: 0, ema: 8, busy: 0, calm: 0 };
+    this.textWidths = new Map();
+    this.roadLabelGeom = new WeakMap();
+    this.segScreens = new WeakMap();
+    this.heatLayers = new Map();
+    this.geoPaths = new WeakMap();
   }
   CM.Renderer = Renderer;
+
+  Renderer.prototype.noteFrameTime = function (ms) { this.lastFrameMs = ms; };
+  Renderer.prototype.adaptDetail = function (dt) {
+    const d = this.detail, elapsed = Math.min(0.1, dt || 1 / 60);
+    const work = this.lastFrameMs == null ? (this.lastRenderMs || 0) : this.lastFrameMs;
+    const missedFrame = dt > 1 / 45 ? dt * 1000 : 0;
+    const cost = Math.min(100, Math.max(work, missedFrame, this.cachePx > CFG.perf.cacheMaxPx ? 20 : 0));
+    d.ema += (cost - d.ema) * 0.12;
+    d.busy = d.ema > 18 ? d.busy + elapsed : Math.max(0, d.busy - elapsed * 2);
+    d.calm = d.ema < 12 ? d.calm + elapsed : 0;
+    if (d.busy > 0.35 && d.tier < 2) { d.tier++; d.busy = 0; d.calm = 0; }
+    if (d.calm > 1.1 && d.tier > 0) { d.tier--; d.calm = 0; }
+    this.stats.detailTier = d.tier;
+  };
+  Renderer.prototype.textWidth = function (ctx, text) {
+    const key = ctx.font + '|' + text;
+    let width = this.textWidths.get(key);
+    if (width === undefined) {
+      width = ctx.measureText(text).width;
+      if (this.textWidths.size >= 2048) this.textWidths.clear();
+      this.textWidths.set(key, width);
+    }
+    return width;
+  };
+  Renderer.prototype.featurePath = function (feature, polygon) {
+    let p = this.geoPaths.get(feature);
+    if (!p) { p = new Path2D(); if (polygon) CM.Geo.tracePoly(p, feature); else CM.Geo.traceLine(p, feature.p); this.geoPaths.set(feature, p); }
+    return p;
+  };
+  Renderer.prototype.clearImages = function () {
+    this.cancelIsoJob();
+    for (const cache of [this.ground, this.iso]) { for (const e of cache.values()) e.cv.width = e.cv.height = 1; cache.clear(); }
+    this.cachePx = 0;
+  };
+  Renderer.prototype.cancelIsoJob = function () {
+    const job = this.isoJob;
+    if (job) { if (job.cv) job.cv.width = job.cv.height = 1; job.gen.return(); this.isoJob = null; }
+  };
+  Renderer.prototype.screenVisible = function (x, y, w, h, pad) {
+    pad = pad || 0;
+    return x + w >= -pad && y + h >= -pad && x <= this.w + pad && y <= this.h + pad;
+  };
+  Renderer.prototype.groundVisible = function (x, y, size) {
+    const M = this.M, z = this.z, ax = this.ox + (M[0] * x + M[1] * y) * z, ay = this.oy + (M[2] * x + M[3] * y) * z;
+    const dx = M[0] * size * z, ex = M[1] * size * z, dy = M[2] * size * z, ey = M[3] * size * z;
+    return this.screenVisible(ax + Math.min(0, dx) + Math.min(0, ex), ay + Math.min(0, dy) + Math.min(0, ey), Math.abs(dx) + Math.abs(ex), Math.abs(dy) + Math.abs(ey), 3);
+  };
 
   // ---------------- 氛围：边缘雾化与 2.5D 远处薄雾（按画面尺寸与主题缓存为一张图，每帧只贴图一次） ----------------
   Renderer.prototype.drawAtmosphere = function (ctx) {
@@ -195,7 +248,12 @@
 
   Renderer.prototype.setGame = function (g) {
     this.game = g;
-    this.ground.clear(); this.iso.clear(); this.cachePx = 0; this.overviewStale = true; this.heatKey = '';
+    this.clearImages(); this.overview = null; this.overviewJob = null; this.overviewStale = true; this.heat = null; this.heatKey = '';
+    this.heatLayers.clear(); this.segScreens = new WeakMap(); this.metroOrder = null;
+    this.roadLabelGeom = new WeakMap(); this.textWidths.clear(); this._cgBmp = null;
+    this.geoPaths = new WeakMap(); this.labelImage = null;
+    this._hd = null; this._hdCity = null; this._lmc = null; this._lmcCity = null;
+    this.lastFrameMs = null; this.detail = { tier: 0, ema: 8, busy: 0, calm: 0 };
     this.roadVer = g ? g.city.roadVersion : -1;
     // 换城市（含换地图）时清掉按城市版本号缓存的数据，避免不同城市的版本号恰好相同
     this.linkGrid = null; this.linkGridVer = -1; this._cgIdx = null; this._cgRuns = null; this._fa = null; this._fl = null; this._flKey = null;
@@ -205,7 +263,7 @@
   Renderer.prototype.setTheme = function (name) {
     TH = THEMES[name] || THEMES.light; GROUND = TH.ground; PAL = TH.pal;
     this.th = TH; this.themeName = name;
-    this.ground.clear(); this.iso.clear(); this.cachePx = 0; this.heatKey = '';
+    this.clearImages(); this.heatKey = ''; this._cgBmp = null;
     if (this.game) this.renderOverview(); else this.overviewStale = true;
   };
   Renderer.prototype.resize = function () {
@@ -299,6 +357,7 @@
       this.overviewStale = true;
     }
     if (!city.dirty.size) return;
+    this.cancelIsoJob();
     const keys = new Set(), ikeys = new Set(), self = this;
     city.dirty.forEach(function (c) {
       const i = c % city.W, j = (c / city.W) | 0;
@@ -325,9 +384,10 @@
     all.sort(function (a, b) { return a[0].used - b[0].used; });
     for (const it of all) {
       if (this.cachePx <= CFG.perf.cacheMaxPx * 0.8) break;
-      if (it[0].used >= this.frame - 2) continue;
+      if (it[0].used >= this.frame) continue;
       (it[2] === 'g' ? this.ground : this.iso).delete(it[1]);
       this.cachePx -= it[0].px;
+      it[0].cv.width = it[0].cv.height = 1;
     }
   };
   function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; }
@@ -436,16 +496,16 @@
     // 林地（真实范围）
     ctx.fillStyle = GROUND.wood;
     const wp = new Path2D();
-    for (const f of Geo.woods) if (inBox(f.bbox, 0.5)) Geo.tracePoly(wp, f);
+    for (const f of Geo.woods) if (inBox(f.bbox, 0.5)) wp.addPath(this.featurePath(f, true));
     ctx.fill(wp, 'evenodd');
     // 风景区山体：雾蓝绿色
     // 逐个填充：风景区内常有嵌套的子景区，合在一条路径里用奇偶规则会互相抵消成空洞
     ctx.fillStyle = GROUND.hill[0]; ctx.globalAlpha = 0.85;
-    for (const f of Geo.reserves) if (inBox(f.bbox, 0.5)) { const rp = new Path2D(); Geo.tracePoly(rp, f); ctx.fill(rp, 'evenodd'); }
+    for (const f of Geo.reserves) if (inBox(f.bbox, 0.5)) ctx.fill(this.featurePath(f, true), 'evenodd');
     ctx.globalAlpha = 1;
     // 公园（真实范围）
     const pp = new Path2D();
-    for (const f of Geo.parks) if (inBox(f.bbox, 0.5)) Geo.tracePoly(pp, f);
+    for (const f of Geo.parks) if (inBox(f.bbox, 0.5)) pp.addPath(this.featurePath(f, true));
     ctx.fillStyle = GROUND.park; ctx.fill(pp, 'evenodd');
     if (lvl >= 16) { ctx.strokeStyle = GROUND.parkEdge; ctx.lineWidth = px * 1.2; ctx.stroke(pp); }
     // 旧机场跑道
@@ -466,11 +526,11 @@
     }
     // 水系（真实岸线）
     const wpth = new Path2D();
-    for (const f of Geo.water) if (inBox(f.bbox, 0.5)) Geo.tracePoly(wpth, f);
+    for (const f of Geo.water) if (inBox(f.bbox, 0.5)) wpth.addPath(this.featurePath(f, true));
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     // 历史海岸线：尚未填海成陆的区域仍画成水面（单独以 nonzero 填充，避免与海域多边形的奇偶规则抵消）
     const rpth = new Path2D(); let anyRc = false;
-    for (const f of city.reclaimFeats ? city.reclaimFeats(true) : []) if (inBox(f.bbox, 0.5)) { Geo.tracePoly(rpth, f); Geo.tracePoly(wpth, f); anyRc = true; }
+    for (const f of city.reclaimFeats ? city.reclaimFeats(true) : []) if (inBox(f.bbox, 0.5)) { const path = this.featurePath(f, true); rpth.addPath(path); wpth.addPath(path); anyRc = true; }
     ctx.strokeStyle = GROUND.bank; ctx.lineWidth = Math.max(0.05, px * 2.4); ctx.stroke(wpth);
     ctx.fillStyle = GROUND.water; ctx.fill(wpth, 'evenodd');
     if (anyRc) ctx.fill(rpth, 'nonzero');
@@ -489,7 +549,7 @@
     for (const l of Geo.waterLines) {
       if (!inBox(l.bbox, 0.5)) continue;
       ctx.strokeStyle = GROUND.water; ctx.lineWidth = Math.max(l.w, px * 1.5);
-      ctx.beginPath(); Geo.traceLine(ctx, l.p); ctx.stroke();
+      ctx.stroke(this.featurePath(l, false));
     }
     // 2D 建筑占地（近景才显示，保持平面图简洁）
     if (lvl >= 32) {
@@ -536,11 +596,11 @@
       if (!inBox(r.bbox, 0.5) || (r.flags & 2)) continue;
       if ((r.flags & 16) && g.clock.y < (D.hsrYear || 2009)) continue;   // 高速铁路按本地图的开通年份出现
       if (r.year && g.clock.y < r.year) continue;
-      ctx.beginPath(); Geo.traceLine(ctx, r.p);
-      ctx.strokeStyle = RD.railCase; ctx.lineWidth = Math.max(0.05, px * 2.6); ctx.stroke();
+      const railPath = this.featurePath(r, false);
+      ctx.strokeStyle = RD.railCase; ctx.lineWidth = Math.max(0.05, px * 2.6); ctx.stroke(railPath);
       ctx.strokeStyle = RD.rail; ctx.lineWidth = Math.max(0.025, px * 1.2);
       if (lvl >= 32) ctx.setLineDash([0.06, 0.06]);
-      ctx.stroke(); ctx.setLineDash([]);
+      ctx.stroke(railPath); ctx.setLineDash([]);
     }
     // 支路：只在已开发的街区显示
     const streets = Geo.streetBk && lvl >= 16 ? Geo.query(Geo.streetBk, X0 - 0.5, Y0 - 0.5, X1 + 0.5, Y1 + 0.5) : [];
@@ -562,8 +622,8 @@
       const gr = city.roadGroups[w.g];
       if (gr.flags & 2) tunnels.push(w); else if (gr.flags & 4) links.push(w); else lay[gr.cls].push(w);
     }
-    const path = function (arr) { const p = new Path2D(); for (const w of arr) Geo.traceLine(p, w.p); return p; };
-    const bridgePath = function (arr) { const p = new Path2D(); for (const w of arr) if (city.roadGroups[w.g].flags & 1) Geo.traceLine(p, w.p); return p; };
+    const path = (arr) => { const p = new Path2D(); for (const w of arr) p.addPath(this.featurePath(w, false)); return p; };
+    const bridgePath = (arr) => { const p = new Path2D(); for (const w of arr) if (city.roadGroups[w.g].flags & 1) p.addPath(this.featurePath(w, false)); return p; };
     const P2 = path(lay[2]), P3 = path(lay[3]), P4 = path(lay[4]), PL = path(links), PT = path(tunnels);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     // 路缘（桥梁加深）
@@ -684,9 +744,21 @@
   };
   Renderer.prototype.renderOverview = function () {
     const lvl = 4, cv = makeCanvas(CFG.W * lvl, CFG.H * lvl), ctx = cv.getContext('2d');
-    ctx.setTransform(lvl, 0, 0, lvl, 0, 0);
-    this.drawGround(ctx, 0, 0, CFG.W, CFG.H, lvl);
+    ctx.fillStyle = GROUND.land; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = GROUND.water;
+    const city = this.game.city;
+    for (let c = 0; c < city.N; c++) if (city.lu[c] === LU.WATER) ctx.fillRect((c % city.W) * lvl, ((c / city.W) | 0) * lvl, lvl, lvl);
     this.overview = cv; this.overviewStale = false; this.overviewAt = performance.now();
+    this.overviewJob = { cv: cv, row: 0, version: city.version };
+  };
+  Renderer.prototype.stepOverview = function () {
+    const job = this.overviewJob;
+    if (!job) return;
+    const y0 = job.row, y1 = Math.min(CFG.H, y0 + 4), ctx = job.cv.getContext('2d');
+    ctx.save(); ctx.setTransform(4, 0, 0, 4, 0, 0); ctx.beginPath(); ctx.rect(0, y0, CFG.W, y1 - y0); ctx.clip();
+    this.drawGround(ctx, 0, y0, CFG.W, y1, 4); ctx.restore();
+    job.row = y1;
+    if (y1 >= CFG.H) { this.overviewJob = null; this.overviewAt = performance.now(); this.overviewStale = job.version !== this.game.city.version; }
   };
 
   // ---------------- 等距建筑分块 ----------------
@@ -695,9 +767,18 @@
     return C;
   };
   Renderer.prototype.renderIsoChunk = function (lvl, ci, cj, C) {
+    const gen = this.isoChunkGen(lvl, ci, cj, C);
+    for (;;) { const r = gen.next(); if (r.done) return r.value; }
+  };
+  Renderer.prototype.isoChunkGen = function* (lvl, ci, cj, C) {
     const city = this.game.city, W = city.W, H = city.H;
     const i0 = ci * C, j0 = cj * C;
     const s = lvl, coarse = s < 16;
+    let waterOnly = true;
+    for (let j = j0; j < Math.min(H, j0 + C) && waterOnly; j++) for (let i = i0; i < Math.min(W, i0 + C); i++) {
+      const L = city.lu[j * W + i]; if (L !== LU.WATER && L !== LU.LANDMARK) { waterOnly = false; break; }
+    }
+    if (waterOnly) return { cv: makeCanvas(1, 1), ax: 0, ay: 0, px: 1, empty: true };
     let hasHill = false;
     for (let j = j0; j < Math.min(H, j0 + C) && !hasHill; j++) for (let i = i0; i < Math.min(W, i0 + C); i++) if (city.lu[j * W + i] === LU.HILL) { hasHill = true; break; }
     const pad = hasHill ? 2.8 * s : 4;   // 山峰会越出所在格
@@ -707,7 +788,9 @@
     const ox = -minX, oy = -minY;
     const pj = function (x, y, h) { return [(x - y) * ISO[0] * s + ox, (x + y) * ISO[2] * s + oy - h * HSF * s]; };
     let drew = 0;
+    const progress = { cv: cv };
     for (let sum = i0 + j0; sum <= i0 + j0 + 2 * C - 2; sum++) {
+      if (sum > i0 + j0) yield progress;
       for (let i = Math.max(i0, sum - (j0 + C - 1)); i <= Math.min(i0 + C - 1, sum - j0); i++) {
         const j = sum - i;
         if (i >= W || j >= H || i < 0 || j < 0) continue;
@@ -722,6 +805,7 @@
         for (let k = 0; k < bl.length; k++) { this.isoBox(ctx, pj, i, j, bl[k], c, k, s); drew++; }
       }
     }
+    if (!drew) cv.width = cv.height = 1;
     return { cv: cv, ax: (i0 - j0) * ISO[0] * s + ox, ay: (i0 + j0) * ISO[2] * s + oy, px: cv.width * cv.height, empty: drew === 0 };
   };
   // 已建成地标中心所在的格不再放普通建筑（由地标模型占用）
@@ -1305,6 +1389,14 @@
           for (let k = 0; k < segs; k++) { const h0 = H * k / segs, h1 = H * (k + 1) / segs, sc0 = 1 - 0.12 * k / segs, sc1 = 1 - 0.12 * (k + 1) / segs; const c = T(0, 0); frustumRings(ctx, pj, tri(sc0), tri(sc1), h0 * E, h1 * E, N ? [60, 90, 130] : [168, 200, 226], c[0], c[1], k < segs - 1); }
           if (s >= 16) { ctx.strokeStyle = N ? 'rgba(160,210,255,0.55)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; for (let k = 0; k < 10; k++) { const a0 = k / 10 * Math.PI * 2; ctx.beginPath(); for (let q = 0; q <= 20; q++) { const t = q / 20, a = a0 + t * 1.2 * (k % 2 ? 1 : -1); if (Math.cos(a) + Math.sin(a) < -0.2) continue; const r = 33 * (1 - 0.12 * t); const w = T(Math.cos(a) * r, Math.sin(a) * r), p = pj(w[0], w[1], H * t * E); if (q) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); } ctx.stroke(); } }
           if (N) dot(0, 0, H, 2, '#ff4d4d');
+        } else if (lm.style === 'taipei101') { // 台北101：裙楼 + 截头方锥基座 + 8 节外倾「竹节」 + 顶部与塔尖
+          const kh = H / 508, col = N ? [62, 96, 100] : [146, 188, 184], q2 = function (w) { return Rc(-w, -w, w, w); };
+          box(-62, -48, 62, 48, 0, 58 * kh, N ? [80, 88, 104] : [214, 214, 208]);
+          frustumRings(ctx, pj, q2(32), q2(25), 0, 92 * kh * E, col, lm.x, lm.y, false);
+          for (let k = 0; k < 8; k++) { const h0 = 92 + k * 32.5; frustumRings(ctx, pj, q2(22), q2(28), h0 * kh * E, (h0 + 32.5) * kh * E, k % 2 ? col : U.shade(col, 1.07), lm.x, lm.y, false); }
+          frustumRings(ctx, pj, q2(18), q2(12), 352 * kh * E, 392 * kh * E, col, lm.x, lm.y, false);
+          line(0, 0, 392 * kh, 0, 0, H, N ? '#c8d0dc' : '#8a929c', Math.max(1, s / 26));
+          if (N) dot(0, 0, H, 2, '#ff4d4d');
         } else { // 东塔：方形分段收分，白色竖向陶板（其他城市的超高层按高度与占地等比缩放）
           const kh = H / 530, kw = Math.min(1.2, (lm.w || 78) / 78);
           const tiers = [[38, 0, 160], [36, 160, 330], [33, 330, 470], [29, 470, 515]];
@@ -1362,10 +1454,12 @@
   // ---------------- 分析图层（热力格） ----------------
   Renderer.prototype.buildHeat = function () {
     const g = this.game, city = g.city, model = g.model, W = city.W, H = city.H;
-    const key = this.layer + ':' + city.version + ':' + model.version + ':' + (this.layer === 'cover' ? g.netVersion : '');
-    if (key === this.heatKey && this.heat) return;
+    const access = this.layer === 'cover' ? model.net : null;
+    const key = this.layer + ':' + city.version + ':' + g.clock.y + ':' + g.clock.m + ':' + (this.layer === 'cover' ? g.netVersion : '');
+    const old = this.heatLayers.get(this.layer);
+    if (old && old.key === key && old.access === access) { this.heat = old.cv; this.heatKey = key; return; }
     this.heatKey = key;
-    if (!this.heat) this.heat = makeCanvas(W, H);
+    this.heat = old && old.cv.width === W && old.cv.height === H ? old.cv : makeCanvas(W, H);
     const ctx = this.heat.getContext('2d');
     const img = ctx.createImageData(W, H), d = img.data;
     const acc = model.net ? model.net.acc : null;
@@ -1393,11 +1487,14 @@
       if (col) { const o = c * 4; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = a * 255; }
     }
     ctx.putImageData(img, 0, 0);
+    this.heatLayers.set(this.layer, { key: key, access: access, cv: this.heat });
   };
 
   // ---------------- 每帧绘制 ----------------
   Renderer.prototype.render = function (dt, ui) {
+    const frameStart = performance.now();
     this.frame++; this.time += dt; this.dt = dt;
+    this.adaptDetail(dt);
     this.resize();
     const ctx = this.ctx, dpr = this.dpr, g = this.game;
     if (!g) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = U.rgb(TH.bg); ctx.fillRect(0, 0, this.cv.width, this.cv.height); return; }
@@ -1416,16 +1513,18 @@
     this.view = { x0: wx0 - 1, y0: wy0 - 1, x1: wx1 + 1, y1: wy1 + 1 };
     const tStart = performance.now();
     // ---- 地面 ----
-    if (this.overviewStale && (!this.overview || performance.now() - this.overviewAt > 600)) this.renderOverview();
+    if (this.overviewStale && !this.overviewJob && (!this.overview || performance.now() - this.overviewAt > 600)) this.renderOverview();
     const groundAlpha = 1 - 0.68 * under;
     ctx.globalAlpha = groundAlpha;
     ctx.imageSmoothingEnabled = true;
     const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
-    const eff = z * Math.min(dpr, 1.5) * (1 - 0.28 * t);
+    const detailScale = z >= 28 ? 1 : (this.detail.tier === 2 ? 0.68 : this.detail.tier === 1 ? 0.85 : 1);
+    const eff = z * Math.min(dpr, 1.5) * (1 - 0.28 * t) * detailScale;
     let lvl = 0;
     if (eff > 5) { lvl = 64; for (const L of LEVELS) if (L >= eff * 0.85) { lvl = L; break; } }
     setWorld();
     const queue = [];
+    if (this.overviewJob) queue.push({ kind: 'o', d: 1 });
     if (this.overview) {
       ctx.drawImage(this.overview, 0, 0, CFG.W, CFG.H);
     }
@@ -1434,6 +1533,7 @@
       const ci0 = Math.max(0, Math.floor(wx0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(wx1 / C));
       const cj0 = Math.max(0, Math.floor(wy0 / C)), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(wy1 / C));
       for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) {
+        if (!this.groundVisible(ci * C, cj * C, C)) continue;
         const key = lvl + ':' + ci + ':' + cj;
         let e = this.ground.get(key);
         if (!e || e.stale) {
@@ -1500,19 +1600,24 @@
         if (buckets) { const bk = buckets.get(ci + ':' + cj); if (bk) agents.drawList(ctx, this, bk, agentAlpha); }
         const key = 'i' + ilvl + ':' + ci + ':' + cj;
         let e = this.iso.get(key);
-        if (!e || e.stale) queue.push({ kind: 'i', key: key, lvl: ilvl, ci: ci, cj: cj, C: C, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) - 0.5 });
-        if (e && !e.empty) {
+        const a = this.P(ci * C, cj * C, 0), pad = 2.8 * z;
+        const visible = e && !e.empty ? this.screenVisible(a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc, 2) : this.screenVisible(a.x - C * ISO[0] * z - pad, a.y - MAX_H * HSF * z - pad, 2 * C * ISO[0] * z + 2 * pad, (2 * C * ISO[2] + MAX_H * HSF) * z + 2 * pad, 2);
+        if (visible && (!e || e.stale)) queue.push({ kind: 'i', key: key, lvl: ilvl, ci: ci, cj: cj, C: C, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) - 0.5 });
+        if (visible && e && !e.empty) {
           e.used = this.frame;
-          const a = this.P(ci * C, cj * C, 0);
           const fade = Math.min(1, (this.time - e.born) / 0.25);
           ctx.globalAlpha = bAlpha * fade;
           ctx.drawImage(e.cv, a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc);
-        } else if (e) e.used = this.frame;
+        } else if (visible && e) e.used = this.frame;
         const lks = lmBy.get(ci + ':' + cj);
         if (lks) for (const k of lks) {
-          const sp = this.landmarkSprite(k, ilvl), lm = D.landmarks[k], a = this.P(lm.x, lm.y, 0);
+          let landmarkLvl = 64;
+          const landmarkEff = z * Math.min(dpr, 1.5) * (1 - 0.28 * t);
+          for (const L of LEVELS) if (L >= landmarkEff * 0.85) { landmarkLvl = L; break; }
+          const sp = this.landmarkSprite(k, landmarkLvl), lm = D.landmarks[k], a = this.P(lm.x, lm.y, 0), ls = z / landmarkLvl;
+          if (!this.screenVisible(a.x - sp.ax * ls, a.y - sp.ay * ls, sp.cv.width * ls, sp.cv.height * ls, 2)) { sp.used = this.frame - 1; continue; }
           ctx.globalAlpha = bAlpha * Math.min(1, (this.time - sp.born) / 0.25);
-          ctx.drawImage(sp.cv, a.x - sp.ax * sc, a.y - sp.ay * sc, sp.cv.width * sc, sp.cv.height * sc);
+          ctx.drawImage(sp.cv, a.x - sp.ax * ls, a.y - sp.ay * ls, sp.cv.width * ls, sp.cv.height * ls);
         }
       }
       ctx.globalAlpha = 1;
@@ -1533,36 +1638,55 @@
     if (this.hl) this.drawHighlight(ctx);
     if (ui && ui.drawOverlay) ui.drawOverlay(ctx, this);
     // ---- 缓存渲染队列 ----
+    if (this.isoJob) {
+      const active = queue.find((q) => q.kind === 'i' && q.key === this.isoJob.key);
+      if (!active || this.isoJob.version !== g.city.version) this.cancelIsoJob();
+      else active.d = Math.min(active.d, -0.6);
+    }
     queue.sort(function (a, b) { return a.d - b.d; });
-    const budget = CFG.perf.chunkBudgetMs;
+    const budget = Math.max(1, Math.min(CFG.perf.chunkBudgetMs, this.detail.tier ? 3 : 6, 11 - (performance.now() - tStart)));
+    const queueStart = performance.now();
     let n = 0;
     for (const q of queue) {
-      if (performance.now() - tStart > (this.game.preview ? 6 : 14) && n > 0) break;   // 开始界面背景每帧少画一些，保持流畅
+      if (n > 0 && performance.now() - queueStart >= (this.game.preview ? Math.min(3, budget) : budget)) break;
       const t1 = performance.now();
       if (q.kind === 'g') {
         const cv = this.renderGroundChunk(q.lvl, q.ci, q.cj);
         const old = this.ground.get(q.key); if (old) this.cachePx -= old.px;
         this.ground.set(q.key, { cv: cv, lvl: q.lvl, key: q.key, used: this.frame, px: cv.width * cv.height, stale: false });
         this.cachePx += cv.width * cv.height;
+      } else if (q.kind === 'o') {
+        this.stepOverview();
       } else {
-        const r = this.renderIsoChunk(q.lvl, q.ci, q.cj, q.C);
-        const old = this.iso.get(q.key); if (old) this.cachePx -= old.px;
-        r.used = this.frame; r.born = old ? this.time - 1 : this.time; r.stale = false;
-        this.iso.set(q.key, r);
-        this.cachePx += r.px;
+        if (this.isoJob && this.isoJob.key !== q.key) continue;
+        if (!this.isoJob) this.isoJob = { key: q.key, version: g.city.version, gen: this.isoChunkGen(q.lvl, q.ci, q.cj, q.C), cv: null };
+        const deadline = performance.now() + Math.max(0.25, Math.min(2, budget - (performance.now() - queueStart)));
+        do {
+          const step = this.isoJob.gen.next();
+          if (step.done) {
+            const r = step.value, old = this.iso.get(q.key); if (old) this.cachePx -= old.px;
+            r.used = this.frame; r.born = old ? this.time - 1 : this.time; r.stale = false;
+            this.iso.set(q.key, r); this.cachePx += r.px; this.isoJob = null; break;
+          }
+          this.isoJob.cv = step.value.cv;
+        } while (performance.now() < deadline);
       }
       n++;
       if (performance.now() - t1 > budget) break;
     }
     this.stats.chunksDrawn = n;
     this.evict();
+    this.lastRenderMs = performance.now() - frameStart;
   };
 
   // ---------------- 地铁绘制 ----------------
   Renderer.prototype.lineWidthPx = function () { return U.clamp(this.z * 0.1, 2.8, 9); };
   Renderer.prototype.segScreen = function (cs, under, out) {
     const pts = cs.g.pts, hs = cs.h, n = pts.length;
-    const arr = out || new Float32Array(n * 2);
+    const key = this.M.join(',') + ':' + this.z + ':' + this.ox + ':' + this.oy + ':' + under + ':' + this.hs;
+    let cached = !out && this.segScreens.get(cs);
+    if (cached && cached.key === key) return cached.arr;
+    const arr = out || (cached ? cached.arr : new Float32Array(n * 2));
     const uw = U.smooth(under);
     const ty = cs.seg.type;
     for (let i = 0; i < n; i++) {
@@ -1572,6 +1696,7 @@
       arr[i * 2] = this.ox + (M[0] * pts[i][0] + M[1] * pts[i][1]) * z;
       arr[i * 2 + 1] = this.oy + (M[2] * pts[i][0] + M[3] * pts[i][1]) * z - h * this.hs;
     }
+    if (!out) this.segScreens.set(cs, { key: key, arr: arr });
     return arr;
   };
   Renderer.prototype.drawMetro = function (ctx, ui) {
@@ -1585,7 +1710,7 @@
     const hlLine = ui && ui.highlightLine;
     const lyrDim = this.layer === 'cong' || this.layer === 'flow' ? 1 - 0.65 * (this.layerFade || 0) : 1;   // 拥堵、出行方向图层下淡化地铁
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    this.segPx = new Map();
+    if (!this.segPx) this.segPx = new Map(); else this.segPx.clear();
     // 草案中被删除的正式轨道（虚影）
     if (draft) {
       g.compiled.segs.forEach((cs, id) => {
@@ -1598,23 +1723,28 @@
         this.strokeArr(ctx, arr); ctx.setLineDash([]);
       });
     }
-    const order = [];
-    C.segs.forEach(function (cs, id) { order.push(cs); });
-    // 地下 → 地面 → 高架
-    const rank = { underground: 0, surface: 1, elevated: 2 };
-    order.sort(function (a, b) { return rank[a.seg.type] - rank[b.seg.type]; });
-    for (const cs of order) {
+    if (!this.metroOrder || this.metroOrder.C !== C) {
+      const order = [], rank = { underground: 0, surface: 1, elevated: 2 };
+      C.segs.forEach(function (cs) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const p of cs.g.pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+        order.push({ cs: cs, bbox: [x0, y0, x1, y1] });
+      });
+      order.sort(function (a, b) { return rank[a.cs.seg.type] - rank[b.cs.seg.type]; });
+      this.metroOrder = { C: C, order: order, grid: CM.Geo.buckets(order, 8, g.city.W, g.city.H) };
+    }
+    const indexed = this.metroOrder, visible = new Set(CM.Geo.query(indexed.grid, v.x0 - 6, v.y0 - 6, v.x1 + 6, v.y1 + 6));
+    for (let q = 0; q < indexed.order.length; q++) {
+      if (!visible.has(q)) continue;
+      const cs = indexed.order[q].cs;
       const s = cs.seg;
       const b = cs.g;
       const line = C.net.lines[s.line];
       if (!line) continue;
       // 粗略裁剪
       const A = C.net.stations[s.a], B = C.net.stations[s.b];
-      if (Math.max(A.x, B.x) < v.x0 - 6 || Math.min(A.x, B.x) > v.x1 + 6 || Math.max(A.y, B.y) < v.y0 - 6 || Math.min(A.y, B.y) > v.y1 + 6) {
-        let inside = false;
-        for (const p of (s.pts || [])) if (p[0] > v.x0 && p[0] < v.x1 && p[1] > v.y0 && p[1] < v.y1) inside = true;
-        if (!inside) continue;
-      }
+      const bb = indexed.order[q].bbox;
+      if (bb[2] < v.x0 - 6 || bb[0] > v.x1 + 6 || bb[3] < v.y0 - 6 || bb[1] > v.y1 + 6) continue;
       const arr = this.segScreen(cs, under);
       this.segPx.set(s.id, arr);
       const col = line.color;
@@ -2253,16 +2383,38 @@
   };
   // ---------------- 标注 ----------------
   Renderer.prototype.drawLabels = function (ctx, ui) {
+    if (this.game.preview) return;
+    const step = (this.dt || 0.016) / 0.25;
+    const labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
+    const mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
+    const key = [this.w, this.h, this.dpr, this.z, this.ox, this.oy, this.hs, this.M.join(','), this.cam.under, this.tEase > 0.5, this.bFade > 0.5, this.game.city.version, this.game.netVersion, this.layer, labA, mapLabA, this.themeName, document.fonts ? document.fonts.status : ''].join('|');
+    let image = this.labelImage;
+    if (!image || image.key !== key || image.C !== this.drawnC) {
+      const cv = image && image.cv.width === this.cv.width && image.cv.height === this.cv.height ? image.cv : makeCanvas(this.cv.width, this.cv.height);
+      const x = cv.getContext('2d');
+      x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height); x.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this.drawLabelContent(x, ui);
+      image = this.labelImage = { key: key, C: this.drawnC, cv: cv };
+    } else { this.labA = labA; this.mapLabA = mapLabA; }
+    ctx.drawImage(image.cv, 0, 0, this.w, this.h);
+  };
+  Renderer.prototype.drawLabelContent = function (ctx, ui) {
     const g = this.game, z = this.z, v = this.view, city = g.city;
     if (g.preview) return;   // 开始界面背景不显示标注
     // 标注开关渐隐渐现（不闪切）
     const step = (this.dt || 0.016) / 0.25;
     this.labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
     this.mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
-    const placed = [];
+    const placed = new Map(), tile = 48;
     const fits = function (x0, y0, x1, y1) {
-      for (const r of placed) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false;
-      placed.push([x0, y0, x1, y1]); return true;
+      const i0 = Math.floor(x0 / tile), i1 = Math.floor(x1 / tile), j0 = Math.floor(y0 / tile), j1 = Math.floor(y1 / tile);
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const list = placed.get(i + ':' + j);
+        if (list) for (const r of list) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false;
+      }
+      const rect = [x0, y0, x1, y1];
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const key = i + ':' + j; let list = placed.get(key); if (!list) { list = []; placed.set(key, list); } list.push(rect); }
+      return true;
     };
     const halo = function (text, x, y, font, fill, align) {
       ctx.font = font; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
@@ -2280,7 +2432,7 @@
       order.sort(function (a, b) { return (C.stationLines[b[1]].size - C.stationLines[a[1]].size) || ({ L: 2, M: 1, S: 0 }[C.stations[b[1]].size] - { L: 2, M: 1, S: 0 }[C.stations[a[1]].size]); });
       for (const it of order) {
         const p = it[0], s = C.stations[it[1]];
-        const w = ctx.measureText(s.name).width;
+        const w = this.textWidth(ctx, s.name);
         const x = p.x + p.r + 4, y = p.y;
         if (!fits(x - 2, y - fs / 2 - 2, x + w + 2, y + fs / 2 + 2)) continue;
         halo(s.name, x, y, (C.stationLines[it[1]].size > 1 ? '600 ' : '') + fs + 'px ' + FONT, TH.ink);
@@ -2298,7 +2450,7 @@
         const p = this.P(lm.x, lm.y, h);
         ctx.font = '11px ' + FONT;
         const text = '◆ ' + lm.name;
-        const w = ctx.measureText(text).width;
+        const w = this.textWidth(ctx, text);
         if (!fits(p.x - w / 2, p.y - 18, p.x + w / 2, p.y - 6)) continue;
         halo(text, p.x, p.y - 12, '11px ' + FONT, TH.landmarkInk, 'center');
       }
@@ -2310,15 +2462,21 @@
       for (const k of CM.Geo.query(city.roadWayBk, v.x0, v.y0, v.x1, v.y1)) {
         const w = city.roadWays[k], gr = city.roadGroups[w.g];
         if (gr.cls < 3 || !gr.name || (gr.flags & 6) || !city.roadsBuilt[w.g] || seen.has(gr.name)) continue;
-        const p = w.p; let len = 0;
-        for (let q = 2; q < p.length; q += 2) len += Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]);
+        const p = w.p;
+        let geom = this.roadLabelGeom.get(w);
+        if (!geom) {
+          let len = 0;
+          for (let q = 2; q < p.length; q += 2) len += Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]);
+          let acc = 0, mx = p[0], my = p[1];
+          for (let q = 2; q < p.length; q += 2) { const d = Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]); if (acc + d >= len / 2) { const t = (len / 2 - acc) / (d || 1); mx = p[q - 2] + (p[q] - p[q - 2]) * t; my = p[q - 1] + (p[q + 1] - p[q - 1]) * t; break; } acc += d; }
+          geom = { len: len, x: mx, y: my }; this.roadLabelGeom.set(w, geom);
+        }
+        const len = geom.len;
         if (len < 2.4) continue;
-        let acc = 0, mx = p[0], my = p[1];
-        for (let q = 2; q < p.length; q += 2) { const d = Math.hypot(p[q] - p[q - 2], p[q + 1] - p[q - 1]); if (acc + d >= len / 2) { const t = (len / 2 - acc) / (d || 1); mx = p[q - 2] + (p[q] - p[q - 2]) * t; my = p[q - 1] + (p[q + 1] - p[q - 1]) * t; break; } acc += d; }
-        const pt = this.P(mx, my, 0);
+        const pt = this.P(geom.x, geom.y, 0);
         if (pt.x < 0 || pt.y < 0 || pt.x > this.w || pt.y > this.h) continue;
         const text = gr.name;
-        const tw = ctx.measureText(text).width;
+        const tw = this.textWidth(ctx, text);
         if (!fits(pt.x - tw / 2, pt.y - 7, pt.x + tw / 2, pt.y + 7)) continue;
         seen.add(gr.name);
         halo(text, pt.x, pt.y, '10.5px ' + FONT, TH.roadInk, 'center');
@@ -2345,7 +2503,7 @@
         const p = this.P(cx, cy, 0);
         const text = '🔒 ' + rg.name.replace(/（.*）/, '') + ' · ' + U.regionLock(rg);
         ctx.font = '11px ' + FONT;
-        const w = ctx.measureText(text).width;
+        const w = this.textWidth(ctx, text);
         if (!fits(p.x - w / 2, p.y - 8, p.x + w / 2, p.y + 8)) continue;
         halo(text, p.x, p.y, '11px ' + FONT, TH.lockInk, 'center');
         shown.add(k);

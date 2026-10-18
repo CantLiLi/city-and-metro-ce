@@ -91,10 +91,14 @@
       body: '按 K 或点击左侧的「线路示意图」：换乘站标志与地图一致，可以平滑缩放，也可以导出 PNG 图片。',
       target: function () { return CM.Follow && CM.Follow.active() ? null : ui.tbtns.netmap; },
       check: function () { return !!(CM.NetMap && CM.NetMap.isOpen()); } },
+    // 经济小知识（可跳过、可回看，不计入 12 个任务；青湾为自由建造，不实际发行债券）
+    { id: 'money', title: '小知识：经营挑战的财政', info: true,
+      body: '正式城市的「经营挑战」要自己管钱：每月有政府拨款与票款，建设和运营都要花钱；资金紧张时可以发行地方债或城投债，借来的钱只能用于地铁建设，每年付息、到期还本。',
+      hint: '点「图文说明」查看详细介绍与操作方法；之后也可以在「菜单 → 操作说明」中回看。' },
     { id: 'done', title: '教程完成！', final: true,
       body: '你已经学会了移动地图、读图层、建站绘线、确认建设、跨江与换乘、查看客流、跟随列车和线路示意图。可以继续在青湾自由建设，也可以去广州开始正式游戏：广州有经营挑战、历史任务和逐年开放的新区。' },
   ];
-  const TASKS = STEPS.length - 2;   // 不含欢迎与完成
+  const TASKS = STEPS.filter(function (s) { return !s.manual && !s.final && !s.info; }).length;   // 不含欢迎、小知识与完成
 
   function setTarget(t) {
     if (target === t) return;
@@ -135,7 +139,7 @@
     const pct = Math.round(Math.min(n, TASKS + 1) / (TASKS + 1) * 100);
     const head = h('div', { class: 'co-head' },
       h('span', { class: 'co-badge' }, ic('help', 14), '新手教程'),
-      h('span', { class: 'co-step' }, st.final ? '全部完成' : (n === 0 ? '共 ' + TASKS + ' 个任务' : '任务 ' + n + ' / ' + TASKS)),
+      h('span', { class: 'co-step' }, st.final ? '全部完成' : (st.info ? '小知识 · 可跳过' : (n === 0 ? '共 ' + TASKS + ' 个任务' : '任务 ' + n + ' / ' + TASKS))),
       h('span', { class: 'grow' }),
       h('button', { class: 'iconbtn', 'data-tip': mini ? '展开' : '收起', onclick: function () { mini = !mini; render(); } }, ic(mini ? 'expand' : 'minus')));
     el.append(head, h('div', { class: 'co-bar' }, h('i', { style: { width: pct + '%' } })));
@@ -146,8 +150,12 @@
     const acts = h('div', { class: 'co-acts' });
     if (st.final) {
       acts.append(
+        h('button', { class: 'btn sm ghost', onclick: function () { ui.showEconGuide(); } }, '回看财政知识'),
         h('button', { class: 'btn sm', onclick: function () { Tutorial.detach(); ui.toast('教程已完成，可以继续在青湾自由建设', 'good'); } }, '继续在青湾建设'),
         h('button', { class: 'btn sm primary', onclick: function () { ui.backToMenu(function () { ui.showMapSelect('gz'); }); } }, '去广州开始游戏', ic('chev', 14)));
+    } else if (st.info) {
+      acts.append(h('button', { class: 'btn sm ghost', onclick: function () { go(idx - 1); } }, '上一步'), h('span', { class: 'grow' }), h('button', { class: 'btn sm ghost', onclick: function () { go(idx + 1); } }, '跳过'),
+        h('button', { class: 'btn sm primary', onclick: function () { ui.showEconGuide(function () { if (STEPS[idx] === st) go(idx + 1); }); } }, '图文说明', ic('chev', 14)));
     } else if (st.manual) {
       acts.append(h('button', { class: 'btn sm ghost', onclick: function () { Tutorial.detach(true); } }, '退出教程'), h('span', { class: 'grow' }), h('button', { class: 'btn sm primary', onclick: function () { go(idx + 1); } }, st.manual, ic('chev', 14)));
     } else {
@@ -172,7 +180,11 @@
       if (!g.tutorial) return;
       Tutorial.detach();
       ui = u; g = game;
-      if (g.tutorial.complete && g.tutorial.step >= STEPS.length - 1) { ui.toast('教程已完成，可以继续在青湾自由建设', 'info'); return; }
+      // 1.7 前完成的存档：完成步序号为 STEPS.length - 2。
+      if (g.tutorial.complete && g.tutorial.step >= STEPS.length - 2) {
+        ui.toast('教程已完成，可以继续在青湾自由建设', 'info');
+        return;
+      }
       el = h('aside', { id: 'coach' });
       document.getElementById('app').appendChild(el);
       document.body.classList.add('has-coach');

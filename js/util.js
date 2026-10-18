@@ -202,6 +202,7 @@ window.CM = window.CM || {};
     const neg = wan < 0; const a = Math.abs(wan);
     let s;
     if (a >= 10000) s = (a / 10000).toFixed(digits === undefined ? (a >= 1e6 ? 0 : 2) : digits) + ' ' + mo.yi;
+    else if (a > 0 && a < 1) s = mo.unit ? (a * 10000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' ' + mo.unit : a.toLocaleString('zh-CN', { maximumFractionDigits: 7 }) + ' ' + mo.wan;
     else s = Math.round(a).toLocaleString('zh-CN') + ' ' + mo.wan;
     return (neg ? '−' : '') + s;
   };

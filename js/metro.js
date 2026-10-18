@@ -433,7 +433,7 @@
     if (city.waterDistAt(x, y) < 0.05) return { ok: false, msg: '车站不能建在水面上（' + city.riverNameAt(x, y) + '）', how: '把车站移到岸边；跨江请用两岸的车站之间的轨道（地下为隧道、高架为桥梁）。' };
     const rg = city.regions[city.region[c]];
     if (rg.scenic) return { ok: false, msg: rg.name + '：山地风景区不能设站', how: '把车站移出风景区，轨道可以地下穿越。' };
-    if (!city.regionOpen[city.region[c]]) return { ok: false, msg: rg.name + ' 尚未开放（' + U.regionLock(rg) + '）', how:'区域开放前不能建设。可推进时间等待开放，或把车站移到已开放区域。' };
+    if (!city.regionOpen[city.region[c]]) return { ok: false, msg: rg.name + ' 尚未开放（' + U.regionLock(rg) + '）', how: rg.open == null ? '该区域不开放建设，请把车站移到其他区域。' : '区域开放前不能建设。可推进时间等待开放，或把车站移到已开放区域。' };
     if (city.lu[c] === LU.AIRPORT) return { ok: false, msg: (D.airport.name || '机场') + '仍在运营（' + D.airport.closeYear + ' 年关闭）', how: '机场关闭前不能建设，请把车站移到机场范围以外。' };
     if (city.protectedId[c] > 0 && D.landmarks[city.protectedId[c] - 1].kind !== 'campus' && city.inLandmarkSite(city.protectedId[c] - 1, x, y)) return { ok: false, msg: '受保护建筑「' + D.landmarks[city.protectedId[c] - 1].name + '」，不能设站或拆除', how: '把车站移到相邻街区，保护建筑周边仍可通过车站出入口服务。' };
     return { ok: true };
@@ -467,14 +467,16 @@
       if (tp.routes.some(function (rt) { return rt.segs.some(function (ref) { return !C.segs.has(ref.id); }); })) continue;
       tp.routes.forEach(function (rt, ri) {
         const pts = [], hs = [], stopDist = [0], legLenM = [], legSec = [], legSeg = [];
-        let minCars = 8;
+        let minCars = 8, length = 0;
         for (let k = 0; k < rt.segs.length; k++) {
           const ref = rt.segs[k], cs = C.segs.get(ref.id);
           let p = cs.g.pts, h = cs.h;
           if (ref.rev) { p = p.slice().reverse(); h = Array.from(h).reverse(); }
-          for (let i = (pts.length ? 1 : 0); i < p.length; i++) { pts.push(p[i]); hs.push(h[i]); }
-          const cum = U.cumLen(pts);
-          stopDist.push(cum[cum.length - 1]);
+          for (let i = (pts.length ? 1 : 0); i < p.length; i++) {
+            if (pts.length) { const prev = pts[pts.length - 1]; length += U.dist(prev[0], prev[1], p[i][0], p[i][1]); }
+            pts.push(p[i]); hs.push(h[i]);
+          }
+          stopDist.push(length);
           const Lm = cs.g.lenM;
           let vmax = mc.vmax[cs.seg.type];
           if (isFinite(cs.g.minRadiusM)) vmax = Math.min(vmax, Math.max(8, Math.sqrt(mc.latAccel * cs.g.minRadiusM)));
@@ -677,7 +679,7 @@
       if (g.outside) conflict({ type: 'outside', kind: 'seg', ref: id, x: A.x, y: A.y, msg: lbl + '：超出地图范围', how: '把转弯点或车站移回地图内。', fixes: [editSeg] });
       if (g.hillM > 1 && s.type !== 'underground') conflict({ type: 'hill', kind: 'seg', ref: id, x: g.hillHit[0], y: g.hillHit[1], msg: lbl + '：穿过' + g.hillHit[2] + '，风景区禁止地面/高架轨道', how: '风景区内只能以隧道穿越。把这段轨道改为地下即可（会增加山体隧道费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
       if (g.protM > 1 && s.type !== 'underground') conflict({ type: 'protected', kind: 'seg', ref: id, x: g.protHit[0], y: g.protHit[1], msg: lbl + '：地面/高架轨道将穿过受保护建筑「' + g.protNames.join('、') + '」', how: '历史建筑和重要地标不能拆除。改为地下从下方穿越（需加固费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
-      for (const lk of g.locked) conflict({ type: 'locked', kind: 'seg', ref: id, x: lk.x, y: lk.y, msg: lbl + '：经过尚未开放的区域「' + lk.name + '」', how: '该区域' + U.regionLock(lk) + '，开放前不能建设。用「修改」工具拖动控制点绕开，或等区域开放后再建。', fixes: [editSeg, { label: '删除该区段', op: 'removeSeg', seg: id }] });
+      for (const lk of g.locked) conflict({ type: 'locked', kind: 'seg', ref: id, x: lk.x, y: lk.y, msg: lbl + '：经过尚未开放的区域「' + lk.name + '」', how: lk.open == null ? '该区域' + U.regionLock(lk) + '，线路不能穿过。用「修改」工具拖动控制点绕开。' : '该区域' + U.regionLock(lk) + '，开放前不能建设。用「修改」工具拖动控制点绕开，或等区域开放后再建。', fixes: [editSeg, { label: '删除该区段', op: 'removeSeg', seg: id }] });
       if (touched.has(id) && isFinite(g.minRadiusM)) {
         const R = Math.round(g.minRadiusM), p = g.minRxy || [A.x, A.y];
         if (R < CFG.metro.minRadiusM) {

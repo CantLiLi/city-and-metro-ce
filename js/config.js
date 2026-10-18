@@ -2,7 +2,7 @@
 // 全局参数。PRD 中标注"待确认"的数值在此给出可调整的默认值（DEFAULT），评审确认后只需修改本文件。
 (function (CM) {
   CM.CFG = {
-    GAME_VERSION: '1.6.0',
+    GAME_VERSION: '1.7.0',
     SAVE_FORMAT: 'city-metro-save',
     SAVE_VERSION: 2,
     SAVE_MIN_VERSION: 2,   // 1.1 起地图改为真实地理，旧版存档的城市数据与之不兼容
@@ -131,6 +131,13 @@
       startFunds: 300000,       // 经营挑战初始资金 30 亿元 DEFAULT
       grantBase: [[1990, 15000], [2000, 32000], [2010, 70000], [2020, 110000], [2050, 180000]], // 万元/月
       debtLimit: -200000,       // 负债下限（随通胀调整）DEFAULT
+      // 债券融资（仅经营挑战）：3 年期年利率按发行年份插值并在发行时固定，6 年期另加 term6；
+      // 年度发行额度与总债务上限 = 当年基础月拨款 × 月数（随城市与年代变化）。城投债利率 = 地方债 + spread
+      bonds: {
+        local: { rate: [[1990, 0.085], [1996, 0.075], [2000, 0.045], [2008, 0.04], [2015, 0.035], [2020, 0.032], [2050, 0.03]], quotaMonths: 6, capMonths: 30 },
+        ct: { spread: 0.02, quotaMonths: 4, capMonths: 18 },
+        term6: 0.004,
+      },
       negMonthsLimit: 24,       // 连续负余额月数上限 DEFAULT
       satFail: 25, satFailMonths: 12,
       startSat: 60,

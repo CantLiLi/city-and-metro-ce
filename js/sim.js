@@ -6,6 +6,57 @@
   const NP = 4;
   const INF = 1e30;
 
+  // Keep the hot shortest-path loop outside the yielding orchestration. This is
+  // the same binary heap, relaxation order and numeric precision as before.
+  function roadTree(road, rd, time, origin, work, heap) {
+    const dist = work.dist, dkm = work.dkm, pred = work.pred, order = work.order;
+    const start = rd.start, node = rd.nodes, initial = rd.times, km = rd.km;
+    const outStart = road.outStart, outArc = road.outArc, arcTo = road.arcTo, arcKm = rd.arcKm;
+    dist.fill(INF); heap.clear();
+    // Each directed arc can relax once after its source is settled. Reserve the
+    // queue once, then keep its size local to avoid millions of property writes.
+    const keys = work.heapK || (work.heapK = new Array(road.nA + 4).fill(0.1));
+    const values = work.heapV || (work.heapV = new Array(road.nA + 4).fill(0));
+    let count = 0;
+    for (let k = start[origin]; k < start[origin + 1]; k++) {
+      const v = node[k], t = initial[k];
+      if (t < dist[v]) {
+        dist[v] = t; dkm[v] = km[k]; pred[v] = -1;
+        let i = count++;
+        while (i > 0) { const p = (i - 1) >> 1; if (keys[p] <= t) break; keys[i] = keys[p]; values[i] = values[p]; i = p; }
+        keys[i] = t; values[i] = v;
+      }
+    }
+    let no = 0;
+    while (count) {
+      const u = values[0], du = keys[0], n = --count;
+      heap.lastKey = du;
+      if (n > 0) {
+        const key = keys[n], val = values[n];
+        let i = 0;
+        for (;;) {
+          const left = i * 2 + 1; if (left >= n) break;
+          const right = left + 1, child = right < n && keys[right] < keys[left] ? right : left;
+          if (keys[child] >= key) break;
+          keys[i] = keys[child]; values[i] = values[child]; i = child;
+        }
+        keys[i] = key; values[i] = val;
+      }
+      if (du > dist[u]) continue;
+      order[no++] = u;
+      for (let k = outStart[u]; k < outStart[u + 1]; k++) {
+        const a = outArc[k], v = arcTo[a], nd = du + time[a];
+        if (nd < dist[v]) {
+          dist[v] = nd; dkm[v] = dkm[u] + arcKm[a]; pred[v] = a;
+          let i = count++;
+          while (i > 0) { const p = (i - 1) >> 1; if (keys[p] <= nd) break; keys[i] = keys[p]; values[i] = values[p]; i = p; }
+          keys[i] = nd; values[i] = v;
+        }
+      }
+    }
+    return no;
+  }
+
   function Model(city) {
     this.city = city;
     this.ZW = CFG.W / CFG.ZONE; this.ZH = CFG.H / CFG.ZONE; this.Z = this.ZW * this.ZH;
@@ -33,6 +84,7 @@
     this.zPop = new Float32Array(this.Z); this.zJobs = new Float32Array(this.Z); this.zAttr = new Float32Array(this.Z);
     this.zCx = new Float32Array(this.Z); this.zCy = new Float32Array(this.Z);
     this.road = city.car; this.roadVer = city.roadVersion;
+    this.prepareRoad();
     this.arcZone = null; this.computeArcZones();
     this.buildZones(); this.buildDemand();
     this.net = null;
@@ -44,7 +96,8 @@
   }
   CM.Model = Model;
 
-  Model.prototype.setYear = function (y) { this.year = y; this.capF = U.interp(CFG.road.capGrowth, y); };
+  Model.prototype.wake = function () { this.settled = false; this.quietCycles = 0; this.gen = null; };
+  Model.prototype.setYear = function (y) { if (this.year !== y) this.wake(); this.year = y; this.capF = U.interp(CFG.road.capGrowth, y); };
   // 当前通行能力（含系统道路改造增长）
   Model.prototype.cap = function (a) { return this.road.arcCap[a] * (this.capF || 1); };
   Model.prototype.params = function () {
@@ -80,18 +133,18 @@
     const g = this.buildDemandGen();
     while (!g.next().done) { /* run */ }
   };
-  // 时间切片版本：每 64 个起点让出一次；结果在最后一次性替换 this.od
+  // 时间切片版本：每 16 个起点让出一次；结果在最后一次性替换 this.od
   Model.prototype.buildDemandGen = function* () {
     const Z = this.Z, y = this.year, c = CFG.choice;
     const L1 = U.interp(c.distDecayHW, y), L2 = U.interp(c.distDecayHO, y);
     const wr = U.interp(c.workerRate, y), hr = U.interp(c.hoRate, y);
     const kmPerCell = CFG.CELL_M / 1000 * 1.2;
     const dests = [], hw = [], ho = [], start = [0];
-    const w1 = new Float64Array(Z), w2 = new Float64Array(Z);
+    const w1 = new Float64Array(Z), w2 = new Float64Array(Z), scores = new Float64Array(Z);
     const cand = [];
     let totHW = 0, totHO = 0;
     for (let i = 0; i < Z; i++) {
-      if (i > 0 && (i & 63) === 0) yield;
+      if (i > 0 && (i & 15) === 0) yield;
       const P = this.zPop[i];
       if (P < 20) { start.push(dests.length); continue; }
       let s1 = 0, s2 = 0;
@@ -107,15 +160,15 @@
       cand.length = 0;
       for (let j = 0; j < Z; j++) {
         const sh = (s1 > 0 ? w1[j] / s1 : 0) + (s2 > 0 ? w2[j] / s2 : 0);
-        if (sh > 0.003) cand.push([j, sh]);
+        if (sh > 0.003) { scores[j] = sh; cand.push(j); }
       }
-      cand.sort(function (a, b) { return b[1] - a[1]; });
+      cand.sort(function (a, b) { return scores[b] - scores[a]; });
       if (cand.length > 240) cand.length = 240;
       let k1 = 0, k2 = 0;
-      for (const cd of cand) { k1 += w1[cd[0]]; k2 += w2[cd[0]]; }
+      for (const cd of cand) { k1 += w1[cd]; k2 += w2[cd]; }
       const W = P * wr, O = P * hr;
       for (const cd of cand) {
-        const j = cd[0];
+        const j = cd;
         dests.push(j);
         const a = k1 > 0 ? W * w1[j] / k1 : 0, b = k2 > 0 ? O * w2[j] / k2 : 0;
         hw.push(a); ho.push(b); totHW += a; totHO += b;
@@ -152,8 +205,22 @@
     }
     this.arcZone = az;
   };
+  // Immutable road topology in a compact layout; keep connection order and Float64 costs.
+  Model.prototype.prepareRoad = function () {
+    const road = this.road, start = new Int32Array(this.Z + 1), zones = [], nodes = [], times = [], km = [];
+    for (let z = 0; z < this.Z; z++) {
+      const list = road.zoneConn[z] || [];
+      if (list.length) zones.push(z);
+      for (const c of list) { nodes.push(c.node); times.push(c.t); km.push(c.km); }
+      start[z + 1] = nodes.length;
+    }
+    this.roadData = { start: start, zones: Int32Array.from(zones), nodes: Int32Array.from(nodes), times: Float64Array.from(times), km: Float64Array.from(km), arcKm: Float64Array.from(road.arcLen, function (v) { return v / 1000; }), uniqueKeys: new Set(road.links.map(function (L) { return L.key; })).size === road.links.length };
+  };
   Model.prototype.syncRoad = function () {
+    this.wake();
     const old = this.road, nw = this.city.car;
+    // Preserve legacy state remapping even for identical graphs with duplicate link keys.
+    if (old === nw && this.roadData.uniqueKeys) { this.roadVer = this.city.roadVersion; this.version++; return; }
     const map = new Map();
     old.links.forEach(function (L) { map.set(L.key, L); });
     const remap = function (arr, fillFn) {
@@ -178,6 +245,7 @@
       }
     }
     this.road = nw; this.roadVer = this.city.roadVersion;
+    this.prepareRoad();
     this.computeArcZones();
     this.version++;
   };
@@ -197,6 +265,9 @@
     const zMap = new Map();
     const trees = [], accessible = new Uint8Array(N), catchPop = new Float32Array(N), transfers = [];
     const limit = Math.max(maxM, xferM) + 200;
+    const treeRules = maxM + ':' + xferM + ':' + CFG.CELL_M;
+    if (this._treeWalk !== walk || this._treeRules !== treeRules) { this._treeWalk = walk; this._treeRules = treeRules; this._walkTrees = new Map(); }
+    const treeCache = this._walkTrees;
     for (let k = 0; k < N; k++) {
       const st = C.stations[k];
       trees.push(null);
@@ -204,29 +275,40 @@
       if (c0 < 0) continue;
       const ci = c0 % city.W, cj = (c0 / city.W) | 0;
       heap.clear(); touched.length = 0;
-      const corners = [cj * VW + ci, cj * VW + ci + 1, (cj + 1) * VW + ci, (cj + 1) * VW + ci + 1];
-      for (const v of corners) {
-        if (walk.deg[v] === 0) continue;
-        const d0 = U.dist(st.x, st.y, city.vx[v], city.vy[v]) * CFG.CELL_M;
-        if (d0 < D_[v]) { if (D_[v] >= INF) touched.push(v); D_[v] = d0; pred[v] = -1; heap.push(d0, v); }
-      }
-      if (!heap.n) continue;
-      accessible[k] = 1;
-      while (heap.n) {
-        const u = heap.pop(), du = heap.lastKey;
-        if (du > D_[u]) continue;
-        for (let e = walk.start[u]; e < walk.start[u + 1]; e++) {
-          const v = walk.to[e], nd = du + walk.len[e];
-          if (nd < D_[v] && nd <= limit) {
-            if (D_[v] >= INF) touched.push(v);
-            D_[v] = nd; pred[v] = u; heap.push(nd, v);
+      const treeKey = st.x + ':' + st.y;
+      const cachedTree = treeCache.get(treeKey);
+      if (cachedTree) {
+        trees[k] = cachedTree.tree; accessible[k] = 1;
+        for (let q = 0; q < cachedTree.tree.verts.length; q++) { const v = cachedTree.tree.verts[q]; touched.push(v); D_[v] = cachedTree.exact[q]; }
+      } else {
+        const corners = [cj * VW + ci, cj * VW + ci + 1, (cj + 1) * VW + ci, (cj + 1) * VW + ci + 1];
+        for (const v of corners) {
+          if (walk.deg[v] === 0) continue;
+          const d0 = U.dist(st.x, st.y, city.vx[v], city.vy[v]) * CFG.CELL_M;
+          if (d0 < D_[v]) { if (D_[v] >= INF) touched.push(v); D_[v] = d0; pred[v] = -1; heap.push(d0, v); }
+        }
+        if (!heap.n) continue;
+        accessible[k] = 1;
+        while (heap.n) {
+          const u = heap.pop(), du = heap.lastKey;
+          if (du > D_[u]) continue;
+          for (let e = walk.start[u]; e < walk.start[u + 1]; e++) {
+            const v = walk.to[e], nd = du + walk.len[e];
+            if (nd < D_[v] && nd <= limit) {
+              if (D_[v] >= INF) touched.push(v);
+              D_[v] = nd; pred[v] = u; heap.push(nd, v);
+            }
           }
         }
+        // 行人路径树（未通车站也保留，用于详情中的“接入线路后的潜在覆盖”）
+        const tv = Int32Array.from(touched), td = new Float32Array(tv.length), tp = new Int32Array(tv.length);
+        for (let q = 0; q < tv.length; q++) { td[q] = D_[tv[q]]; tp[q] = pred[tv[q]]; }
+        trees[k] = { verts: tv, dist: td, pred: tp };
+        const exact = new Float64Array(tv.length);
+        for (let q = 0; q < tv.length; q++) exact[q] = D_[tv[q]];
+        if (treeCache.size >= 512) treeCache.clear();
+        treeCache.set(treeKey, { tree: trees[k], exact: exact });
       }
-      // 行人路径树（未通车站也保留，用于详情中的“接入线路后的潜在覆盖”）
-      const tv = Int32Array.from(touched), td = new Float32Array(tv.length), tp = new Int32Array(tv.length);
-      for (let q = 0; q < tv.length; q++) { td[q] = D_[tv[q]]; tp[q] = pred[tv[q]]; }
-      trees[k] = { verts: tv, dist: td, pred: tp };
       // 只有接入运营线路的车站提供服务：未通车站不计覆盖、不参与接驳与站外换乘
       if (C.serviced && !C.serviced[k]) { for (const v of touched) D_[v] = INF; continue; }
       // 覆盖格
@@ -377,8 +459,10 @@
   };
   // 设置正式运营网络
   Model.prototype.setNetwork = function (C, keepState) {
+    this.wake();
     const oldNet = this.net;
     const net = this.buildMetro(C);
+    if (oldNet && (oldNet.N !== net.N || oldNet.nE !== net.nE || oldNet.nNodes !== net.nNodes)) { this.liveBuf = {}; this.predBuf = {}; }
     for (let p = 0; p < this.live.per.length; p++) {
       const P = this.live.per[p], old = { freq: P.freq, load: P.load, crowd: P.crowd, stIn: P.stIn, stOut: P.stOut, stXfer: P.stXfer, stBoard: P.stBoard, stDelay: P.stDelay };
       this.initMetroPer(P, net, p, old, oldNet);
@@ -394,7 +478,10 @@
   // ---------------- 单时段迭代 ----------------
   Model.prototype.metroSkim = function* (net, P, p, prm, store) {
     const N = net.N, nn = net.nNodes, nE = net.nE, mc = CFG.metro;
-    const cost = new Float32Array(nE), tAct = new Float32Array(nE);
+    let work = store.work;
+    if (!work || work.cost.length !== nE || work.dist.length !== nn) work = store.work = { cost: new Float32Array(nE), tAct: new Float32Array(nE), dist: new Float64Array(nn), dtm: new Float32Array(nn), dkm: new Float32Array(nn) };
+    const cost = work.cost, tAct = work.tAct;
+    cost.fill(0); tAct.fill(0);
     for (let e = 0; e < nE; e++) {
       const ty = net.eType[e];
       if (ty === 0) {
@@ -410,7 +497,7 @@
     }
     const gt = store.gt, tm = store.tm, km = store.km;
     const pred = store.pred, order = store.order, nOrd = store.nOrd;
-    const dist = new Float64Array(nn), dtm = new Float32Array(nn), dkm = new Float32Array(nn);
+    const dist = work.dist, dtm = work.dtm, dkm = work.dkm;
     const heap = this.heap;
     for (let s = 0; s < N; s++) {
       dist.fill(INF);
@@ -436,7 +523,7 @@
         if (dist[t] >= INF || t === s || !(dkm[t] > 0)) { gt[ob + t] = INF; continue; }
         gt[ob + t] = dist[t] - prm.tpen; tm[ob + t] = dtm[t]; km[ob + t] = dkm[t];
       }
-      if ((s & 7) === 7) yield;
+      if ((s & 3) === 3) yield;
     }
   };
 
@@ -459,6 +546,7 @@
     const fHWo = sp.hwOut[p] / hrs, fHWr = sp.hwRet[p] / hrs, fHOo = sp.hoOut[p] / hrs, fHOr = sp.hoRet[p] / hrs;
     let store = null;
     const hasMetro = net && net.R > 0;
+    let stable = P.iters > 0;
     if (hasMetro) { store = this.allocSkimStore(net, buf); yield* this.metroSkim(net, P, p, prm, store); store.D.fill(0); }
     // ---- 方式选择 ----
     if (!buf.carDem || buf.carDem.length !== Z * Z) buf.carDem = new Float32Array(Z * Z);
@@ -472,15 +560,20 @@
     const kmPerCell = CFG.CELL_M / 1000;
     P.desTot.fill(0); P.desMetro.fill(0); P.zTrips.fill(0); P.zMetro.fill(0); P.zAccess.fill(0);
     const BW = this.BW, ZW = this.ZW;
-    const blk = function (z) { return (((z / ZW) | 0) >> 1) * BW + ((z % ZW) >> 1); };
+    if (!this.zoneBlock) this.zoneBlock = Int32Array.from({ length: Z }, function (_, z) { return (((z / ZW) | 0) >> 1) * BW + ((z % ZW) >> 1); });
+    const blocks = this.zoneBlock;
+    // The same directed OD can appear in both purpose flows. Cache only the winning
+    // access-pair indices within this iteration, never rounded costs or stale results.
+    if (hasMetro && (!buf.choice || buf.choice.length !== Z * Z)) buf.choice = new Int8Array(Z * Z);
+    const choices = hasMetro ? buf.choice : null;
+    if (choices) choices.fill(-2);
     const self = this;
     const zJ = this.zJobs;
     const theta = prm.theta;
     const process = function (o, d, F, cw) {
       if (F <= 0) return;
       let ct = skT[o * Z + d], ck = skK[o * Z + d];
-      const straight = U.dist(self.zCx[o], self.zCy[o], self.zCx[d], self.zCy[d]) * kmPerCell * 1.3;
-      if (!(ct > 0) || ct >= INF) { ct = straight / 16 * 60 + 3; ck = straight; }
+      if (!(ct > 0) || ct >= INF) { const straight = U.dist(self.zCx[o], self.zCy[o], self.zCx[d], self.zCy[d]) * kmPerCell * 1.3; ct = straight / 16 * 60 + 3; ck = straight; }
       const carMoney = ck * prm.cpk + prm.park;
       const gtCar = ct + prm.carAccess + carMoney / prm.vot * 60;
       let metro = 0, mTime = 0, fare = 0, mKm = 0, bs = -1, bt = -1;
@@ -490,7 +583,13 @@
         const lo = acc.zl[o], ld = acc.zl[d];
         if (fo > 0 && fd > 0 && lo && ld) {
           let best = INF, bw = 0;
-          for (let a = 0; a < lo.length; a++) {
+          const pair = o * Z + d, cached = choices[pair];
+          let winner = -1;
+          if (cached >= 0) {
+            const A = lo[cached >> 2], Bq = ld[cached & 3];
+            bs = A.s; bt = Bq.s; bw = A.w + Bq.w;
+            best = prm.walkW * bw + store.gt[bs * N + bt];
+          } else if (cached === -2) for (let a = 0; a < lo.length; a++) {
             const A = lo[a], row = A.s * N;
             for (let b = 0; b < ld.length; b++) {
               const Bq = ld[b];
@@ -498,9 +597,10 @@
               const g = store.gt[row + Bq.s];
               if (g >= INF) continue;
               const v = prm.walkW * (A.w + Bq.w) + g;
-              if (v < best) { best = v; bs = A.s; bt = Bq.s; bw = A.w + Bq.w; }
+              if (v < best) { best = v; bs = A.s; bt = Bq.s; bw = A.w + Bq.w; winner = (a << 2) | b; }
             }
           }
+          if (cached === -2) choices[pair] = winner;
           if (bs >= 0) {
             mKm = store.km[bs * N + bt];
             fare = self.fareFor(mKm);
@@ -523,7 +623,7 @@
       if (cw > 0) { st.commTrips += F * cw; st.commTime += (car * tCar + metro * mTime) * cw; }
       P.zTrips[o] += F; P.zMetro[o] += metro;
       P.zAccess[o] += zJ[d] * Math.exp(-gtBest / 30);
-      const key = blk(o) * self.B + blk(d);
+      const key = blocks[o] * self.B + blocks[d];
       P.desTot[key] += F; P.desMetro[key] += metro;
     };
     let cnt = 0;
@@ -534,13 +634,15 @@
         process(i, j, F1, F1 > 0 ? hw * fHWo / F1 : 0);
         process(j, i, F2, F2 > 0 ? hw * fHWr / F2 : 0);
       }
-      if ((++cnt & 31) === 0) yield;
+      if ((++cnt & 7) === 0) yield;
     }
     // ---- 地铁客流加载与自动运营 ----
     if (hasMetro) {
       const nn = net.nNodes, nE = net.nE;
-      const load = new Float32Array(nE), accN = new Float64Array(nn);
-      const stIn = new Float32Array(N), stOut = new Float32Array(N);
+      let work = buf.metroLoad;
+      if (!work || work.load.length !== nE || work.accN.length !== nn || work.stIn.length !== N) work = buf.metroLoad = { load: new Float32Array(nE), accN: new Float64Array(nn), stIn: new Float32Array(N), stOut: new Float32Array(N), stBoard: new Float32Array(N), walkIn: new Float32Array(N) };
+      const load = work.load, accN = work.accN, stIn = work.stIn, stOut = work.stOut;
+      load.fill(0); accN.fill(0); stIn.fill(0); stOut.fill(0);
       for (let s = 0; s < N; s++) {
         const row = s * N;
         let any = false;
@@ -553,11 +655,12 @@
           if (a > 0) { const e = store.pred[pb + n]; if (e >= 0) { load[e] += a; accN[net.eFrom[e]] += a; } accN[n] = 0; }
         }
         accN[s] = 0;
-        if ((s & 15) === 15) yield;
+        if ((s & 7) === 7) yield;
       }
       const lam = opts.metroLam || 0.5;
-      for (let e = 0; e < nE; e++) P.load[e] = P.load[e] * (1 - lam) + load[e] * lam;
-      const stBoard = new Float32Array(N), walkIn = new Float32Array(N);
+      for (let e = 0; e < nE; e++) { const old = P.load[e]; P.load[e] = old * (1 - lam) + load[e] * lam; if (old !== P.load[e]) stable = false; }
+      const stBoard = work.stBoard, walkIn = work.walkIn;
+      stBoard.fill(0); walkIn.fill(0);
       for (let e = 0; e < nE; e++) {
         const ty = net.eType[e];
         if (ty === 0) stBoard[net.eSt[e]] += P.load[e];
@@ -565,6 +668,7 @@
       }
       const mc = CFG.metro;
       for (let s = 0; s < N; s++) {
+        const oldIn = P.stIn[s], oldOut = P.stOut[s], oldDelay = P.stDelay[s];
         P.stIn[s] = P.stIn[s] * (1 - lam) + stIn[s] * lam;
         P.stOut[s] = P.stOut[s] * (1 - lam) + stOut[s] * lam;
         P.stBoard[s] = stBoard[s];
@@ -573,6 +677,7 @@
         const ratio = (P.stIn[s] + P.stOut[s] + P.stXfer[s]) / cap;
         const dl = U.clamp((ratio - 0.8) * 10, 0, 12);
         P.stDelay[s] = P.stDelay[s] * 0.5 + dl * 0.5;
+        if (oldIn !== P.stIn[s] || oldOut !== P.stOut[s] || oldDelay !== P.stDelay[s]) stable = false;
       }
       // 自动配车：发车频率取「线路最低服务水平」（按站数、站距）与「最大断面客流所需」中的较大者
       for (let r = 0; r < net.R; r++) {
@@ -580,47 +685,42 @@
         let mx = 0;
         for (let q = 0; q < re.length; q++) if (P.load[re[q]] > mx) mx = P.load[re[q]];
         const need = U.clamp(Math.max(mx / (rt.cap * mc.targetLF), Model.serviceFloor(rt, p)), 1, mc.fMax);
-        P.freq[r] = P.freq[r] * 0.55 + need * 0.45;
+        const oldFreq = P.freq[r]; P.freq[r] = oldFreq * 0.55 + need * 0.45;
+        if (oldFreq !== P.freq[r]) stable = false;
         for (let q = 0; q < re.length; q++) {
           const e = re[q];
           const LF = P.load[e] / Math.max(1, P.freq[r] * rt.cap);
           let cf = 1;
           if (LF > 0.6) cf = 1 + 0.25 * Math.min(1, (LF - 0.6) / 0.4);
           if (LF > 1) cf = 1.25 + 1.6 * (LF - 1);
-          P.crowd[e] = Math.min(3.5, P.crowd[e] * 0.5 + cf * 0.5);
+          const oldCrowd = P.crowd[e]; P.crowd[e] = Math.min(3.5, oldCrowd * 0.5 + cf * 0.5);
+          if (oldCrowd !== P.crowd[e]) stable = false;
           if (LF > 1) st.crowdPkm += P.load[e] * net.eKm[e];
         }
       }
     }
     // ---- 汽车分配 ----
     const road = this.road, nN = road.nN, nA = road.nA;
-    const aux = new Float32Array(nA);
-    const dist = new Float64Array(nN), dkm = new Float32Array(nN), pred = new Int32Array(nN), order = new Int32Array(nN), accN = new Float64Array(nN);
+    let work = buf.roadWork;
+    if (!work || work.aux.length !== nA || work.dist.length !== nN) work = buf.roadWork = { aux: new Float32Array(nA), dist: new Float64Array(nN), dkm: new Float32Array(nN), pred: new Int32Array(nN), order: new Int32Array(nN), accN: new Float64Array(nN) };
+    const aux = work.aux, dist = work.dist, dkm = work.dkm, pred = work.pred, order = work.order, accN = work.accN;
+    aux.fill(0); accN.fill(0);
+    const rd = this.roadData, connStart = rd.start, connNode = rd.nodes, connTime = rd.times, connKm = rd.km;
     const time = P.arcTime, heap = this.heap;
     for (let o = 0; o < Z; o++) {
-      const conns = road.zoneConn[o];
-      if (!conns || !conns.length) continue;
+      const c0 = connStart[o], c1 = connStart[o + 1];
+      if (c0 === c1) continue;
       if (!hasCar[o] && !(opts.fullSkim && this.zPop[o] > 0) && P.iters > 0) continue;
-      dist.fill(INF); heap.clear();
-      for (const c of conns) if (c.t < dist[c.node]) { dist[c.node] = c.t; dkm[c.node] = c.km; pred[c.node] = -1; heap.push(c.t, c.node); }
-      let no = 0;
-      while (heap.n) {
-        const u = heap.pop(), du = heap.lastKey;
-        if (du > dist[u]) continue;
-        order[no++] = u;
-        for (let k = road.outStart[u]; k < road.outStart[u + 1]; k++) {
-          const a = road.outArc[k], v = road.arcTo[a], nd = du + time[a];
-          if (nd < dist[v]) { dist[v] = nd; dkm[v] = dkm[u] + road.arcLen[a] / 1000; pred[v] = a; heap.push(nd, v); }
-        }
-      }
+      const no = roadTree(road, rd, time, o, work, heap);
       const row = o * Z;
-      for (let d = 0; d < Z; d++) {
-        const cd = road.zoneConn[d];
-        if (!cd || !cd.length || d === o) continue;
+      for (const d of rd.zones) {
+        if (d === o) continue;
         let best = INF, bk = 0, bn = -1;
-        for (const c of cd) { const v = dist[c.node] + c.t; if (v < best) { best = v; bk = dkm[c.node] + c.km; bn = c.node; } }
+        for (let k = connStart[d]; k < connStart[d + 1]; k++) { const node = connNode[k], v = dist[node] + connTime[k]; if (v < best) { best = v; bk = dkm[node] + connKm[k]; bn = node; } }
         if (bn < 0 || best >= INF) continue;
+        const oldT = stable ? skT[row + d] : 0, oldK = stable ? skK[row + d] : 0;
         skT[row + d] = best; skK[row + d] = bk;
+        if (stable && (oldT !== skT[row + d] || oldK !== skK[row + d])) stable = false;
         const dem = carDem[row + d];
         if (dem > 0) accN[bn] += dem;
       }
@@ -628,15 +728,17 @@
         const n = order[q], a = accN[n];
         if (a > 0) { const e = pred[n]; if (e >= 0) { aux[e] += a; accN[road.arcFrom[e]] += a; } accN[n] = 0; }
       }
-      if ((o & 3) === 3) yield;
+      if ((o & 1) === 1) yield;
     }
     const lam = P.iters === 0 ? 1 : (opts.lam || CFG.road.msa);
     const A = CFG.road.bprA, capF = this.capF || 1;
     for (let a = 0; a < nA; a++) {
-      const v = P.arcVol[a] * (1 - lam) + aux[a] * lam;
+      const oldVol = P.arcVol[a], oldTime = P.arcTime[a];
+      const v = oldVol * (1 - lam) + aux[a] * lam;
       P.arcVol[a] = v;
       const x = v / (road.arcCap[a] * capF);
       P.arcTime[a] = road.arcT0[a] * Math.min(8, 1 + A * x * x * x * x);
+      if (oldVol !== P.arcVol[a] || oldTime !== P.arcTime[a]) stable = false;
       st.congNum += v * road.arcLen[a] * (P.arcTime[a] / road.arcT0[a]);
       st.congDen += v * road.arcLen[a];
     }
@@ -646,7 +748,9 @@
       const o = P.stats;
       for (const k in st) st[k] = o[k] * 0.4 + st[k] * 0.6;
     }
+    if (stable && P.stats) for (const k in st) if (st[k] !== P.stats[k]) { stable = false; break; }
     P.stats = st;
+    P.stable = stable;
   };
 
   // ---------------- 实时求解循环 ----------------
@@ -657,6 +761,14 @@
         this.computeDaily();
       }
       this.cycles++; this.sinceChange++;
+      this.quietCycles = this.live.per.every(function (P) { return P.stable; }) ? (this.quietCycles || 0) + 1 : 0;
+      // Stop only at an exact floating-point fixed point, after two complete
+      // unchanged cycles. Explicit solves and all input changes still run fully.
+      if (this.quietCycles >= 2) {
+        this.settled = true;
+        this.settledAt = { year: this.year, fare: this.fare.flat, city: this.city.version, road: this.city.roadVersion, net: this.net };
+        yield;
+      }
     }
   };
   Model.prototype.step = function (budget) {
@@ -670,11 +782,17 @@
       }
       return;
     }
+    if (this.settled) {
+      const at = this.settledAt;
+      if (at.year === this.year && at.fare === this.fare.flat && at.city === this.city.version && at.road === this.city.roadVersion && at.net === this.net) return;
+      this.wake();
+    }
     if (!this.gen) this.gen = this.liveLoop();
-    while (performance.now() - t0 < budget) this.gen.next();
+    while (!this.settled && performance.now() - t0 < budget) this.gen.next();
   };
   // 快速收敛（读档、跳月等场合），同步执行
   Model.prototype.solveNow = function (cycles) {
+    this.wake();
     const g = (function* (self) {
       for (let c = 0; c < cycles; c++) for (let p = 0; p < NP; p++) { yield* self.iterate(self.net, self.live.per[p], p, { fullSkim: c === 0 }); }
     })(this);
@@ -683,6 +801,7 @@
     this.gen = null;
   };
   Model.prototype.solveGen = function* (cycles) {
+    this.wake();
     for (let c = 0; c < cycles; c++) for (let p = 0; p < NP; p++) { yield* this.iterate(this.net, this.live.per[p], p, { fullSkim: c === 0 }); }
     this.computeDaily();
     this.gen = null;

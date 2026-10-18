@@ -28,6 +28,7 @@
     this.selection = null; this.layer = 'none'; this.highlightLine = null; this.hoverConflict = null;
     this.stack = []; this.open = {}; this.live = [];
     this.save = { state: 'none', at: null, msg: '' };
+    this._manualSaves = new Set();
     this.lastTick = 0; this.lastSlow = 0;
     this.buildChrome();
     const self = this;
@@ -169,7 +170,7 @@
     const w = window.innerWidth / (CM.Settings.get('uiScale') || 1);
     for (const b of [1540, 1400, 1260, 1080, 960, 820]) this.top.classList.toggle('lt' + b, w < b);
     for (const k in this.pills) this.pills[k].el.classList.remove('squeezed');
-    const self = this; requestAnimationFrame(function () { self.fitHud(); });
+    const self = this; requestAnimationFrame(function () { self.fitHud(); if (self.dropdown && self.dropdown._place) self.dropdown._place(); });
   };
   // 指标栏放不下时，按优先级从低到高收起（满意度 → 通勤 → 分担率 → 人口 → 拥堵）
   UI.prototype.fitHud = function () {
@@ -248,6 +249,7 @@
     g.on('draftLive', function () { self.lastDraftChange = performance.now(); });
     g.on('prediction', function () { self.refreshPrediction(); self.renderDraftbar(); });
     g.on('network', function () { self.markUnsaved(); self.rerenderPage(); });
+    g.on('finance', function () { self.markUnsaved(); self.rerenderPage(); self.scheduleAutosave(); });
     g.on('month', function () { self.markUnsaved(); self.rerenderPage(); if (!g.jumping) { self.scheduleAutosave(); if (g.speed > 0) snd('month'); } });
     g.on('autosave', function () { self.scheduleAutosave(); });
     g.on('failed', function (f) { snd('fail'); if (!g.jumping) self.showFailure(f); });
@@ -1043,13 +1045,10 @@
   UI.prototype.showMenu = function (anchor) {
     const self = this;
     if (this.dropdown) { this.dropdown.remove(); this.dropdown = null; return; }
-    const r = anchor.getBoundingClientRect();
     const item = function (icon, label, fn, key) { return h('button', { onclick: function () { self.dropdown.remove(); self.dropdown = null; fn(); } }, ic(icon), h('span', { class: 'grow' }, label), key ? h('kbd', null, key) : null); };
-    const left = r.left < window.innerWidth / 2;
-    const st = { top: (r.bottom + 8) + 'px' };
-    if (left) st.left = r.left + 'px'; else st.right = (window.innerWidth - r.right) + 'px';
+    const narrowItem = function (icon, label, fn) { const b = item(icon, label, fn); b.classList.add('dd-narrow'); return b; };
     const g = this.g();
-    const dd = h('div', { class: 'dropdown', style: st },
+    const dd = h('div', { class: 'dropdown' },
       h('div', { class: 'dd-head' }, h('img', { src: 'img/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
       item('save', '保存进度', function () { self.manualSave(); }),
       item('folder', '读取存档', function () { self.showSaveManager(true); }),
@@ -1059,12 +1058,22 @@
       item('help', '操作说明', function () { self.openPage('help', null, { root: true }); }),
       item('megaphone', '更新公告', function () { self.showNews(); }),
       // 窄屏（手机）顶栏收起了深浅模式与设置按钮，在菜单里提供
-      window.innerWidth <= 760 ? item(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', document.documentElement.dataset.theme === 'dark' ? '浅色模式' : '深色模式', function () { self.toggleTheme(); }) : null,
-      window.innerWidth <= 760 ? item('gear', '设置', function () { self.showSettings(); }) : null,
+      narrowItem(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', document.documentElement.dataset.theme === 'dark' ? '浅色模式' : '深色模式', function () { self.toggleTheme(); }),
+      narrowItem('gear', '设置', function () { self.showSettings(); }),
       h('hr'),
       item('home', '返回主菜单', function () { self.backToMenu(); }));
     document.body.appendChild(dd);
     this.dropdown = dd;
+    // 矮窗口内保留菜单自身的滚动区域；窗口或界面缩放后重新跟随菜单按钮定位。
+    dd._place = function () {
+      const r = anchor.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+      const top = Math.max(8, Math.min(r.bottom + 8, vh / 2));
+      dd.style.top = top + 'px';
+      dd.style.maxHeight = Math.max(0, vh - top - 8) + 'px';
+      const x = r.left < vw / 2 ? r.left : r.right - dd.offsetWidth;
+      dd.style.left = Math.max(8, Math.min(x, vw - dd.offsetWidth - 8)) + 'px';
+    };
+    dd._place();
     setTimeout(function () {
       const close = function (e) { if (self.dropdown && !self.dropdown.contains(e.target)) { self.dropdown.remove(); self.dropdown = null; } window.removeEventListener('pointerdown', close, true); };
       window.addEventListener('pointerdown', close, true);
@@ -1335,15 +1344,74 @@
     const self = this;
     const fileIn = h('input', { type: 'file', accept: '.json,.cmsave,application/json', style: { display: 'none' }, onchange: function (e) { const f = e.target.files[0]; if (f) self.importFile(f, true); e.target.value = ''; } });
     const list = h('div');
+    const editing = new Set();
     const draw = function () {
+      // 保存、导入等后台操作可能要求刷新列表；编辑结束前保留原输入框，避免丢字、焦点或打断中文输入。
+      if (editing.size) return;
       list.innerHTML = '';
       const games = CM.Save.list(mapId);
       if (!games.length) list.appendChild(h('div', { class: 'note' }, mapId ? '该地图暂无存档。' : '暂无存档。'));
       for (const gm of games) {
-        const grp = h('div', { class: 'game-group' });
-        grp.appendChild(h('div', { class: 'h' }, ic(gm.mode === 'free' ? 'sparkle' : 'trophy'), gm.name, h('span', { class: 'tag' }, gm.mode === 'free' ? '自由建造' : '经营挑战'), mapId ? null : h('span', { class: 'tag info' }, (CM.MAPS[gm.map || 'gz'] || { name: gm.map }).name), h('span', { class: 'grow' }),
-          h('button', { class: 'btn sm ghost', onclick: function () { const n = prompt('新的进度名称', gm.name); if (n && n.trim()) { CM.Save.rename(gm.gameId, n.trim()); if (self.g() && self.g().id === gm.gameId) self.g().name = n.trim(); draw(); } } }, ic('pencil'), '重命名'),
-          h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { CM.Save.removeGame(gm.gameId); self.showSaveManager(inGame, mapId); }, true, 'trash'); } }, ic('trash'), '删除进度')));
+        const grp = h('div', { class: 'game-group', 'data-game-id': gm.gameId });
+        const title = h('span', { class: 'save-name-title' }, gm.name);
+        const rename = h('button', { class: 'btn sm ghost save-name-rename', onclick: function () {
+          if (editing.has(gm.gameId)) return;
+          editing.add(gm.gameId); rename.disabled = true;
+          const inputId = U.uid('save-name-');
+          const input = h('input', { id: inputId, class: 'save-name-input', type: 'text', value: gm.name, autocomplete: 'off' });
+          const status = h('div', { class: 'save-name-status tiny', role: 'status', 'aria-live': 'polite' });
+          let busy = false;
+          const finish = function () {
+            editing.delete(gm.gameId); editor.remove(); rename.disabled = false;
+            if (!editing.size) draw();
+            const group = Array.from(list.children).find(function (el) { return el.dataset.gameId === gm.gameId; });
+            const btn = group && group.querySelector('.save-name-rename'); if (btn) btn.focus();
+          };
+          const error = function (text) { status.textContent = text; status.classList.add('bad'); input.setAttribute('aria-invalid', 'true'); input.focus(); };
+          const saveName = async function () {
+            if (busy) return;
+            const name = input.value.trim();
+            if (!name) { error('名称不能为空，请输入进度名称。'); return; }
+            busy = true; input.readOnly = true; save.disabled = cancel.disabled = true;
+            status.textContent = '正在保存名称…'; status.classList.remove('bad'); input.removeAttribute('aria-invalid');
+            try {
+              // 已开始的自动或手动存档仍可能写入旧名称；等它们结束后再改索引。
+              while (self.saving || self._manualSaves.size) {
+                const pending = Array.from(self._manualSaves); if (self.saving) pending.push(self.saving);
+                await Promise.all(pending);
+              }
+              const current = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
+              if (!current) throw new Error('该进度已不存在，请取消后刷新列表。');
+              if (current.name !== name) CM.Save.rename(gm.gameId, name);
+              const saved = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
+              if (!saved || saved.name !== name) throw new Error('未能写入名称，请重试。');
+              const active = self.g();
+              if (active && active.id === gm.gameId && active.name !== name) {
+                active.name = name; active.touch(); self.markUnsaved(); self.scheduleAutosave();
+              }
+              gm.name = name; title.textContent = name;
+              finish(); self.toast('进度名称已保存', 'good');
+            } catch (e) {
+              const reason = e && e.name === 'QuotaExceededError' ? '浏览器本地存储空间不足，请清理空间后重试。' : (e && e.message || '请稍后重试。');
+              error('名称保存失败：' + reason);
+            } finally { busy = false; input.readOnly = false; save.disabled = cancel.disabled = false; }
+          };
+          const save = h('button', { class: 'btn primary sm', onclick: saveName }, '保存');
+          const cancel = h('button', { class: 'btn sm ghost', onclick: function () { if (!busy) finish(); } }, '取消');
+          const editor = h('div', { class: 'save-name-editor' },
+            h('label', { class: 'save-name-label', for: inputId }, '进度名称'),
+            h('div', { class: 'save-name-controls' }, input, h('div', { class: 'save-name-actions' }, save, cancel)), status);
+          editor.addEventListener('keydown', function (e) {
+            if (e.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter' && e.target === input) { e.preventDefault(); e.stopPropagation(); saveName(); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!busy) finish(); }
+          });
+          input.addEventListener('input', function () { status.textContent = ''; status.classList.remove('bad'); input.removeAttribute('aria-invalid'); });
+          grp.insertBefore(editor, grp.children[1] || null); input.focus(); input.select();
+        } }, ic('pencil'), '重命名');
+        grp.appendChild(h('div', { class: 'h save-name-heading' }, ic(gm.mode === 'free' ? 'sparkle' : 'trophy'), title, h('span', { class: 'tag' }, gm.mode === 'free' ? '自由建造' : '经营挑战'), mapId ? null : h('span', { class: 'tag info' }, (CM.MAPS[gm.map || 'gz'] || { name: gm.map }).name),
+          h('div', { class: 'save-name-actions' }, rename,
+            h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { CM.Save.removeGame(gm.gameId); self.showSaveManager(inGame, mapId); }, true, 'trash'); } }, ic('trash'), '删除进度'))));
         for (const sl of gm.slots) grp.appendChild(self.slotRow(sl, inGame));
         list.appendChild(grp);
       }
@@ -1452,13 +1520,15 @@
     const g = this.g(); if (!g) return Promise.resolve();
     if (g.pending || g.jumping) { this.toast('正在进行月度结算，请稍候再保存', 'info'); return Promise.resolve({ ok: false, error: '正在结算' }); }
     const self = this, snap = this.saveSnap(g);
-    return CM.Save.save(g, 'manual', { slotId: slotId, label: label || ('手动存档 ' + g.clock.y + '年' + g.clock.m + '月') }).then(function (r) {
+    const pending = CM.Save.save(g, 'manual', { slotId: slotId, label: label || ('手动存档 ' + g.clock.y + '年' + g.clock.m + '月') }).then(function (r) {
       if (r.ok) { self.markSaved(g, r.savedAt, snap); self.toast('已保存到本地（' + (r.size / 1024).toFixed(0) + ' KB）', 'good'); }
       else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('保存失败：' + r.error, 'bad'); }
       self.rerenderPage();
       if (self.screenRefresh) self.screenRefresh();
       return r;
     });
+    this._manualSaves.add(pending);
+    return pending.finally(function () { self._manualSaves.delete(pending); });
   };
 
   // ======================== 跳月/跳年 与 失败 ========================

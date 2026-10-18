@@ -579,30 +579,28 @@
     const el = h('div');
     const free = E.isFree();
     const grid = h('div', { class: 'stat-grid' });
-    const sF = this.stat('当前资金', '—'), sG = this.stat('本月拨款', '—'), sR = this.stat('本月票款', '—'), sO = this.stat('本月运营费用', '—');
-    grid.append(sF, sG, sR, sO);
+    const sF = this.stat(free ? '资金' : '一般资金', '—'), sC = this.stat('建设专项资金', '—'), sD = this.stat('债务余额', '—'),
+      sG = this.stat('本月拨款', '—'), sR = this.stat('本月票款', '—'), sO = this.stat('本月运营成本', '—');
+    if (free) grid.append(sF, sG, sR, sO); else grid.append(sF, sC, sD, sG, sR, sO);
     el.appendChild(grid);
     const upd = function () {
       const c = E.cur;
-      sF.setV(free ? '不限' : U.fmtMoney(E.funds), free ? '自由建造' : (E.funds < 0 ? '负余额' : ''), E.funds < 0 ? 'bad' : 'muted');
+      sF.setV(free ? '不限' : U.fmtMoney(E.funds), free ? '自由建造' : (E.funds < 0 ? '负余额' : '运营、利息与还本从这里支付'), E.funds < 0 ? 'bad' : 'muted');
+      sC.setV(U.fmtMoney(E.capex), '债券募集，只能用于建设');
+      sD.setV(U.fmtMoney(E.debtTotal()), E.overdue > CM.Economy.MONEY_EPS ? '含逾期 ' + U.fmtMoney(E.overdue) : (E.bonds.some(function (b) { return !b.done; }) ? E.bonds.filter(function (b) { return !b.done; }).length + ' 笔未到期' : '暂无债务'), E.overdue > CM.Economy.MONEY_EPS ? 'bad' : 'muted');
       sG.setV(U.fmtMoney(c.grant), free ? '自由建造不发放' : '每月初发放');
       sR.setV(U.fmtMoney(c.fare), c.days + ' 天累计');
       sO.setV(U.fmtMoney(c.ops), c.days + ' 天累计');
     };
     upd(); this.live.push(upd);
+    if (!free && E.overdue > CM.Economy.MONEY_EPS) el.appendChild(this.callout('bad', 'warn', '存在逾期债务 ' + U.fmtMoney(E.overdue) + '（已 ' + E.overdueMonths + ' 个月）：每月收取逾期费用，' + (E.overdueMonths >= 6 ? '已暂停全部债券发行' : '城投债已暂停发行') + '。一般资金有余额时会自动偿还。'));
     el.appendChild(this.sec('fi-fare', '票价', UI.fmtFare(E.fare.flat), function () { return self.fareEditor(); }, true, 'ticket'));
-    el.appendChild(this.sec('fi-month', '收支明细', g.clock.y + '年' + g.clock.m + '月', function () {
-      const c = E.cur, oi = E.opsIndex(g.clock.y);
-      let st = 0; for (const s of g.compiled.stations) st += CFG.ops.stationDaily[s.size] * oi;
-      const box = h('div', null, self.kv([['期初资金', free ? '—' : U.fmtMoney(c.start)], ['拨款', '+ ' + U.fmtMoney(c.grant)], ['票款', '+ ' + U.fmtMoney(c.fare)], ['任务奖励', '+ ' + U.fmtMoney(c.reward)], ['建设与拆迁', '− ' + U.fmtMoney(c.construction + c.demolition + c.upgrade + c.relocation)], ['运营', '− ' + U.fmtMoney(c.ops)]]),
-        h('div', { class: 'note', style: { marginTop: '6px' } }, '每日运营费用约 ' + U.fmtMoney(((g.model.daily && g.model.daily.carKm) || 0) * CFG.ops.carKmCost * oi + st) + '（列车运行 + ' + g.compiled.stations.length + ' 座车站），票款与运营费用逐日结算。'));
-      if (E.ledger.length) {
-        const t = h('table', { class: 'tbl', style: { marginTop: '8px' } }, h('tr', null, h('th', null, '月份'), h('th', null, '收入'), h('th', null, '支出'), h('th', null, '期末')));
-        for (const r of E.ledger.slice(-12).reverse()) t.appendChild(h('tr', null, h('td', null, r.y + '.' + r.m), h('td', null, U.fmtYi(r.grant + r.fare + r.reward, 2)), h('td', null, U.fmtYi(r.construction + r.demolition + r.upgrade + r.relocation + r.ops, 2)), h('td', { class: r.end < 0 ? 'bad' : '' }, free ? '—' : U.fmtYi(r.end, 1))));
-        box.append(h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, '最近 12 个月（' + CFG.money.yi + '）'), t);
-      }
-      return box;
-    }, false, 'coin'));
+    el.appendChild(this.sec('fi-month', '收支明细', g.clock.y + '年' + g.clock.m + '月', function () { return self.ledgerBlock(); }, false, 'coin'));
+    if (!free && E.canBorrow()) {
+      el.appendChild(this.sec('fi-bond', '债券融资', U.fmtMoney(E.principalDebt()) + ' 未偿本金', function () { return self.bondBlock(); }, true, 'wallet'));
+      el.appendChild(this.sec('fi-debt', '债务详情与偿债预测', '', function () { return self.debtBlock(); }, false, 'calYear'));
+    }
+    if (!free) el.appendChild(this.sec('fi-flow', '资金流水', '最近 ' + Math.min(40, E.flow.length) + ' 笔', function () { return self.flowBlock(); }, false, 'tasks'));
     if (!free) {
       el.appendChild(this.sec('fi-rule', '拨款与失败条件', '', function () {
         const b = h('div');
@@ -617,6 +615,143 @@
       }, false, 'info'));
     }
     return { title: '财政与票价', el: el };
+  };
+  // ---------- 财政：月度账本（科目分开：财政收入、融资到账、建设支出、运营成本、利息、本金偿还、逾期费用） ----------
+  const BK = CM.Economy.BUILD_KINDS;
+  const buildOf = function (r) { let s = 0; for (const k of BK) s += r[k] || 0; return s; };
+  const incomeOf = function (r) { return (r.grant || 0) + (r.fare || 0) + (r.reward || 0); };
+  const serviceOf = function (r) { return (r.interest || 0) + (r.principal || 0) + (r.penalty || 0); };
+  UI.prototype.ledgerBlock = function () {
+    const g = this.g(), E = g.econ, c = E.cur, free = E.isFree(), oi = E.opsIndex(g.clock.y), M = function (v) { return U.fmtMoney(v || 0); };
+    let st = 0; for (const s of g.compiled.stations) st += CFG.ops.stationDaily[s.size] * oi;
+    const box = h('div');
+    const group = function (title, rows, cls) { box.appendChild(h('div', { class: 'fl-g ' + (cls || '') }, h('div', { class: 'fl-h' }, title), this.kv(rows))); }.bind(this);
+    if (!free) box.appendChild(this.kv([['期初一般资金', M(c.start)], ['期初建设专项资金', M(c.capexStart)]]));
+    group('财政收入', [['政府拨款', '+ ' + M(c.grant)], ['票款', '+ ' + M(c.fare)], ['任务奖励', '+ ' + M(c.reward)]], 'in');
+    if (!free) group('融资到账（不计入收入）', [['债券募集 → 建设专项资金', '+ ' + M(c.bond)]], 'fin');
+    group('建设支出', [['建设与拆迁', '− ' + M(buildOf(c))], !free ? ['其中由专项资金支付', M(c.capexUse)] : null], 'out');
+    group('运营成本', [['列车运行与车站', '− ' + M(c.ops)]], 'out');
+    if (!free) group('偿债', [['利息', '− ' + M(c.interest)], ['本金偿还', '− ' + M(c.principal)], ['逾期费用', '− ' + M(c.penalty)]], 'debt');
+    box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '每日运营成本约 ' + U.fmtMoney(((g.model.daily && g.model.daily.carKm) || 0) * CFG.ops.carKmCost * oi + st) + '（列车运行 + ' + g.compiled.stations.length + ' 座车站），票款与运营成本逐日结算；利息与本金在每月初拨款之后支付。'));
+    if (E.ledger.length) {
+      const t = h('table', { class: 'tbl', style: { marginTop: '8px' } }, h('tr', null, h('th', null, '月份'), h('th', null, '财政收入'), !free ? h('th', null, '融资') : null, h('th', null, '建设'), h('th', null, '运营'), !free ? h('th', null, '偿债') : null, h('th', null, '期末')));
+      for (const r of E.ledger.slice(-12).reverse()) t.appendChild(h('tr', null, h('td', null, r.y + '.' + r.m), h('td', null, U.fmtYi(incomeOf(r), 2)), !free ? h('td', null, r.bond ? U.fmtYi(r.bond, 2) : '—') : null, h('td', null, U.fmtYi(buildOf(r), 2)), h('td', null, U.fmtYi(r.ops || 0, 2)), !free ? h('td', null, serviceOf(r) ? U.fmtYi(serviceOf(r), 2) : '—') : null, h('td', { class: r.end < 0 ? 'bad' : '' }, free ? '—' : U.fmtYi(r.end, 1))));
+      box.append(h('div', { class: 'tiny muted', style: { marginTop: '8px' } }, '最近 12 个月（' + CFG.money.yi + '；期末为一般资金）'), h('div', { class: 'tbl-wrap' }, t));
+    }
+    return box;
+  };
+  // ---------- 财政：债券融资概况与发行入口 ----------
+  UI.prototype.bondBlock = function () {
+    const self = this, g = this.g(), E = g.econ, y = g.clock.y, D0 = CM.Economy.BOND_DEF;
+    const box = h('div');
+    for (const k of ['local', 'ct']) {
+      const out = E.principalDebt(k), cap = E.bondCap(k, y), quota = E.bondQuota(k, y), used = E.issuedIn(k, y), room = E.bondRoom(k, y), block = E.bondBlock(k);
+      box.appendChild(h('div', { class: 'bond-row' },
+        h('div', { class: 'row between' }, h('b', null, D0[k].name), h('span', { class: 'tiny muted' }, '3 年期 ' + (E.bondRate(k, y, 3) * 100).toFixed(2) + '% · 6 年期 ' + (E.bondRate(k, y, 6) * 100).toFixed(2) + '%')),
+        h('div', { class: 'bond-bar', 'data-tip': '未偿本金 ' + U.fmtMoney(out) + ' / 上限 ' + U.fmtMoney(cap) }, h('i', { style: { width: Math.min(100, out / Math.max(1, cap) * 100).toFixed(1) + '%' } })),
+        h('div', { class: 'row between tiny' }, h('span', { class: 'muted' }, '未偿本金 ' + U.fmtMoney(out) + ' / 上限 ' + U.fmtMoney(cap)), h('span', { class: block ? 'bad' : 'muted' }, block ? '暂停发行' : '本年还可发行 ' + U.fmtMoney(room) + '（年度额度 ' + U.fmtMoney(quota) + '，已发 ' + U.fmtMoney(used) + '）'))));
+    }
+    box.appendChild(h('div', { class: 'row', style: { marginTop: '10px', gap: '8px' } },
+      h('button', { class: 'btn primary sm', disabled: E.bondBlock('local') && E.bondBlock('ct') ? true : null, onclick: function () { self.showBondIssue(); } }, CM.icon('plus'), '发行债券'),
+      h('span', { class: 'tiny muted grow' }, '募集资金进入建设专项资金，只能用于地铁建设及改扩建；每年付息、到期一次还本。')));
+    return box;
+  };
+  // ---------- 财政：债务详情与未来偿债预测 ----------
+  UI.prototype.debtBlock = function () {
+    const g = this.g(), E = g.econ, D0 = CM.Economy.BOND_DEF, box = h('div');
+    const live = E.bonds.filter(function (b) { return !b.done; }), overdue = E.bonds.filter(function (b) { return b.done && !E.bondSettled(b); }), done = E.bonds.filter(function (b) { return E.bondSettled(b); });
+    if (!live.length) box.appendChild(h('div', { class: 'note' }, '目前没有未到期的债券。'));
+    for (const b of live.concat(overdue)) {
+      const k = b.paidYears + 1, t = b.ym0 + 12 * k, ny = Math.floor(t / 12), nm = t % 12 + 1, due = b.amount * b.rate + (k >= b.term ? b.amount : 0);
+      box.appendChild(h('div', { class: 'debt-card' },
+        h('div', { class: 'row between' }, h('b', null, D0[b.kind].name + ' · ' + U.fmtMoney(b.amount)), h('span', { class: 'tag' + (b.done ? ' bad' : '') }, b.done ? '已到期 · 本息未还清' : b.term + ' 年期 · ' + (b.rate * 100).toFixed(2) + '%')),
+        h('div', { class: 'tiny muted' }, b.issued[0] + '年' + b.issued[1] + '月发行 · ' + (b.issued[0] + b.term) + '年' + b.issued[1] + '月到期 · 实付利息 ' + U.fmtMoney(b.interestPaid) + '（已结算 ' + b.paidYears + ' / ' + b.term + ' 期）'),
+        b.done ? null : h('div', { class: 'small', style: { marginTop: '3px' } }, '下次还款：' + ny + '年' + nm + '月 ' + U.fmtMoney(due) + (k >= b.term ? '（含到期本金）' : '（利息）')),
+        (b.interestArrears || 0) + (b.principalArrears || 0) > CM.Economy.MONEY_EPS ? h('div', { class: 'small bad', style: { marginTop: '3px' } }, '逾期利息 ' + U.fmtMoney(b.interestArrears || 0) + ' · 逾期本金 ' + U.fmtMoney(b.principalArrears || 0)) : null));
+    }
+    if (done.length) box.appendChild(h('div', { class: 'tiny muted', style: { margin: '6px 0' } }, '已还清 ' + done.length + ' 笔，共 ' + U.fmtMoney(done.reduce(function (s, b) { return s + b.amount; }, 0))));
+    if (E.overdue > CM.Economy.MONEY_EPS) { const P = E.odParts(); box.appendChild(this.kv([['逾期合计', U.fmtMoney(E.overdue), 'bad'], ['其中利息 / 本金 / 费用', U.fmtMoney(P.interest) + ' / ' + U.fmtMoney(P.principal) + ' / ' + U.fmtMoney(P.penalty)], ['已逾期', E.overdueMonths + ' 个月']])); }
+    const fc = E.debtForecast(g.clock.y, g.clock.m, 7);
+    const t = h('table', { class: 'tbl', style: { marginTop: '8px' } }, h('tr', null, h('th', null, '年份'), h('th', null, '利息'), h('th', null, '到期本金'), h('th', null, '合计')));
+    let any = false;
+    for (const r of fc) { const s = r.interest + r.principal; if (s > CM.Economy.MONEY_EPS) any = true; t.appendChild(h('tr', null, h('td', null, r.y + (r.y === g.clock.y ? '（剩余月份）' : '')), h('td', null, r.interest > CM.Economy.MONEY_EPS ? U.fmtMoney(r.interest) : '—'), h('td', null, r.principal > CM.Economy.MONEY_EPS ? U.fmtMoney(r.principal) : '—'), h('td', null, s > CM.Economy.MONEY_EPS ? U.fmtMoney(s) : '—'))); }
+    box.appendChild(h('div', { class: 'fl-h', style: { marginTop: '10px' } }, '未来偿债预测'));
+    if (any) box.appendChild(h('div', { class: 'tbl-wrap' }, t));
+    else box.appendChild(h('div', { class: 'note' }, E.overdue > CM.Economy.MONEY_EPS ? '未来几年没有新的计划内到期本息；现有逾期仍需偿还，详见上方欠款明细。' : '未来几年没有需要偿还的本息。'));
+    box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '利息与本金只从一般资金支付（建设专项资金不能用于偿债）。一般资金不足时差额记为逾期：每月收取逾期费用（1%，逾期满 6 个月 1.5%，满 12 个月 2%），并限制继续发债；一般资金有余额时自动还清。逾期本身不会直接导致挑战失败。'));
+    return box;
+  };
+  // ---------- 财政：资金流水 ----------
+  UI.prototype.flowBlock = function () {
+    const E = this.g().econ, box = h('div');
+    if (!E.flow.length) { box.appendChild(h('div', { class: 'note' }, '还没有资金流水。')); return box; }
+    const list = h('div', { class: 'flow-list' });
+    for (const f of E.flow.slice(-40).reverse()) {
+      list.appendChild(h('div', { class: 'flow-row' },
+        h('span', { class: 'flow-d' }, f.y + '.' + f.m + '.' + f.d),
+        h('span', { class: 'flow-n' }, f.note, f.acct === 'capex' ? h('span', { class: 'tag fin' }, '专项') : null),
+        h('span', { class: 'flow-a ' + (f.amount >= 0 ? 'good' : (f.kind === 'overdue' ? 'bad' : '')) }, (f.amount >= 0 ? '+' : '−') + U.fmtMoney(Math.abs(f.amount)))));
+    }
+    box.appendChild(list);
+    box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '标「专项」的是建设专项资金账户；其余为一般资金。票款与运营成本按月汇总。'));
+    return box;
+  };
+  // ---------- 发行债券 ----------
+  UI.prototype.showBondIssue = function () {
+    const self = this, g = this.g();
+    if (!g || g.pending || g.jumping) { this.toast('正在结算，请稍候再发行债券', 'info'); return; }
+    // 固定确认前的日期和条款，避免模拟跨年后实际利率、额度与还款日期偏离预览。
+    this.setSpeed(0);
+    const E = g.econ, y = g.clock.y, D0 = CM.Economy.BOND_DEF;
+    let kind = !E.bondBlock('local') && E.bondRoom('local', y) > 0 ? 'local' : 'ct', term = 3, amount = 0;
+    const cards = h('div', { class: 'bond-kinds' });
+    const slider = h('input', { type: 'range', min: 0, max: 1, step: 1, value: 0, 'aria-label': '发行金额' });
+    const amt = h('div', { class: 'fare-v' });
+    const pv = h('div');
+    const ok = h('button', { class: 'btn primary', onclick: function () {
+      const r = g.issueBond(kind, term, amount);
+      if (!r.ok) { self.toast(r.error, 'bad'); return; }
+      CM.Sound && CM.Sound.play('coin');
+      self.toast('已发行' + D0[kind].name + ' ' + U.fmtMoney(r.bond.amount) + '，资金进入建设专项资金', 'good');
+      self.closeScreen(); self.markUnsaved(); self.openPage('finance', null, { root: true });
+    } }, CM.icon('check'), '确认发行');
+    const termCtl = h('div', { class: 'seg-ctl' });
+    const draw = function () {
+      cards.innerHTML = '';
+      for (const k of ['local', 'ct']) {
+        const block = E.bondBlock(k), room = E.bondRoom(k, y);
+        cards.appendChild(h('button', { class: 'bond-kind' + (kind === k ? ' on' : ''), disabled: block || room <= 0 ? true : null, 'data-silent': '1', onclick: function () { if (kind !== k) { kind = k; CM.Sound && CM.Sound.play('soft'); draw(); } } },
+          h('b', null, D0[k].name), h('small', null, D0[k].desc),
+          h('span', { class: 'bk-rate' }, (E.bondRate(k, y, term) * 100).toFixed(2) + '%', h('small', null, ' 年利率（' + term + ' 年期）')),
+          h('small', { class: block ? 'bad' : 'muted' }, block || ('本年还可发行 ' + U.fmtMoney(room)))));
+      }
+      termCtl.innerHTML = '';
+      for (const t of [3, 6]) termCtl.appendChild(h('button', { class: term === t ? 'on' : '', 'data-silent': '1', onclick: function () { if (term !== t) { term = t; CM.Sound && CM.Sound.play('soft'); draw(); } } }, t + ' 年期'));
+      const room = E.bondBlock(kind) ? 0 : E.bondRoom(kind, y), step = Math.max(1, Math.round(room / 100));
+      slider.max = String(Math.max(0, Math.floor(room / step) * step)); slider.step = String(step);
+      if (amount > +slider.max || amount <= 0) amount = Math.min(+slider.max, Math.max(step, Math.round(room / 2 / step) * step));
+      slider.value = String(amount); slider.disabled = room <= 0;
+      show();
+    };
+    const show = function () {
+      const rate = E.bondRate(kind, y, term), it = amount * rate;
+      amt.textContent = U.fmtMoney(amount);
+      pv.innerHTML = '';
+      pv.appendChild(self.kv([['年利率（发行时固定）', (rate * 100).toFixed(2) + '%'], ['每年利息', U.fmtMoney(it)], ['利息合计（' + term + ' 年）', U.fmtMoney(it * term)],
+        ['首次付息', (g.clock.y + 1) + '年' + g.clock.m + '月'], ['到期还本', (g.clock.y + term) + '年' + g.clock.m + '月 ' + U.fmtMoney(amount)], ['发行后建设专项资金', U.fmtMoney(E.capex + amount)]]));
+      ok.disabled = !(amount > 0);
+    };
+    slider.addEventListener('input', function () { amount = +slider.value; show(); });
+    draw();
+    const card = h('div', { class: 'card bond-dlg' },
+      h('div', { class: 'card-head' }, h('span', { class: 'badge b-gold' }, CM.icon('wallet')), h('div', { class: 'grow' }, h('h2', null, '发行债券'), h('div', { class: 'tiny muted' }, '募集资金只能用于地铁建设及改扩建')), h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { self.closeScreen(); } }, CM.icon('close'))),
+      cards,
+      h('div', { class: 'field' }, h('label', null, '期限'), termCtl),
+      h('div', { class: 'field' }, h('label', null, '发行金额'), h('div', { class: 'fare-top' }, amt), h('div', { class: 'fare-slider' }, h('span', { class: 'tiny muted' }, '0'), slider, h('span', { class: 'tiny muted' }, '本年额度'))),
+      pv,
+      h('div', { class: 'note', style: { marginTop: '8px' } }, '借款不算财政收入：募集资金进入建设专项资金，确认建设时优先使用；利息与本金从一般资金支付。一般资金不足时转为逾期，会产生逾期费用并限制继续发债，但不会因一次逾期直接失败。'),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { self.closeScreen(); } }, '取消'), ok));
+    this.openScreen(card, function () { self.closeScreen(); });
   };
   // 票价：全网统一票价，单个滑块。拖动时更新金额与影响估算，松手后应用并重新计算客流
   UI.fmtFare = function (v) { return CFG.money.sym + (v % 1 ? (v * 10 % 1 ? v.toFixed(2) : v.toFixed(1)) : String(v)) + '/次'; };
@@ -738,6 +873,8 @@
     el.appendChild(h('h3', null, '玩法提示'));
     el.appendChild(h('div', { class: 'note' }, '界面：左上为日期与时间控制（暂停、速度、+1 月、+1 年）；右上为关键指标与任务、统计、设置、菜单；左侧切换视图与图层；底部为建设工具；左下为缩放。'));
     el.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '1. 打开「人口密度」「道路拥堵」「出行方向」图层，找到出行集中的走廊。2. 用「绘线」连接主要起终点，车站间距 0.8–1.5 km 较常见。3. 查看右侧费用与效果预测，无冲突后确认建设，线路立即投入运营。4. 观察车站客流与道路变化，再升级车站、延长线路或建设换乘。绕行严重、换乘不便、过度拥挤或票价过高的线路吸引力有限。'));
+    el.appendChild(h('h3', null, '经营与融资'));
+    el.appendChild(this.econGuide());
     return { title: '操作说明', el: el };
   };
   UI.prototype.page_data = function () { return { title: '数据说明', el: h('div', null, this.dataNote()) }; };

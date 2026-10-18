@@ -18,7 +18,7 @@
   }
   CM.Agents = Agents;
 
-  Agents.prototype.reset = function () { this.groups.clear(); this.trains = []; this.cars = []; this.carIndex.clear(); this.peds = []; this.netRef = null; this.treeMaps.clear(); };
+  Agents.prototype.reset = function () { this.groups.clear(); this.trains = []; this.cars = []; this.carIndex.clear(); this.peds = []; this.netRef = null; this.treeMaps.clear(); this.carBuckets = null; this.visibleRoads = null; this.roadRef = null; };
 
   Agents.prototype.update = function (dt, game, R) {
     const sp = game.speed > 0 && !game.jumping && !game.pending ? CFG.time.speeds[game.speed - 1] : 0;
@@ -160,6 +160,7 @@
       const nx = -Math.sin(pa.a) * off, ny = Math.cos(pa.a) * off;
       const uw = function (h) { return h < 0 ? h * under * CM.RENDER_CONST.UNDER_DEPTH : h; };
       const A = R.P(pa.x + nx, pa.y + ny, uw(hA)), B = R.P(pb.x + nx, pb.y + ny, uw(hB));
+      if (R.follow !== t && (Math.max(A.x, B.x) < -12 || Math.min(A.x, B.x) > R.w + 12 || Math.max(A.y, B.y) < -12 || Math.min(A.y, B.y) > R.h + 12)) continue;
       t.sx = (A.x + B.x) / 2; t.sy = (A.y + B.y) / 2; t.drawn = R.frame;   // 点击列车（跟随模式）用
       let alpha = t.alpha;
       const seg = rt.segRefs[tmp.k];
@@ -181,7 +182,7 @@
       }
       // 拥挤度
       let lf = 0;
-      if (model) {
+      if (model && z >= 14) {
         const e = net.rideEdge[t.g.r][2 * tmp.k + (tmp.rev ? 1 : 0)];
         const f = model.freqAt(t.g.r, W);
         if (f > 0) lf = model.edgeLoadAt(e, W) / (f * rt.cap);
@@ -251,8 +252,8 @@
   Agents.prototype.updateCars = function (dtv, dt, game, R, W) {
     const model = game.model, road = model.road, city = game.city;
     const z = R.z, v = R.view;
-    if (this.roadRef !== road) { this.cars = []; this.carIndex.clear(); this.roadRef = road; }
-    const show = z >= 7 && R.cam.under < 0.95;
+    if (this.roadRef !== road) { this.cars = []; this.carIndex.clear(); this.roadRef = road; this.carBuckets = CM.Geo.buckets(road.links, 8, city.W, city.H); this.visibleRoads = null; }
+    const show = R.agentsOn && R.layerFade < 0.95 && z >= 7 && R.cam.under < 0.95;
     const margin = 3;
     const inView = function (L) { const b = L.bbox; return b[2] >= v.x0 - margin && b[0] <= v.x1 + margin && b[3] >= v.y0 - margin && b[1] <= v.y1 + margin; };
     // 移动
@@ -306,10 +307,14 @@
     // 生成：按路段流量
     const vis = 0.09 * U.clamp(z / 22, 0.25, 1.2);
     let budget = 60;
-    const maxCars = CFG.perf.maxCars;
+    const density = z >= 28 || !R.detail ? 1 : (R.detail.tier === 2 ? 0.55 : R.detail.tier === 1 ? 0.8 : 1);
+    const maxCars = Math.round(CFG.perf.maxCars * density);
     let total = this.cars.length;
     const step = this.frameFlip = !this.frameFlip;
-    for (const L of road.links) {
+    const bk = this.carBuckets, viewKey = [Math.floor((v.x0 - margin) / bk.tile), Math.floor((v.y0 - margin) / bk.tile), Math.floor((v.x1 + margin) / bk.tile), Math.floor((v.y1 + margin) / bk.tile)].join(':');
+    if (!this.visibleRoads || this.visibleRoads.key !== viewKey) this.visibleRoads = { key: viewKey, ids: CM.Geo.query(bk, v.x0 - margin, v.y0 - margin, v.x1 + margin, v.y1 + margin).sort(function (a, b) { return a - b; }) };
+    for (const id of this.visibleRoads.ids) {
+      const L = road.links[id];
       if (L.cls < 2 || !L.real || !inView(L)) continue;
       if (((L.id & 1) === 1) !== step) continue;
       for (let dir = 0; dir < 2; dir++) {
@@ -319,7 +324,7 @@
         const ratio = model.arcRatioAt(a, W);
         const sp = CFG.road.speed[L.cls] / Math.min(8, ratio);
         const lenKm = L.lenM / 1000;
-        const target = Math.min(lenKm * 30, vol / sp * lenKm * vis);
+        const target = Math.min(lenKm * 30, vol / sp * lenKm * vis) * density;
         const key = a;
         const list = idx.get(key);
         const have = list ? list.length : 0;
@@ -364,7 +369,7 @@
   Agents.prototype.updatePeds = function (dtv, dt, game, R, W) {
     const model = game.model, net = model.net, city = game.city;
     const z = R.z, v = R.view;
-    const show = z >= 18 && R.cam.under < 0.9;
+    const show = R.agentsOn && R.layerFade < 0.95 && z >= 18 && R.cam.under < 0.9;
     const mps2cell = 1 / CFG.CELL_M;
     for (const p of this.peds) {
       p.alpha = p.dying ? p.alpha - dt / 0.4 : Math.min(1, p.alpha + dt / 0.5);
@@ -438,10 +443,13 @@
   };
   Agents.prototype.drawList = function (ctx, R, list, alpha) {
     const z = R.z, iso = R.tEase > 0.5, night = !!(R.th && R.th.night);
+    const fullDetail = z >= 28 || !R.detail || R.detail.tier === 0;
     const Lc = 0.085, wcar = U.clamp(z * 0.038, 1.6, 4.2);
     ctx.lineCap = 'round';
     const pa = {}, pb = {};
     for (const a of list) {
+      const screen = R.P(a.wx, a.wy, 0, pa);
+      if (screen.x < -12 || screen.y < -12 || screen.x > R.w + 12 || screen.y > R.h + 12) continue;
       ctx.globalAlpha = a.alpha * alpha;
       if (a.ped) {
         const p = R.P(a.wx, a.wy, 0, pa);
@@ -459,7 +467,7 @@
       ctx.strokeStyle = a.color; ctx.lineWidth = wcar;
       ctx.beginPath(); ctx.moveTo(pb.x, pb.y - (iso ? 1 : 0)); ctx.lineTo(pa.x, pa.y - (iso ? 1 : 0)); ctx.stroke();
       if (z > 30) { ctx.strokeStyle = 'rgba(30,40,60,0.45)'; ctx.lineWidth = wcar * 0.5; ctx.beginPath(); const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2; ctx.moveTo(mx, my - (iso ? 1 : 0)); ctx.lineTo(pa.x * 0.7 + mx * 0.3, pa.y * 0.7 + my * 0.3 - (iso ? 1 : 0)); ctx.stroke(); }
-      if (night && z > 14) {
+      if (fullDetail && night && z > 14) {
         // 夜间车灯：前白后红
         const dy = iso ? 1 : 0, rr = Math.max(0.9, wcar * 0.38);
         ctx.fillStyle = 'rgba(255,244,200,0.95)'; ctx.beginPath(); ctx.arc(pa.x, pa.y - dy, rr, 0, Math.PI * 2); ctx.fill();

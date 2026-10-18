@@ -20,7 +20,7 @@
     const d = g.model.daily || {}, tot = g.city.totals();
     return {
       y: g.clock.y, m: g.clock.m, d: g.clock.d, live: true, pop: tot.pop, jobs: tot.jobs, share: d.metroShare || 0,
-      cong: d.cong || 1, commute: d.commute || 0, riders: d.metro || 0, sat: g.econ.sat, funds: g.econ.isFree() ? null : g.econ.funds,
+      cong: d.cong || 1, commute: d.commute || 0, riders: d.metro || 0, sat: g.econ.sat, funds: g.econ.isFree() ? null : g.econ.funds, debt: g.econ.isFree() ? null : g.econ.debtTotal(), capex: g.econ.isFree() ? null : g.econ.capex,
       coverage: d.coverage || 0, stations: g.compiled.stations.length, crowd: d.crowdShare || 0,
     };
   }
@@ -333,15 +333,17 @@
     let rows = E.ledger.map(function (r) { return { lab: r.y + '年' + r.m + '月', x: (r.y % 100 < 10 ? '0' : '') + r.y % 100 + '.' + r.m, r: r }; });
     if (E.ledger.length > 36) {
       const by = new Map();
-      for (const r of E.ledger) { let a = by.get(r.y); if (!a) { a = { y: r.y, grant: 0, fare: 0, reward: 0, construction: 0, demolition: 0, upgrade: 0, relocation: 0, ops: 0 }; by.set(r.y, a); } for (const k in a) if (k !== 'y') a[k] += r[k] || 0; }
+      for (const r of E.ledger) { let a = by.get(r.y); if (!a) { a = { y: r.y, grant: 0, fare: 0, reward: 0, construction: 0, demolition: 0, upgrade: 0, relocation: 0, ops: 0, bond: 0, interest: 0, principal: 0, penalty: 0 }; by.set(r.y, a); } for (const k in a) if (k !== 'y') a[k] += r[k] || 0; }
       rows = Array.from(by.values()).map(function (a) { return { lab: a.y + '年', x: String(a.y), r: a }; });
     }
     const inc = function (r) { return (r.grant || 0) + (r.fare || 0) + (r.reward || 0); };
     const exp = function (r) { return (r.construction || 0) + (r.demolition || 0) + (r.upgrade || 0) + (r.relocation || 0) + (r.ops || 0); };
+    const svc = function (r) { return (r.interest || 0) + (r.principal || 0) + (r.penalty || 0); };
+    const anyDebt = E.ledger.some(function (r) { return r.bond || svc(r); }) || E.bonds.length;
     const cg = h('div', { class: 'chart-grid' });
     cg.append(
-      ts(H, '资金余额', '为负时需尽快扭亏（长期负余额会导致挑战失败）', [{ name: '资金', color: P[3], vals: pick(H, 'funds') }], { fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, area: true, icon: 'coin', refs: [{ v: 0, label: '' }] }),
-      lineChart({ title: '收入与支出', sub: (E.ledger.length > 36 ? '按年' : '按月') + '合计：收入 = 拨款 + 票款 + 奖励；支出 = 建设 + 运营', icon: 'wallet', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }), series: [{ name: '收入', color: P[2], vals: rows.map(function (o) { return inc(o.r); }) }, { name: '支出', color: P[1], vals: rows.map(function (o) { return exp(o.r); }) }], fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, empty: '尚无完整月份的记录。' }));
+      ts(H, '资金与债务', '一般资金为负时需尽快扭亏（长期负余额会导致挑战失败）；建设专项资金只能用于建设', [{ name: '一般资金', color: P[3], vals: pick(H, 'funds') }].concat(anyDebt ? [{ name: '建设专项资金', color: P[2], vals: pick(H, 'capex') }, { name: '债务余额', color: P[6], vals: pick(H, 'debt') }] : []), { fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, area: !anyDebt, icon: 'coin', refs: [{ v: 0, label: '' }] }),
+      lineChart({ title: '收入与支出', sub: (E.ledger.length > 36 ? '按年' : '按月') + '合计：财政收入 = 拨款 + 票款 + 奖励（借款不计入）；支出 = 建设 + 运营' + (anyDebt ? '；偿债 = 利息 + 本金 + 逾期费用' : ''), icon: 'wallet', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }), series: [{ name: '财政收入', color: P[2], vals: rows.map(function (o) { return inc(o.r); }) }, { name: '建设与运营支出', color: P[1], vals: rows.map(function (o) { return exp(o.r); }) }].concat(anyDebt ? [{ name: '偿债', color: P[6], vals: rows.map(function (o) { return svc(o.r); }) }] : []), fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, empty: '尚无完整月份的记录。' }));
     el.appendChild(cg);
   }
   // ---------- 城市纪事：里程碑书页（文字 + 简笔画）、翻页与时间轴 ----------

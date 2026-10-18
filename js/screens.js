@@ -5,7 +5,7 @@
   const h = U.h, ic = CM.icon;
   const snd = function (name) { if (CM.Sound) CM.Sound.play(name); };
   const LEVEL = ['入门', '普通', '进阶', '挑战'];
-  const REGION_ORDER = ['中国内地', '中国香港', '日本', '虚构'];
+  const REGION_ORDER = ['中国内地', '中国香港', '中国台湾', '日本', '虚构'];
 
   // 公告是否已读（本机记录；无法访问本地存储时视为已读，不打扰）
   const NEWS_KEY = 'cm1.newsSeen';
@@ -263,6 +263,28 @@
         h('button', { class: 'btn', onclick: function () { self.closeScreen(); self.openPage('tasks', null, { root: true }); } }, ic('tasks'), '查看任务'),
         h('button', { class: 'btn primary', onclick: done }, '开始规划', ic('arrowR'))));
     this.openScreen(card, done, 'brief-screen');
+  };
+
+  // ======================== 经济知识：经营挑战的财政与债券（教程与操作说明中可回看；只说明，不实际发行） ========================
+  UI.prototype.econGuide = function () {
+    const sec = function (icon, badge, title, items) {
+      return h('div', { class: 'eg-sec' }, h('div', { class: 'eg-h' }, h('span', { class: 'badge ' + badge }, ic(icon)), h('b', null, title)), h('ul', null, items.map(function (t) { return h('li', null, t); })));
+    };
+    return h('div', { class: 'eg' },
+      sec('coin', 'b-green', '钱从哪里来', ['政府拨款：每月初发放，满意度越高拨款越多，任务未完成会减少拨款。', '票款：每天按乘客数与票价结算。', '任务奖励：完成历史与动态任务时发放。']),
+      sec('hammer', 'b-orange', '钱花在哪里', ['建设与拆迁：确认建设时一次支付。', '运营成本：列车运行与车站，每天结算。线路越长、车站越多，成本越高。']),
+      sec('wallet', 'b-violet', '债券融资', ['地方债利率较低、额度较大；城投债利率较高、额度较小。', '期限 3 年或 6 年，利率在发行时固定；每年付一次利息，到期一次还本。', '借来的钱不算收入：进入「建设专项资金」，只能用于地铁建设及改扩建，不能拿来付运营成本或利息。', '每年能发行的额度与总债务都有上限，随城市与年代变化。']),
+      sec('warn', 'b-red', '还不上会怎样', ['利息与本金从一般资金支付；资金不足的部分记为逾期。', '逾期每月收取额外费用，并暂停城投债；逾期满 6 个月暂停全部发债。', '不会因为一次逾期就失败，一般资金有余额时会自动还清。挑战失败只看长期负余额、负债下限与满意度。']),
+      sec('cursor', 'b-blue', '怎么操作', ['点顶栏的「资金」打开财政面板，在「债券融资」里点「发行债券」。', '选择种类、期限与金额，确认前会显示每年利息、到期日与发行后的专项资金。', '「债务详情与偿债预测」列出每笔债券与未来几年的还款；「资金流水」记录每一笔进出。']),
+      h('div', { class: 'note' }, '青湾教程使用自由建造（资金不限），这里只做说明，不会实际发行债券。可以在「菜单 → 操作说明」中随时回看。'));
+  };
+  UI.prototype.showEconGuide = function (onClose) {
+    const self = this, close = function () { self.closeScreen(); if (onClose) onClose(); };
+    const card = h('div', { class: 'card eg-card' },
+      h('div', { class: 'card-head' }, h('span', { class: 'badge b-gold' }, ic('coin')), h('div', { class: 'grow' }, h('h2', null, '经营挑战的财政'), h('div', { class: 'tiny muted' }, '经济小知识 · 可随时回看')), h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: close }, ic('close'))),
+      this.econGuide(),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: close }, '知道了')));
+    this.openScreen(card, close);
   };
 
   // ======================== 更新公告 ========================

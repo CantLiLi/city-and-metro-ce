@@ -46,7 +46,13 @@
     m.fp = U.fnv([id, m.cfg.W, m.cfg.H, (G.water || []).length, (G.roads || []).length, (G.names || []).length, (m.data.regions || []).map(function (r) { return r.id; }).join(',')].join('|'));
   }
   CM.MAPS = MAPS;
-  CM.MAP_ORDER = ['gz', 'hz', 'hk', 'tk', 'tutorial'].filter(function (id) { return MAPS[id]; });
+  // 选择列表由易到难；同难度保留既有城市顺序，新地图按登记顺序接在同档末尾。
+  const mapOrder = ['tutorial', 'gz', 'hz', 'hk', 'tp', 'tk'];
+  for (const id of Object.keys(MAPS)) if (mapOrder.indexOf(id) < 0) mapOrder.push(id);
+  const mapRank = new Map(mapOrder.map(function (id, i) { return [id, i]; }));
+  CM.MAP_ORDER = mapOrder.filter(function (id) { return MAPS[id]; }).sort(function (a, b) {
+    return (MAPS[a].difficulty || 2) - (MAPS[b].difficulty || 2) || mapRank.get(a) - mapRank.get(b);
+  });
   CM.mapId = 'gz';
   CM.useMap = function (id) {
     const m = MAPS[id] || MAPS.gz;

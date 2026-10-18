@@ -3,15 +3,33 @@
 (function (CM) {
   const U = CM.U, CFG = CM.CFG, D = CM.DATA;
 
-  function blankMonth(y, m, funds) {
-    return { y: y, m: m, start: funds, grant: 0, fare: 0, construction: 0, demolition: 0, upgrade: 0, relocation: 0, ops: 0, reward: 0, days: 0, end: funds };
+  // 月度账本。科目严格区分：
+  //   财政收入 grant 拨款 · fare 票款 · reward 任务奖励
+  //   融资到账 bond（债券募集，进入建设专项资金，不算收入）
+  //   建设支出 construction · demolition · upgrade · relocation（其中 capexUse 为专项资金支付的部分）
+  //   运营成本 ops · 利息 interest · 本金偿还 principal · 逾期费用 penalty
+  function blankMonth(y, m, funds, capex) {
+    return { y: y, m: m, start: funds, grant: 0, fare: 0, construction: 0, demolition: 0, upgrade: 0, relocation: 0, ops: 0, reward: 0,
+      bond: 0, interest: 0, principal: 0, penalty: 0, capexUse: 0, capexStart: capex || 0, days: 0, end: funds };
   }
+  const BUILD_KINDS = ['construction', 'demolition', 'upgrade', 'relocation'];
+  const MONEY_EPS = 1e-7;   // 内部单位是万元；只忽略浮点误差，不能把不足 0.5 万的真实债务清零
+  Economy.BUILD_KINDS = BUILD_KINDS;
+  Economy.MONEY_EPS = MONEY_EPS;
 
   function Economy(mode, y, m) {
     this.mode = mode;
-    this.funds = mode === 'free' ? 0 : CFG.economy.startFunds;
+    this.funds = mode === 'free' ? 0 : CFG.economy.startFunds;   // 一般资金（拨款、票款等；运营、利息与还本只能从这里支付）
+    this.capex = 0;            // 建设专项资金：债券募集，只能用于地铁建设及改扩建
+    this.bonds = [];           // 已发行的债券
+    this.bondIssued = {};      // 每年已发行额 { 年份: { local, ct } }
+    this.overdue = 0;          // 逾期未付的本息
+    this.overdueMonths = 0;    // 连续存在逾期的月数
+    this.overdueParts = { interest: 0, principal: 0, penalty: 0 };   // 逾期的构成（偿还时分别记入利息、本金、费用）
+    this.flow = [];            // 资金流水
+    this.bondSeq = 1;
     this.fare = Object.assign({}, CFG.fareDefault);
-    this.cur = blankMonth(y, m, this.funds);
+    this.cur = blankMonth(y, m, this.funds, 0);
     this.ledger = [];
     this.sat = CFG.economy.startSat;
     this.mods = [];
@@ -24,7 +42,7 @@
 
   Economy.prototype.isFree = function () { return this.mode === 'free'; };
   // 只检查新增的现金支出：零费用操作（如拆除既有设施）在负余额时也允许，便于止损
-  Economy.prototype.canAfford = function (amount) { return this.isFree() || amount <= 0.5 || this.funds >= amount; };
+  Economy.prototype.canAfford = function (amount) { return this.isFree() || amount <= MONEY_EPS || this.funds >= amount; };
   Economy.prototype.spend = function (kind, amount) {
     if (amount <= 0) return;
     this.cur[kind] = (this.cur[kind] || 0) + amount;
@@ -67,15 +85,24 @@
     return list;
   };
   // 新月份：先开新账（期初 = 上月期末），任务奖励等记入新月；再发放本月拨款
-  Economy.prototype.openMonth = function (y, m) { this.cur = blankMonth(y, m, this.funds); };
+  Economy.prototype.openMonth = function (y, m) { this.cur = blankMonth(y, m, this.funds, this.capex); };
   Economy.prototype.payGrant = function (y, m) {
-    if (!this.isFree()) this.income('grant', this.grantFor(y, m));
+    if (!this.isFree()) { const v = this.grantFor(y, m); this.income('grant', v); this.log('grant', v, 'gen', '政府拨款', { y: y, m: m, d: 1 }); }
     else this.cur.grant = 0;
   };
   Economy.prototype.startMonth = function (y, m) { this.openMonth(y, m); this.payGrant(y, m); };
   // 封账：记录期末并归档；之后的收支一律记入下一个月
   Economy.prototype.closeMonth = function () {
     this.cur.end = this.funds;
+    this.cur.capexEnd = this.capex;
+    this.cur.debtEnd = this.debtTotal();
+    this.cur.overdueEnd = this.overdue;
+    // 票款与运营费用逐日结算，在流水中按月汇总为两条
+    if (!this.isFree()) {
+      const c = this.cur, when = { y: c.y, m: c.m, d: U.daysInMonth(c.y, c.m) };
+      if (c.fare > 0.5) this.log('fare', c.fare, 'gen', '本月票款（' + c.days + ' 天）', when);
+      if (c.ops > 0.5) this.log('ops', -c.ops, 'gen', '本月运营成本（' + c.days + ' 天）', when);
+    }
     this.cur.closed = true;
     this.ledger.push(this.cur);
     if (this.ledger.length > 600) this.ledger.shift();
@@ -124,12 +151,202 @@
     return out;
   };
 
+  // ======================== 资金流水 ========================
+  // kind：grant / fare / ops / reward / build / bond / interest / principal / penalty / overdue / repay；acct：gen 一般资金、capex 建设专项资金
+  Economy.prototype.log = function (kind, amount, acct, note, when) {
+    if (this.isFree()) return;
+    const w = when || this._now || { y: this.cur.y, m: this.cur.m, d: 1 };
+    this.flow.push({ y: w.y, m: w.m, d: w.d || 1, kind: kind, amount: amount, acct: acct, note: note, bal: this.funds, cap: this.capex });
+    if (this.flow.length > 400) this.flow.splice(0, this.flow.length - 400);
+  };
+
+  // ======================== 建设支出：先用建设专项资金，不足部分用一般资金 ========================
+  Economy.prototype.canAffordBuild = function (amount) { return this.isFree() || amount <= MONEY_EPS || Math.max(0, this.funds) + Math.max(0, this.capex) >= amount; };
+  Economy.prototype.spendBuild = function (byKind, note, when) {
+    let total = 0; for (const k of BUILD_KINDS) total += byKind[k] || 0;
+    if (total <= 0) return { total: 0, capex: 0, gen: 0 };
+    for (const k of BUILD_KINDS) if (byKind[k] > 0) this.cur[k] = (this.cur[k] || 0) + byKind[k];
+    if (this.isFree()) return { total: total, capex: 0, gen: 0 };
+    const use = Math.min(Math.max(0, this.capex), total), gen = total - use;
+    this.capex -= use; this.funds -= gen; this.cur.capexUse = (this.cur.capexUse || 0) + use;
+    if (use > 0.5) this.log('build', -use, 'capex', (note || '地铁建设') + '（专项资金）', when);
+    if (gen > 0.5) this.log('build', -gen, 'gen', (note || '地铁建设') + (use > 0.5 ? '（专项不足部分）' : ''), when);
+    return { total: total, capex: use, gen: gen };
+  };
+
+  // ======================== 债券融资（仅经营挑战） ========================
+  // 地方债：利率较低、额度较大；城投债：利率较高、额度较小。利率在发行时按当年利率固定，6 年期另加期限溢价。
+  // 年度发行额度与总债务上限按当年基础月拨款的倍数计算（随城市与年代变化），只能用于地铁建设及改扩建。
+  const BOND_DEF = {
+    local: { name: '地方债', desc: '由城市政府发行，利率较低、额度较大' },
+    ct: { name: '城投债', desc: '由城市建设投资公司发行，利率较高、额度较小，有逾期时暂停发行' },
+  };
+  Economy.BOND_DEF = BOND_DEF;
+  Economy.prototype.bondCfg = function () { return CFG.economy.bonds || null; };
+  Economy.prototype.canBorrow = function () { return !this.isFree() && !!this.bondCfg(); };
+  // 当年基础月拨款（不含满意度与任务调整）
+  Economy.prototype.baseGrant = function (y) { return U.interp(CFG.economy.grantBase, y); };
+  Economy.prototype.bondRate = function (kind, y, term) {
+    const B = this.bondCfg(); if (!B) return 0;
+    const local = U.interp(B.local.rate, y);
+    const r = kind === 'ct' ? (B.ct.rate ? U.interp(B.ct.rate, y) : local + (B.ct.spread || 0.015)) : local;
+    return r + (term === 6 ? (B.term6 || 0.004) : 0);
+  };
+  Economy.prototype.bondQuota = function (kind, y) { const B = this.bondCfg(); return B ? B[kind].quotaMonths * this.baseGrant(y) : 0; };
+  Economy.prototype.bondCap = function (kind, y) { const B = this.bondCfg(); return B ? B[kind].capMonths * this.baseGrant(y) : 0; };
+  Economy.prototype.issuedIn = function (kind, y) { const a = this.bondIssued[y]; return a ? (a[kind] || 0) : 0; };
+  Economy.prototype.outstanding = function (kind) { let s = 0; for (const b of this.bonds) if (!b.done && (!kind || b.kind === kind)) s += b.amount; return s; };
+  // 已到期但尚未偿还的本金仍占用债务上限，不能通过逾期腾出发行空间。
+  Economy.prototype.principalDebt = function (kind) { let s = this.outstanding(kind); for (const b of this.bonds) if (b.done && (!kind || b.kind === kind)) s += b.principalArrears || 0; return s; };
+  Economy.prototype.bondSettled = function (b) { return !!b.done && (b.interestArrears || 0) <= MONEY_EPS && (b.principalArrears || 0) <= MONEY_EPS; };
+  Economy.prototype.debtTotal = function () { return this.outstanding() + this.overdue; };
+  // 融资限制：有逾期时暂停城投债；逾期满 6 个月暂停全部发行
+  Economy.prototype.bondBlock = function (kind) {
+    if (!this.canBorrow()) return '只有经营挑战可以发行债券';
+    if (this.failed) return '经营挑战已失败';
+    if (this.overdueMonths >= 6) return '逾期已满 ' + this.overdueMonths + ' 个月，暂停全部债券发行（还清逾期后恢复）';
+    if (kind === 'ct' && this.overdue > MONEY_EPS) return '存在逾期债务，城投债暂停发行（还清逾期后恢复）';
+    return null;
+  };
+  Economy.prototype.bondRoom = function (kind, y) {
+    return Math.max(0, Math.min(this.bondQuota(kind, y) - this.issuedIn(kind, y), this.bondCap(kind, y) - this.principalDebt(kind)));
+  };
+  Economy.prototype.issueBond = function (kind, term, amount, when) {
+    if (!BOND_DEF[kind]) return { ok: false, error: '债券类型无效' };
+    const y = when.y, block = this.bondBlock(kind);
+    if (block) return { ok: false, error: block };
+    if (term !== 3 && term !== 6) return { ok: false, error: '期限只能是 3 年或 6 年' };
+    amount = Math.round(amount);
+    if (!(amount > 0)) return { ok: false, error: '发行金额必须大于 0' };
+    const room = this.bondRoom(kind, y);
+    if (amount > room + MONEY_EPS) return { ok: false, error: '超出本年度可发行额度（剩余 ' + U.fmtMoney(room) + '）' };
+    const rate = this.bondRate(kind, y, term);
+    const b = { id: 'B' + (this.bondSeq++), kind: kind, amount: amount, rate: rate, term: term, issued: [when.y, when.m, when.d || 1], ym0: U.ymIndex(when.y, when.m), paidYears: 0, interestPaid: 0, interestArrears: 0, principalArrears: 0, done: false };
+    this.bonds.push(b);
+    (this.bondIssued[y] || (this.bondIssued[y] = { local: 0, ct: 0 }))[kind] += amount;
+    this.capex += amount;
+    this.cur.bond = (this.cur.bond || 0) + amount;
+    this.log('bond', amount, 'capex', BOND_DEF[kind].name + ' ' + term + ' 年期 · 年利率 ' + (rate * 100).toFixed(2) + '%', when);
+    return { ok: true, bond: b };
+  };
+  // 从一般资金付款：只用正的余额；不足部分记为逾期
+  Economy.prototype.payFromFunds = function (kind, amount, note, when, bond) {
+    if (amount <= 0) return 0;
+    const paid = Math.min(Math.max(0, this.funds), amount);
+    if (paid > 0) { this.funds -= paid; this.cur[kind] = (this.cur[kind] || 0) + paid; this.log(kind, -paid, 'gen', note, when); }
+    const short = amount - paid;
+    if (bond && kind === 'interest') bond.interestPaid = (bond.interestPaid || 0) + paid;
+    if (short > MONEY_EPS) {
+      const P = this.odParts(); this.overdue += short; P[kind] = (P[kind] || 0) + short;
+      if (bond) bond[kind + 'Arrears'] = (bond[kind + 'Arrears'] || 0) + short;
+      this.log('overdue', -short, 'gen', note + '：资金不足，转为逾期', when);
+    }
+    return paid;
+  };
+  // 每月（拨款发放后）：先偿还旧逾期，再支付到期的利息与本金，最后按逾期月数收取逾期费用。
+  // paidYears 记录已结算的付息期数（含转逾期）；实际付款单独记录，跨周年补齐遗漏的期次。
+  Economy.prototype.serviceDebt = function (y, m) {
+    if (this.isFree() || !this.bonds) return;
+    const ym = U.ymIndex(y, m), when = { y: y, m: m, d: 1 };
+    if (this._svc === ym) return;
+    this._svc = ym;
+    // 偿还旧逾期：按费用、利息、本金的顺序，分别记入对应科目
+    if (this.overdue > MONEY_EPS && this.funds > 0) {
+      const P = this.odParts();
+      for (const k of ['penalty', 'interest', 'principal']) {
+        const pay = Math.min(Math.max(0, this.funds), P[k] || 0); if (pay <= 0) continue;
+        this.funds -= pay; P[k] -= pay; this.overdue -= pay; this.cur[k] = (this.cur[k] || 0) + pay;
+        // 逾期还款也要回写到债券，不能一直显示为未付，或把从未支付的利息显示为已付。
+        if (k === 'interest' || k === 'principal') {
+          let left = pay;
+          for (const b of this.bonds) {
+            const key = k + 'Arrears', take = Math.min(left, b[key] || 0);
+            if (take <= 0) continue;
+            b[key] = Math.max(0, b[key] - take); left -= take;
+            if (k === 'interest') b.interestPaid = (b.interestPaid || 0) + take;
+            if (this.bondSettled(b)) b.repaid = [y, m];
+            if (left <= MONEY_EPS) break;
+          }
+        }
+        this.log('repay', -pay, 'gen', '偿还逾期' + { penalty: '费用', interest: '利息', principal: '本金' }[k], when);
+      }
+      if (this.overdue <= MONEY_EPS) { this.overdue = 0; this.overdueParts = { interest: 0, principal: 0, penalty: 0 }; }
+    }
+    for (const b of this.bonds) {
+      const dueYears = Math.min(b.term, Math.floor((ym - b.ym0) / 12));
+      if (b.done || dueYears <= b.paidYears) continue;
+      const name = BOND_DEF[b.kind].name + ' ' + b.id + '（' + b.issued[0] + '年' + b.issued[1] + '月发行）';
+      const it = b.amount * b.rate;
+      for (let k = b.paidYears + 1; k <= dueYears; k++) {
+        b.paidYears = k;
+        this.payFromFunds('interest', it, name + ' 第 ' + k + ' 年利息', when, b);
+      }
+      if (dueYears >= b.term) {
+        b.done = true;
+        this.payFromFunds('principal', b.amount, name + ' 到期还本', when, b);
+        if (this.bondSettled(b)) b.repaid = [y, m];
+      }
+    }
+    if (this.overdue > MONEY_EPS) {
+      this.overdueMonths++;
+      const rate = this.overdueMonths >= 12 ? 0.02 : (this.overdueMonths >= 6 ? 0.015 : 0.01);
+      this.payFromFunds('penalty', this.overdue * rate, '逾期费用（月 ' + (rate * 100).toFixed(1) + '%，已逾期 ' + this.overdueMonths + ' 个月）', when);
+    } else { this.overdue = 0; this.overdueMonths = 0; this.overdueParts = { interest: 0, principal: 0, penalty: 0 }; }
+  };
+  // 未来偿债预测：按年汇总已发行债券的利息与到期本金（不含尚未发生的逾期费用）
+  Economy.prototype.odParts = function () {
+    if (!this.overdueParts) {
+      let interest = 0, principal = 0;
+      for (const b of this.bonds) { interest += b.interestArrears || 0; principal += b.principalArrears || 0; }
+      this.overdueParts = { interest: interest, principal: principal, penalty: Math.max(0, (this.overdue || 0) - interest - principal) };
+    }
+    return this.overdueParts;
+  };
+  Economy.prototype.debtForecast = function (y, m, years) {
+    const ym = U.ymIndex(y, m), rows = [];
+    for (let k = 0; k < years; k++) rows.push({ y: y + k, interest: 0, principal: 0 });
+    for (const b of this.bonds) {
+      if (b.done) continue;
+      for (let k = b.paidYears + 1; k <= b.term; k++) {
+        const t = b.ym0 + 12 * k; if (t < ym) continue;
+        const r = rows[Math.floor(t / 12) - y]; if (!r) continue;
+        r.interest += b.amount * b.rate;
+        if (k === b.term) r.principal += b.amount;
+      }
+    }
+    return rows;
+  };
+
   Economy.prototype.serialize = function () {
-    return { mode: this.mode, funds: this.funds, fare: this.fare, cur: this.cur, ledger: this.ledger, sat: this.sat, mods: this.mods, negMonths: this.negMonths, lowSatMonths: this.lowSatMonths, failed: this.failed, satFactors: this.satFactors, lastDay: this.lastDay };
+    return { mode: this.mode, funds: this.funds, fare: this.fare, cur: this.cur, ledger: this.ledger, sat: this.sat, mods: this.mods, negMonths: this.negMonths, lowSatMonths: this.lowSatMonths, failed: this.failed, satFactors: this.satFactors, lastDay: this.lastDay,
+      capex: this.capex, bonds: this.bonds, bondIssued: this.bondIssued, overdue: this.overdue, overdueParts: this.overdueParts || null, overdueMonths: this.overdueMonths, flow: this.flow, bondSeq: this.bondSeq, svc: this._svc == null ? null : this._svc };
   };
   Economy.restore = function (s) {
     const e = new Economy(s.mode, s.cur.y, s.cur.m);
-    Object.assign(e, { funds: s.funds, fare: Economy.normFare(s.fare), cur: s.cur, ledger: s.ledger || [], sat: s.sat, mods: s.mods || [], negMonths: s.negMonths || 0, lowSatMonths: s.lowSatMonths || 0, failed: s.failed || null, satFactors: s.satFactors || null, lastDay: s.lastDay || null });
+    Object.assign(e, { funds: s.funds, fare: Economy.normFare(s.fare), cur: s.cur, ledger: s.ledger || [], sat: s.sat, mods: s.mods || [], negMonths: s.negMonths || 0, lowSatMonths: s.lowSatMonths || 0, failed: s.failed || null, satFactors: s.satFactors || null, lastDay: s.lastDay || null,
+      capex: s.capex || 0, bonds: s.bonds || [], bondIssued: s.bondIssued || {}, overdue: s.overdue || 0, overdueParts: s.overdueParts || null, overdueMonths: s.overdueMonths || 0, flow: s.flow || [], bondSeq: s.bondSeq || 1 });
+    e._svc = s.svc == null ? null : s.svc;
+    // 1.6 及更早的正式存档没有债券，默认债务为零。早期 1.7 开发档可能只保存逾期总账，
+    // 没有每券构成：从较晚发行的债券开始分摊剩余逾期，保留总额、已用额度与现金余额。
+    const P = e.odParts();
+    for (const kind of ['interest', 'principal']) {
+      const key = kind + 'Arrears';
+      let remaining = Math.max(0, (P[kind] || 0) - e.bonds.reduce(function (sum, b) { return sum + (b[key] || 0); }, 0));
+      for (let i = e.bonds.length - 1; i >= 0; i--) {
+        const b = e.bonds[i];
+        if (b[key] != null) continue;
+        const due = kind === 'interest' ? b.amount * b.rate * Math.min(b.term, b.paidYears || 0) : (b.done ? b.amount : 0);
+        b[key] = Math.min(remaining, due); remaining -= b[key];
+        if (kind === 'interest') b.interestPaid = Math.max(0, Math.min(due, b.interestPaid == null ? due : b.interestPaid) - b[key]);
+      }
+    }
+    for (const b of e.bonds) {
+      if (!e.bondSettled(b)) delete b.repaid;
+      const seq = /^B(\d+)$/.exec(b.id);
+      if (seq) e.bondSeq = Math.max(e.bondSeq, Number(seq[1]) + 1);
+    }
+    // 旧存档的账本没有新科目：补零，保证收支汇总不出现 NaN
+    for (const r of e.ledger.concat([e.cur])) for (const k of ['bond', 'interest', 'principal', 'penalty', 'capexUse']) if (r[k] == null) r[k] = 0;
     return e;
   };
   // 票制统一为全网单一票价；旧存档的里程计价按起步价换算
@@ -255,7 +472,7 @@
       if (complete) {
         t.status = 'done'; t.closedAt = [y, m];
         this.active.splice(this.active.indexOf(t), 1); this.done.push(t);
-        if (challenge) { g.econ.income('reward', t.reward); g.econ.mods.push({ kind: 'sat', delta: 4, until: ym + 5, reason: '完成任务「' + t.title + '」' }); }
+        if (challenge) { g.econ.income('reward', t.reward); g.econ.log('reward', t.reward, 'gen', '任务奖励：' + t.title, { y: y, m: m, d: 1 }); g.econ.mods.push({ kind: 'sat', delta: 4, until: ym + 5, reason: '完成任务「' + t.title + '」' }); }
         out.push({ type: 'done', task: t });
       } else if (ym >= U.ymIndex(t.deadline[0], t.deadline[1])) {
         t.status = 'failed'; t.closedAt = [y, m];
@@ -327,8 +544,18 @@
     if (g.econ.mode === 'challenge' && model.daily && model.daily.metro > 50000 && free('recovery', 'recovery')) {
       cands.push({ type: 'recovery', target: 0.7, sustain: 3, title: '改善运营收支', desc: '连续 3 个月票款收入不低于运营费用的 70%。', months: 24, reward: 40000 * ci });
     }
+    // 本城专属动态任务（D.dynTasks）：在年份窗口内各发布一次，已满足的不发布
+    const self = this;
+    for (const tp of D.dynTasks || []) {
+      if (this.issued['dyn:' + tp.id] || ym < U.ymIndex(tp.from[0], tp.from[1]) || ym > U.ymIndex(tp.to[0], tp.to[1]) || !free('city:' + tp.id, tp.type)) continue;
+      const c = Object.assign({ coolKey: 'city:' + tp.id, cityId: tp.id }, JSON.parse(JSON.stringify(tp)), { reward: tp.reward * ci });
+      delete c.from; delete c.to; delete c.id;
+      if (this.evaluate(c, g).ok) continue;
+      cands.push(c, c);   // 权重加倍，让本城任务更常出现
+    }
     if (!cands.length) return null;
     const c = cands[Math.floor(rng.next() * cands.length)];
+    if (c.cityId) self.issued['dyn:' + c.cityId] = 1;
     const t = Object.assign({ id: 'd' + (this.seq++), kind: 'dyn', status: 'active', issuedAt: [y, m], deadline: dl(c.months), streak: 0 }, c);
     return t;
   };

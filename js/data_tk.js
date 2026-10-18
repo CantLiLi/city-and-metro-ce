@@ -192,7 +192,9 @@
       }),
       ops: Object.assign({}, CM.CFG.ops, { carKmCost: 0.004, stationDaily: { S: 2.5, M: 4, L: 7 }, inflation: INF }),
       fareDefault: { mode: 'flat', flat: 10 }, fareRange: { min: 0, max: 300, step: 5 },
-      economy: Object.assign({}, CM.CFG.economy, { startFunds: 1000000, grantBase: [[1950, 50000], [1955, 80000], [1960, 150000], [1965, 280000], [1970, 450000], [1975, 900000], [1980, 1200000], [1990, 1600000], [2000, 1700000], [2020, 1800000], [2050, 2200000]], debtLimit: -700000, rewardScale: 3.3 }),
+      economy: Object.assign({}, CM.CFG.economy, { startFunds: 1000000, grantBase: [[1950, 50000], [1955, 80000], [1960, 150000], [1965, 280000], [1970, 450000], [1975, 900000], [1980, 1200000], [1990, 1600000], [2000, 1700000], [2020, 1800000], [2050, 2200000]], debtLimit: -700000, rewardScale: 3.3,
+        // 日元债券：高速增长期利率较高，1990 年代后期起进入低利率时代
+        bonds: { local: { rate: [[1950, 0.075], [1960, 0.07], [1975, 0.08], [1985, 0.06], [1990, 0.065], [1995, 0.03], [2000, 0.018], [2010, 0.012], [2016, 0.005], [2050, 0.008]], quotaMonths: 6, capMonths: 30 }, ct: { spread: 0.012, quotaMonths: 4, capMonths: 18 }, term6: 0.003 } }),
     },
     cam: { cx: 47, cy: 44, zoom: 16 },
   });

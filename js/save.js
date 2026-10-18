@@ -166,8 +166,18 @@
       return { meta: meta, text: text };
     });
   }
+  // 进度重命名保存在索引中，不重写每个历史快照；读取与导出时将最新名称应用到副本。
+  function parseSlot(r) {
+    const parsed = Save.parseEnvelope(r.text);
+    if (typeof r.meta.name === 'string' && parsed.payload.meta.name !== r.meta.name) {
+      parsed.payload.meta.name = r.meta.name;
+      parsed.env.body = JSON.stringify(parsed.payload);
+      parsed.env.checksum = U.fnv(parsed.env.body);
+    }
+    return parsed;
+  }
   Save.load = function (slotId) {
-    return readSlotText(slotId).then(function (r) { return Save.parseEnvelope(r.text).payload; });
+    return readSlotText(slotId).then(function (r) { return parseSlot(r).payload; });
   };
   Save.remove = function (slotId) {
     const idx = readIndex();
@@ -204,7 +214,7 @@
     setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
   };
   Save.exportSlot = function (slotId) {
-    return readSlotText(slotId).then(function (r) { Save.parseEnvelope(r.text); Save.download(r.text, Save.fileName(r.meta)); });
+    return readSlotText(slotId).then(function (r) { Save.download(JSON.stringify(parseSlot(r).env), Save.fileName(r.meta)); });
   };
   Save.exportGame = function (game) {
     const env = Save.envelope(game);

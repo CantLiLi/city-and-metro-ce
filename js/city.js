@@ -559,6 +559,17 @@
     this.walk = { start: wStart, to: wTo, len: wLen, deg: wDeg };
 
     // ---- 汽车 ----
+    // New pedestrian streets often leave the car graph exactly unchanged. Compare
+    // all effective inputs instead of rebuilding contraction, snapping and OD links.
+    const prior = this._carInputs;
+    const rules = CFG.CELL_M + '|' + CFG.ZONE + '|' + CFG.road.speed.join(',') + '|' + CFG.road.cap.join(',');
+    let same = !!(this.car && prior && prior.rules === rules && prior.ways === this.roadWays && prior.cls.length === nTot && prior.vx.length === V);
+    if (same) for (let v = 0; v < V; v++) if (prior.vx[v] !== vx[v] || prior.vy[v] !== vy[v]) { same = false; break; }
+    if (same) for (let e = 0; e < nTot; e++) {
+      const c = this.eCls[e], active = c >= 2 && !(this.eBlock[e] && c < 3);
+      if (prior.cls[e] !== (active ? c : 0) || prior.name[e] !== (active ? this.eName[e] : 0) || prior.block[e] !== (active ? this.eBlock[e] : 0)) { same = false; break; }
+    }
+    if (same) { this.roadVersion++; return; }
     const cDeg = new Int32Array(V);
     const carE = [];
     for (let e = 0; e < nTot; e++) {
@@ -696,6 +707,13 @@
         }
       }
     }
+    const inputs = { rules: rules, ways: this.roadWays, vx: Float64Array.from(vx), vy: Float64Array.from(vy), cls: new Uint8Array(nTot), name: new Int32Array(nTot), block: new Uint8Array(nTot) };
+    for (let e = 0; e < nTot; e++) {
+      const c = this.eCls[e];
+      if (c < 2 || (this.eBlock[e] && c < 3)) continue;
+      inputs.cls[e] = c; inputs.name[e] = this.eName[e]; inputs.block[e] = this.eBlock[e];
+    }
+    this._carInputs = inputs;
     this.roadVersion++;
   };
 

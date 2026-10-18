@@ -157,6 +157,7 @@
 
   let last = performance.now(), fpsAcc = 0, fpsN = 0;
   function frame(t) {
+    const workStarted = performance.now();
     const dt = Math.min(0.1, Math.max(0, (t - last) / 1000));
     last = t;
     const g = CM.game;
@@ -172,6 +173,7 @@
     }
     try { R.render(dt, ui); } catch (e) { console.error(e); }
     ui.tick(dt);
+    R.noteFrameTime(performance.now() - workStarted);
     fpsAcc += dt; fpsN++;
     if (fpsAcc > 1) { R.stats.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
     requestAnimationFrame(frame);

@@ -153,7 +153,9 @@
       }),
       ops: Object.assign({}, CM.CFG.ops, { carKmCost: 0.0003, stationDaily: { S: 0.6, M: 1.0, L: 1.8 }, inflation: [[1970, 0.08], [1983, 0.09], [1991, 0.08], [1998, -0.01], [2004, 0.025]] }),
       fareDefault: { mode: 'flat', flat: 0.5 }, fareRange: { min: 0, max: 5, step: 0.1 },
-      economy: Object.assign({}, CM.CFG.economy, { startFunds: 150000, grantBase: [[1970, 7000], [1980, 18000], [1990, 45000], [2000, 70000], [2020, 100000], [2050, 150000]], debtLimit: -100000, rewardScale: 0.5 }),
+      economy: Object.assign({}, CM.CFG.economy, { startFunds: 150000, grantBase: [[1970, 7000], [1980, 18000], [1990, 45000], [2000, 70000], [2020, 100000], [2050, 150000]], debtLimit: -100000, rewardScale: 0.5,
+        // 港币债券：1970 年代末至 1980 年代初利率较高，2000 年后长期低息
+        bonds: { local: { rate: [[1970, 0.07], [1980, 0.11], [1985, 0.09], [1990, 0.08], [1998, 0.07], [2005, 0.04], [2010, 0.025], [2020, 0.02], [2050, 0.025]], quotaMonths: 6, capMonths: 30 }, ct: { spread: 0.015, quotaMonths: 4, capMonths: 18 }, term6: 0.004 } }),
     },
     cam: { cx: 33, cy: 52, zoom: 18 },
   });
