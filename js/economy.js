@@ -37,6 +37,8 @@
     this.failed = null;
     this.lastDay = null;
     this.satFactors = null;
+    this.fisc = null;          // 财力系数 { y, f }（城市经济每年 1 月设定）
+    this.quoteFn = null;       // 新发债券的利率报价（城市经济提供；不保存）
   }
   CM.Economy = Economy;
 
@@ -72,16 +74,22 @@
   };
 
   // 拨款与满意度调整（mods）：until 为最后一个生效的月份（含当月），N 个月的效果记为 ym + N − 1
+  // 财力系数（城市经济，macro.js）：上一年实际地方财政收入 ÷ 预期，每年 1 月确定一次；没有城市经济的地图为 1
+  Economy.prototype.fiscalFactor = function () { return this.fisc && isFinite(this.fisc.f) ? this.fisc.f : 1; };
+  // 基础额度：按城市与年代设定的地铁资金基数（不含财力、满意度与任务调整）
+  Economy.prototype.grantQuota = function (y, m) { return U.interp(CFG.economy.grantBase, y + ((m || 1) - 1) / 12); };
   Economy.prototype.grantFor = function (y, m) {
     const ym = U.ymIndex(y, m);
     let f = 0.6 + 0.8 * this.sat / 100, mf = 1;
     for (const md of this.mods) if (md.kind === 'grant' && md.until >= ym) mf *= md.factor;
-    return U.interp(CFG.economy.grantBase, y + (m - 1) / 12) * f * Math.max(0.6, mf);
+    return this.grantQuota(y, m) * this.fiscalFactor() * f * Math.max(0.6, mf);
   };
   Economy.prototype.grantFactors = function (y, m) {
     const ym = U.ymIndex(y, m);
-    const list = [{ label: '满意度系数（' + Math.round(this.sat) + '）', f: 0.6 + 0.8 * this.sat / 100 }];
-    for (const md of this.mods) if (md.kind === 'grant' && md.until >= ym) list.push({ label: md.reason + '（至 ' + Math.floor(md.until / 12) + '年' + (md.until % 12 + 1) + '月）', f: md.factor });
+    const list = [];
+    if (this.fisc) list.push({ label: '财力系数（' + (this.fisc.y || y) + ' 年预算）', f: this.fiscalFactor(), kind: 'fisc' });
+    list.push({ label: '满意度系数（' + Math.round(this.sat) + '）', f: 0.6 + 0.8 * this.sat / 100, kind: 'sat' });
+    for (const md of this.mods) if (md.kind === 'grant' && md.until >= ym) list.push({ label: md.reason + '（至 ' + Math.floor(md.until / 12) + '年' + (md.until % 12 + 1) + '月）', f: md.factor, kind: 'task' });
     return list;
   };
   // 新月份：先开新账（期初 = 上月期末），任务奖励等记入新月；再发放本月拨款
@@ -184,14 +192,20 @@
   Economy.BOND_DEF = BOND_DEF;
   Economy.prototype.bondCfg = function () { return CFG.economy.bonds || null; };
   Economy.prototype.canBorrow = function () { return !this.isFree() && !!this.bondCfg(); };
-  // 当年基础月拨款（不含满意度与任务调整）
-  Economy.prototype.baseGrant = function (y) { return U.interp(CFG.economy.grantBase, y); };
-  Economy.prototype.bondRate = function (kind, y, term) {
-    const B = this.bondCfg(); if (!B) return 0;
+  // 当年基础月拨款（含财力系数，不含满意度与任务调整）：融资额度与债务上限按此计算
+  Economy.prototype.baseGrant = function (y) { return U.interp(CFG.economy.grantBase, y) * this.fiscalFactor(); };
+  // 新发行债券的利率报价：有城市经济时按经济环境与财政状况浮动（macro.js）；已发行债券按合同利率，不受影响
+  Economy.prototype.bondQuote = function (kind, y, term) {
+    if (this.quoteFn) { try { const q = this.quoteFn(kind, y, term); if (q && isFinite(q.rate)) return q; } catch (e) { console.error(e); } }
+    const B = this.bondCfg(); if (!B) return { rate: 0, parts: [] };
     const local = U.interp(B.local.rate, y);
-    const r = kind === 'ct' ? (B.ct.rate ? U.interp(B.ct.rate, y) : local + (B.ct.spread || 0.015)) : local;
-    return r + (term === 6 ? (B.term6 || 0.004) : 0);
+    const parts = [{ k: 'base', label: '基准利率（' + y + ' 年市场水平）', v: local }];
+    let r = local;
+    if (kind === 'ct') { const sp = B.ct.rate ? U.interp(B.ct.rate, y) - local : (B.ct.spread || 0.015); parts.push({ k: 'ct', label: '城投债利差', v: sp }); r += sp; }
+    if (term === 6) { const tp = B.term6 || 0.004; parts.push({ k: 'term', label: '6 年期期限溢价', v: tp }); r += tp; }
+    return { rate: r, parts: parts };
   };
+  Economy.prototype.bondRate = function (kind, y, term) { return this.bondQuote(kind, y, term).rate; };
   Economy.prototype.bondQuota = function (kind, y) { const B = this.bondCfg(); return B ? B[kind].quotaMonths * this.baseGrant(y) : 0; };
   Economy.prototype.bondCap = function (kind, y) { const B = this.bondCfg(); return B ? B[kind].capMonths * this.baseGrant(y) : 0; };
   Economy.prototype.issuedIn = function (kind, y) { const a = this.bondIssued[y]; return a ? (a[kind] || 0) : 0; };
@@ -220,8 +234,10 @@
     if (!(amount > 0)) return { ok: false, error: '发行金额必须大于 0' };
     const room = this.bondRoom(kind, y);
     if (amount > room + MONEY_EPS) return { ok: false, error: '超出本年度可发行额度（剩余 ' + U.fmtMoney(room) + '）' };
-    const rate = this.bondRate(kind, y, term);
-    const b = { id: 'B' + (this.bondSeq++), kind: kind, amount: amount, rate: rate, term: term, issued: [when.y, when.m, when.d || 1], ym0: U.ymIndex(when.y, when.m), paidYears: 0, interestPaid: 0, interestArrears: 0, principalArrears: 0, done: false };
+    const q = this.bondQuote(kind, y, term), rate = q.rate;
+    // 合同利率在发行时固定，并记录当时的报价构成（之后的市场与财政变化不影响已发行债券）
+    const b = { id: 'B' + (this.bondSeq++), kind: kind, amount: amount, rate: rate, term: term, issued: [when.y, when.m, when.d || 1], ym0: U.ymIndex(when.y, when.m), paidYears: 0, interestPaid: 0, interestArrears: 0, principalArrears: 0, done: false,
+      quote: q.parts.map(function (p) { return [p.label, Math.round(p.v * 1e6) / 1e6]; }) };
     this.bonds.push(b);
     (this.bondIssued[y] || (this.bondIssued[y] = { local: 0, ct: 0 }))[kind] += amount;
     this.capex += amount;
@@ -319,13 +335,15 @@
 
   Economy.prototype.serialize = function () {
     return { mode: this.mode, funds: this.funds, fare: this.fare, cur: this.cur, ledger: this.ledger, sat: this.sat, mods: this.mods, negMonths: this.negMonths, lowSatMonths: this.lowSatMonths, failed: this.failed, satFactors: this.satFactors, lastDay: this.lastDay,
-      capex: this.capex, bonds: this.bonds, bondIssued: this.bondIssued, overdue: this.overdue, overdueParts: this.overdueParts || null, overdueMonths: this.overdueMonths, flow: this.flow, bondSeq: this.bondSeq, svc: this._svc == null ? null : this._svc };
+      capex: this.capex, bonds: this.bonds, bondIssued: this.bondIssued, overdue: this.overdue, overdueParts: this.overdueParts || null, overdueMonths: this.overdueMonths, flow: this.flow, bondSeq: this.bondSeq, svc: this._svc == null ? null : this._svc,
+      fisc: this.fisc || null };
   };
   Economy.restore = function (s) {
     const e = new Economy(s.mode, s.cur.y, s.cur.m);
     Object.assign(e, { funds: s.funds, fare: Economy.normFare(s.fare), cur: s.cur, ledger: s.ledger || [], sat: s.sat, mods: s.mods || [], negMonths: s.negMonths || 0, lowSatMonths: s.lowSatMonths || 0, failed: s.failed || null, satFactors: s.satFactors || null, lastDay: s.lastDay || null,
       capex: s.capex || 0, bonds: s.bonds || [], bondIssued: s.bondIssued || {}, overdue: s.overdue || 0, overdueParts: s.overdueParts || null, overdueMonths: s.overdueMonths || 0, flow: s.flow || [], bondSeq: s.bondSeq || 1 });
     e._svc = s.svc == null ? null : s.svc;
+    e.fisc = s.fisc && isFinite(s.fisc.f) ? { y: s.fisc.y, f: s.fisc.f } : null;   // 1.7 及更早的存档没有财力系数，按 1 处理
     // 1.6 及更早的正式存档没有债券，默认债务为零。早期 1.7 开发档可能只保存逾期总账，
     // 没有每券构成：从较晚发行的债券开始分摊剩余逾期，保留总额、已用额度与现金余额。
     const P = e.odParts();

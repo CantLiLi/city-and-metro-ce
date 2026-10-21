@@ -20,10 +20,19 @@
   Tools.prototype.game = function () { return CM.game; };
   Tools.prototype.setTool = function (t) {
     if (this.tool === t) return;
+    this.cancelDrag();
+    if (this.ui.closeLinePicker) this.ui.closeLinePicker();
     this.tool = t;
     this.chain = null; this.bends = []; this.drag = null; this.hint = null; this.hover = null; this.lineLock = false;
     this.ui.setTooltip(null);
     this.ui.onToolChange(t);
+  };
+  // 中断未完成的拖动：恢复拖动前草案，不留下阻塞保存的 liveSnap。
+  Tools.prototype.cancelDrag = function () {
+    const g = this.game(), active = !!this.drag || !!(g && g.draft && g.draft.liveSnap);
+    this.drag = null; this.ptr = null;
+    if (g && g.draft && g.draft.liveSnap) g.endLive(false);
+    return active;
   };
   Tools.prototype.net = function () { const g = this.game(); return g.draft ? g.draft.net : g.net; };
   // 草案变化（编辑、撤销、重做、放弃、确认）后校正工具状态，避免引用已不存在的车站或线路
@@ -31,6 +40,7 @@
     if (!this.game()) return;
     const net = this.net();
     if (this.chain && !net.stations[this.chain]) { this.chain = null; this.bends = []; }
+    if (this.ui.linePicker && this.ui.linePicker.sid !== this.chain) this.ui.closeLinePicker();
     if (this.lineChoice !== 'new' && !net.lines[this.lineChoice]) this.lineChoice = 'new';
   };
 
@@ -40,13 +50,13 @@
     cv.addEventListener('pointerdown', function (e) { if (self.touchDown(e)) return; self.onDown(e); });
     window.addEventListener('pointermove', function (e) { if (self.touchMove(e)) return; self.onMove(e); });
     window.addEventListener('pointerup', function (e) { if (self.touchUp(e)) return; self.onUp(e); });
-    window.addEventListener('pointercancel', function (e) { if (self.touchUp(e)) return; self.ptr = null; if (self.drag) { const g = self.game(); self.drag = null; if (g) g.endLive(false); } });
+    window.addEventListener('pointercancel', function (e) { if (self.touchUp(e)) return; self.cancelDrag(); });
     cv.addEventListener('wheel', function (e) { e.preventDefault(); if (!self.game()) return; const k = e.deltaMode === 1 ? 40 : 1; self.R.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * k * 0.0016)); }, { passive: false });
     cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     cv.addEventListener('dblclick', function (e) { self.onDbl(e); });
     window.addEventListener('keydown', function (e) { self.onKey(e); });
     window.addEventListener('keyup', function (e) { self.keys.delete(e.key.toLowerCase()); });
-    window.addEventListener('blur', function () { self.keys.clear(); });
+    window.addEventListener('blur', function () { self.keys.clear(); self.cancelDrag(); if (self.touches) self.touches.clear(); self.pinch = null; });
   };
   // ---------------- 触屏：双指缩放与平移 ----------------
   // 第二根手指按下时进入缩放：取消单指的点击 / 拖动，按两指距离缩放、按中点平移；返回 true 表示事件已处理
@@ -55,7 +65,7 @@
     const T = this.touches || (this.touches = new Map());
     T.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (T.size < 2) return false;
-    if (this.drag) { const g = this.game(); this.drag = null; if (g) g.endLive(true); }
+    this.cancelDrag();
     this.ptr = null; this.ui.setTooltip(null);
     const p = Array.from(T.values());
     this.pinch = { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2 };
@@ -208,14 +218,21 @@
   };
   // 起点决定线路：线路端点站 → 延长该线路；其余（空地、中间站、轨道上新建的换乘站）→ 新线路。
   // 返回将使用的线路 id（'new' 为新线路）；端点同时属于多条线路时优先保留当前所选
-  Tools.prototype.lineForStart = function (sid) {
+  // 以该站为端点、可以延长的线路（普通线与支线的叶端点）
+  Tools.prototype.endLines = function (sid) {
     const net = this.net();
-    if (!sid || !net.stations[sid]) return 'new';
-    const ends = M.stationLines(net, sid).filter(function (lid) {
+    if (!sid || !net.stations[sid]) return [];
+    return M.stationLines(net, sid).filter(function (lid) {
       const tp = M.lineTopo(net, lid);
       return (tp.topo === 'path' || tp.topo === 'branch') && tp.adj && tp.adj.get(sid) && tp.adj.get(sid).length === 1;
     });
+  };
+  // 端点同时属于多条线路时：优先当前选中（高亮）的线路，其次上次绘制的线路；仍有歧义时由玩家在弹出的选择框中确认
+  Tools.prototype.lineForStart = function (sid) {
+    const ends = this.endLines(sid);
     if (!ends.length) return 'new';
+    const hl = this.ui.highlightLine;
+    if (hl && ends.indexOf(hl) >= 0) return hl;
     return ends.indexOf(this.lineChoice) >= 0 ? this.lineChoice : ends[0];
   };
   Tools.prototype.lineName = function (lid) {
@@ -233,7 +250,12 @@
   Tools.prototype.linePreviewTip = function (w, st, seg, mod) {
     const g = this.game(), net = this.net();
     if (!this.chain) {
-      if (st) { const lid = this.lineForStart(st); return { title: (lid === 'new' ? '从「' + net.stations[st].name + '」开始新线路' : '延长 ' + net.lines[lid].name), lines: [lid === 'new' ? (M.stationLines(net, st).length ? '与已有线路在此换乘' : '依次点击车站或空地连线') : '从端点「' + net.stations[st].name + '」继续绘制', 'Shift+点击添加转弯点；右键结束'] }; }
+      if (st) {
+        const ends = this.endLines(st);
+        if (ends.length >= 2) return { title: '「' + net.stations[st].name + '」是 ' + ends.length + ' 条线路的端点', lines: [ends.map(function (l) { return net.lines[l].name; }).join('、'), '点击后选择要延长的线路（也可以改为新线路）'] };
+        const lid = this.lineForStart(st);
+        return { title: (lid === 'new' ? '从「' + net.stations[st].name + '」开始新线路' : '延长 ' + net.lines[lid].name), lines: [lid === 'new' ? (M.stationLines(net, st).length ? '与已有线路在此换乘' : '依次点击车站或空地连线') : '从端点「' + net.stations[st].name + '」继续绘制', 'Shift+点击添加转弯点；右键结束'] };
+      }
       if (seg) return { title: '在轨道上新建换乘站并开始新线路', lines: [] };
       const chk = M.checkSite(g.city, w.x, w.y, this.buildType);
       return chk.ok ? { title: '点击放置第一座车站（新线路）', lines: ['点击线路端点车站则延长该线路'] } : { title: '不能在此建站', lines: [chk.msg], bad: true };
@@ -352,6 +374,8 @@
     const g = this.game(), ui = this.ui, self = this;
     const opts = { size: this.stationSize, type: this.buildType };
     this.syncDraft();
+    // 线路选择框打开时直接在地图上继续点击：按当前（默认）选择继续绘制
+    if (ui.linePicker && !mod) ui.closeLinePicker();
     if (mod) {
       if (this.chain) { this.bends.push([w.x, w.y]); sfx('soft'); }
       else ui.toast('请先选择或放置起点车站，再添加转弯点', 'info');
@@ -364,6 +388,9 @@
         if (!keep) this.lineChoice = this.lineForStart(st);
         this.chain = st; this.bends = []; sfx('soft');
         ui.renderToolOpts();
+        // 两条及以上线路在此站结束：弹出选择框，让玩家确认延长哪一条（默认项已预选，可直接继续点击）
+        const ends = this.endLines(st);
+        if (!keep && ends.length >= 2) ui.showLinePicker(st, ends);
         return;
       }
       if (seg) {
@@ -417,6 +444,7 @@
   };
   // 结束本次绘线（草案保留）；下次起点重新自动选择线路
   Tools.prototype.endChain = function (silent) {
+    if (this.ui.closeLinePicker) this.ui.closeLinePicker();
     if (!this.chain && !this.bends.length) return false;
     this.chain = null; this.bends = []; this.lineLock = false;
     if (!silent) this.ui.toast('已结束本次绘线，草案保留', 'info');
@@ -475,6 +503,7 @@
 
   // ---------------- 键盘 ----------------
   Tools.prototype.onKey = function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
     const g = this.game();
     const t = e.target, tag = (t && t.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) {
@@ -486,6 +515,11 @@
     }
     if (!g || this.ui.blocking()) { if (e.key === 'Escape') this.ui.escape(); return; }
     const k = e.key.toLowerCase();
+    // 线路选择框打开时：数字键选择对应线路，Esc 关闭（保留当前选择）
+    if (this.ui.linePicker && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (/^[1-9]$/.test(k) && this.ui.linePicker.pick(+k - 1)) { e.preventDefault(); return; }
+      if (k === 'escape') { this.ui.closeLinePicker(); return; }
+    }
     // 先匹配重做（Ctrl+Y / Ctrl+Shift+Z），再匹配撤销
     if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) { e.preventDefault(); this.ui.redo(); return; }
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.ui.undo(); return; }

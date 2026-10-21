@@ -148,7 +148,11 @@
           h('h2', null, mp.title || mp.name),
           h('div', { class: 'msel-tagline' }, mp.tagline || mp.sub),
           h('div', { class: 'msel-chips' }, levelEl(mp.difficulty || 2), (mp.tags || []).map(function (t) { return h('span', { class: 'tag glass-tag' }, t); }))));
-      const facts = h('div', { class: 'msel-facts' }, (mp.facts || []).filter(function (f) { return f[0] !== '模式'; }).map(function (f) { return h('div', null, h('span', null, f[0]), h('b', null, f[1])); }));
+      // 要点：范围、起始、人口、货币等；真实城市另列开局时地图范围的经济规模（城市经济模拟的起点，估算）
+      const fl = (mp.facts || []).filter(function (f) { return f[0] !== '模式'; }).slice();
+      const mc = mp.cfg.macro && mp.cfg.macro !== 'auto' ? mp.cfg.macro : null;
+      if (mc && mc.gdp0) { const mo = mp.cfg.money, v = mc.gdp0; fl.push(['开局 GDP', '约 ' + (v >= 1e8 ? (v / 1e8).toFixed(2) + ' 万' + mo.yi : U.fmtMoney(v, 0, mo))]); }
+      const facts = h('div', { class: 'msel-facts' }, fl.map(function (f) { return h('div', null, h('span', null, f[0]), h('b', { title: f[1] }, f[1])); }));
       const feats = h('div', { class: 'msel-feats' }, (mp.features || []).map(function (f, k) {
         return h('div', { class: 'msel-feat', style: { animationDelay: (0.04 * k) + 's' } }, h('span', { class: 'badge ' + ['b-blue', 'b-teal', 'b-orange', 'b-violet'][k % 4] }, ic(f[0])), h('div', null, h('b', null, f[1]), h('small', null, f[2])));
       }));
@@ -160,20 +164,22 @@
       const acts = h('div', { class: 'map-actions' });
       if (mp.tutorial) acts.appendChild(modeBtn('free', 'play', 'b-teal', '开始教程', '从头开始 12 个引导任务（不限资金）', true));
       else {
-        acts.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '新游戏 · 经营挑战', '初始资金 ' + U.fmtMoney(mp.cfg.economy.startFunds, undefined, mp.cfg.money) + '，历史与动态任务', true));
-        acts.appendChild(modeBtn('free', 'sparkle', 'b-teal', '新游戏 · 自由建造', '资金不限，任务仅供参考', false));
+        acts.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '经营挑战', '新游戏 · 初始资金 ' + U.fmtMoney(mp.cfg.economy.startFunds, undefined, mp.cfg.money) + '，拨款随城市经济变化', true));
+        acts.appendChild(modeBtn('free', 'sparkle', 'b-teal', '自由建造', '新游戏 · 资金不限，任务仅供参考', false));
       }
-      acts.appendChild(h('button', { class: 'map-mode', disabled: latest ? null : true, onclick: function () { if (latest) self.loadSlot(latest.slotId); } },
+      acts.appendChild(h('button', { class: 'map-mode sub', disabled: latest ? null : true, 'data-tip': latest ? latest.name + ' · ' + fmtDate(latest) : null, onclick: function () { if (latest) self.loadSlot(latest.slotId); } },
         h('span', { class: 'badge b-blue' }, ic('clock')), h('span', { class: 'grow' }, h('b', null, mp.tutorial ? '继续教程' : '继续游戏'), h('small', null, latest ? latest.name + ' · ' + fmtDate(latest) : '该地图还没有存档')), ic('chev', 16)));
-      acts.appendChild(h('button', { class: 'map-mode', onclick: function () { self.showSaveManager(false, sel); } },
+      acts.appendChild(h('button', { class: 'map-mode sub', onclick: function () { self.showSaveManager(false, sel); } },
         h('span', { class: 'badge b-slate' }, ic('folder')), h('span', { class: 'grow' }, h('b', null, '读取存档'), h('small', null, games.length ? games.length + ' 个进度 · 可导入存档文件' : '暂无存档 · 可导入存档文件')), ic('chev', 16)));
+      // 详情按区块分组：概况（介绍与要点）、地图特色、大事年表；底部为本图操作区
+      const block = function (icon, badge, title, kids, cls) { return h('section', { class: 'msel-block ' + (cls || '') }, h('div', { class: 'msel-bh' }, h('span', { class: 'badge ' + badge }, ic(icon, 15)), h('b', null, title)), kids); };
+      const progress = games.length ? games.length + ' 个进度 · 最近 ' + (latest ? fmtDate(latest) : '—') : (mp.tutorial ? '还没有开始教程' : '还没有进度');
       return h('div', { class: 'msel-dwrap' },
         h('div', { class: 'msel-scroll' }, hero,
-          h('p', { class: 'msel-intro' }, mp.intro || mp.desc),
-          facts,
-          h('div', { class: 'msel-sec' }, ic('sparkle', 15), '地图特色'), feats,
-          h('div', { class: 'msel-sec' }, ic('calYear', 15), '大事年表'), tl),
-        acts);
+          block('info', 'b-blue', '城市概况', [h('p', { class: 'msel-intro' }, mp.intro || mp.desc), facts], 'intro'),
+          block('sparkle', 'b-violet', '地图特色', feats),
+          block('calYear', 'b-orange', '大事年表', tl)),
+        h('div', { class: 'msel-actbar' }, h('div', { class: 'msel-acth' }, h('b', null, mp.tutorial ? '开始教程' : '开始规划 ' + (mp.name || '')), h('span', { class: 'tiny muted' }, ic('save', 12), progress)), acts));
     };
     let first = true;
     const drawDetail = function () {
@@ -193,8 +199,9 @@
 
     const left = h('div', { class: 'msel-left' },
       h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图'), h('span', { class: 'grow' }), count),
-      h('div', { class: 'msel-search' }, ic('search', 16), search, clear),
-      filters, list,
+      h('div', { class: 'msel-filterbox' }, h('div', { class: 'msel-search' }, ic('search', 16), search, clear), filters),
+      h('div', { class: 'msel-lh' }, ic('map', 14), '地图', h('span', { class: 'tiny muted' }, '由易到难 · ↑↓ 切换 · Enter 开始')),
+      list,
       h('div', { class: 'msel-note' }, '每张地图的进度与存档各自独立；进入游戏时默认暂停，可以先规划线路。'));
     const card = h('div', { class: 'card msel', tabindex: '-1' }, left, detail);
     // 键盘：↑↓ 切换地图，Enter 开始（主按钮）
@@ -250,7 +257,8 @@
       h('div', null, h('span', null, free ? '资金' : '可用资金'), h('b', null, free ? '不限' : U.fmtMoney(g.econ.funds))),
       h('div', null, h('span', null, '人口'), h('b', null, U.fmtPeople(tot.pop))),
       h('div', null, h('span', null, '已开放区域'), h('b', null, open + ' / ' + regs)),
-      h('div', null, h('span', null, '票价'), h('b', null, CFG.money.sym + g.econ.fare.flat))));
+      h('div', null, h('span', null, '票价'), h('b', null, CFG.money.sym + g.econ.fare.flat)),
+      g.macro && CM.Macro ? (function () { const mv = CM.Macro.view(g); return h('div', { 'data-tip': '地图范围的经济规模（估算），每年 1 月结算上一年' }, h('span', null, '城市经济'), h('b', null, (mv.last ? mv.last.y + ' 年 ' + UI.fmtBig(mv.last.nom) : '约 ' + UI.fmtBig(mv.fc.nom)) + ' · ' + mv.env.label)); })() : null));
     const tasks = (g.tasks.active || []).slice(0, 3);
     if (tasks.length) {
       parts.push(h('div', { class: 'msel-sec' }, ic('tasks', 15), atStart ? '首批任务' : '进行中的任务'));
@@ -271,12 +279,13 @@
       return h('div', { class: 'eg-sec' }, h('div', { class: 'eg-h' }, h('span', { class: 'badge ' + badge }, ic(icon)), h('b', null, title)), h('ul', null, items.map(function (t) { return h('li', null, t); })));
     };
     return h('div', { class: 'eg' },
-      sec('coin', 'b-green', '钱从哪里来', ['政府拨款：每月初发放，满意度越高拨款越多，任务未完成会减少拨款。', '票款：每天按乘客数与票价结算。', '任务奖励：完成历史与动态任务时发放。']),
+      sec('coin', 'b-green', '钱从哪里来', ['政府拨款：每月初发放一次，= 基础额度 × 财力系数 × 满意度系数 × 任务修正。', '票款：每天按乘客数与票价结算。', '任务奖励：完成历史与动态任务时发放。']),
+      sec('trend', 'b-violet', '城市经济怎样影响拨款', ['真实城市会模拟地图范围的 GDP、经济周期和历史经济事件（如石油危机、亚洲金融危机、全球金融危机），每年 1 月结算上一年。', 'GDP 不等于财政收入：地方财政收入约为 GDP 的一定比例，其中只有一部分安排给地铁。上一年财政收入高于预期，当年拨款的财力系数就高于 1，反之低于 1（限定在 ×0.70–1.30）。', '好的地铁能缩短通勤、缓解拥堵、提高可达性，从而小幅提高生产率；但建了地铁不一定增长，也抵消不了外部危机。']),
       sec('hammer', 'b-orange', '钱花在哪里', ['建设与拆迁：确认建设时一次支付。', '运营成本：列车运行与车站，每天结算。线路越长、车站越多，成本越高。']),
-      sec('wallet', 'b-violet', '债券融资', ['地方债利率较低、额度较大；城投债利率较高、额度较小。', '期限 3 年或 6 年，利率在发行时固定；每年付一次利息，到期一次还本。', '借来的钱不算收入：进入「建设专项资金」，只能用于地铁建设及改扩建，不能拿来付运营成本或利息。', '每年能发行的额度与总债务都有上限，随城市与年代变化。']),
+      sec('wallet', 'b-violet', '债券融资', ['地方债利率较低、额度较大；城投债利率较高、额度较小。', '新发行的利率随年代的市场利率、经济环境和本市财政状况浮动：财政稳健时更低，负债偏高、财力不足或有逾期时更高。', '期限 3 年或 6 年，利率在发行时锁定，之后按合同付息，不受报价变化影响；每年付一次利息，到期一次还本。', '借来的钱不算收入：进入「建设专项资金」，只能用于地铁建设及改扩建，不能拿来付运营成本或利息。', '每年能发行的额度与总债务都有上限，随城市、年代与财力变化。']),
       sec('warn', 'b-red', '还不上会怎样', ['利息与本金从一般资金支付；资金不足的部分记为逾期。', '逾期每月收取额外费用，并暂停城投债；逾期满 6 个月暂停全部发债。', '不会因为一次逾期就失败，一般资金有余额时会自动还清。挑战失败只看长期负余额、负债下限与满意度。']),
-      sec('cursor', 'b-blue', '怎么操作', ['点顶栏的「资金」打开财政面板，在「债券融资」里点「发行债券」。', '选择种类、期限与金额，确认前会显示每年利息、到期日与发行后的专项资金。', '「债务详情与偿债预测」列出每笔债券与未来几年的还款；「资金流水」记录每一笔进出。']),
-      h('div', { class: 'note' }, '青湾教程使用自由建造（资金不限），这里只做说明，不会实际发行债券。可以在「菜单 → 操作说明」中随时回看。'));
+      sec('cursor', 'b-blue', '怎么操作', ['点顶栏的「资金」打开「财政与经济」面板：概览、经济、财政、融资四个分页。', '在「融资」页查看利率报价与构成，点「发行债券」选择种类、期限与金额，确认前会显示每年利息与到期日。', '「经济」页列出 GDP、增长来源、交通对经济的影响与正在发生的经济事件；统计窗口（G）的「经济」页有历年图表。']),
+      h('div', { class: 'note' }, '青湾教程使用自由建造（资金不限），不模拟城市经济，这里只做说明，不会实际发行债券。可以在「菜单 → 操作说明」中随时回看。'));
   };
   UI.prototype.showEconGuide = function (onClose) {
     const self = this, close = function () { self.closeScreen(); if (onClose) onClose(); };

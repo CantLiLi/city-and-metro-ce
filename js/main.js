@@ -131,6 +131,7 @@
     }, 60);
   };
   CM.endGame = function () {
+    ui.clearCelebrations();
     CM.game = null;
     if (CM.Follow) CM.Follow.stop(true);
     if (CM.Tutorial) CM.Tutorial.detach();

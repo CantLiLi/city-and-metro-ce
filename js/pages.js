@@ -133,7 +133,7 @@
       const b = h('div');
       const nameIn = h('input', { type: 'text', value: s.name, maxlength: 16 });
       const rename = function () { const v = nameIn.value.trim(), c = latest(); if (!v || !c || v === c.name) return; g.edit(function (n) { n.stations[id].name = v; }); self.toast('已在草案中更名为「' + v + '」', 'info'); };
-      nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); rename(); } });
+      nameIn.addEventListener('keydown', function (e) { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') { e.preventDefault(); rename(); } });
       b.appendChild(h('div', { class: 'field' }, h('label', null, '站名'), h('div', { class: 'row' }, nameIn, h('button', { class: 'btn sm', onclick: rename }, '更名'))));
       b.appendChild(h('div', { class: 'field' }, h('label', null, '车站规模'), self.sizeCards({
         type: s.type, cur: s.size, base: official ? official.size : null, rebuild: !!official && official.type !== s.type,
@@ -493,7 +493,7 @@
     const el = h('div');
     const hist = g.history;
     const defs = {
-      pop: { title: '人口', val: function () { return U.fmtPeople(g.city.totals().pop); }, series: function (r) { return r.pop; }, def: '地图范围内的常住人口。', scope: '统计范围：全图（约 ' + U.fmtNum(CFG.W * CFG.CELL_M / 1000, 0) + ' km × ' + U.fmtNum(CFG.H * CFG.CELL_M / 1000, 0) + ' km）；更新：每月城市发展结算；' + (CM.DATA.fictional ? '虚构城市，人口按模拟规则发展。' : CFG.growth.histEnd + ' 年前为参考统计的估算，之后为模拟。'), factors: ['历史人口增长参考曲线', '区域开放（时间与人口共同决定）', '地铁覆盖率提高可吸引更多人口（最多约 +6%）', '各街区的可达性、地铁车站邻近度与规划用地'] },
+      pop: { title: '人口', val: function () { return U.fmtPeople(g.city.totals().pop); }, series: function (r) { return r.pop; }, def: '地图范围内的常住人口。', scope: '统计范围：全图（约 ' + U.fmtNum(CFG.W * CFG.CELL_M / 1000, 0) + ' km × ' + U.fmtNum(CFG.H * CFG.CELL_M / 1000, 0) + ' km）；更新：每月城市发展结算；' + (CM.DATA.fictional ? '虚构城市，人口按模拟规则发展。' : CFG.growth.histEnd + ' 年前为参考统计的估算，之后为模拟。'), factors: ['历史人口增长参考曲线', '区域开放（时间与人口共同决定）', '地铁覆盖率提高可吸引更多人口（最多约 +6%）', '城市经济景气：繁荣时人口增长加快、新区可提前开放，衰退时放缓（真实城市）', '各街区的可达性、地铁车站邻近度与规划用地'] },
       share: { title: '地铁分担率', val: function () { return U.fmtPct(d.metroShare || 0); }, series: function (r) { return r.share; }, pct: true, def: '采用地铁的完整出行次数 ÷（汽车 + 地铁完整出行总次数）。换乘不重复计为新出行。', scope: '时间窗口：典型工作日全天（各时段汇总）；首版仅模拟汽车与地铁两种方式。', factors: ['起终点步行接驳时间（沿道路计算）', '候车时间（由发车间隔决定）与换乘次数', '车厢拥挤与车站拥挤', '票价与居民时间价值', '汽车出行时间（道路拥堵）与停车费用'] },
       cong: { title: '道路拥堵指数', val: function () { return (d.cong || 1).toFixed(2) + '（全日） / ' + (d.congAM || 1).toFixed(2) + '（早高峰）'; }, series: function (r) { return r.cong; }, def: '道路实际行驶时间 ÷ 自由流行驶时间，按车公里加权汇总。1.0 表示畅通，1.5 以上明显拥堵。', scope: '统计范围：全图主要道路；顶栏显示当前游戏时刻的数值，此处为典型工作日汇总。', factors: ['人口与出行需求增长', '汽车拥有水平（随年代上升）', '地铁对汽车出行的吸引（不按固定比例下降）', '道路与桥梁的系统建设'] },
       commute: { title: '平均通勤时间', val: function () { return U.fmtNum(d.commute || 0, 1) + ' 分钟'; }, series: function (r) { return r.commute; }, def: '家—工作出行的门到门平均时间。', scope: '包含步行接驳、候车、乘车、换乘、停车取车；时间窗口：典型工作日早晚通勤。', factors: ['道路拥堵', '地铁线路的直达性与换乘便利', '居住与就业分布（城市扩张会拉长通勤）'] },
@@ -550,7 +550,7 @@
     el.appendChild(h('div', { class: 'row', style: { margin: '6px 0 10px' } }, h('span', { class: 'tag' }, g.stageName()), g.clock.y > CFG.growth.histEnd ? h('span', { class: 'tag sim' }, '模拟未来') : h('span', { class: 'tag hist' }, '参考历史'),
       this.liveText(function () { return CFG.periods[g.model.hourPeriod[Math.floor(g.clock.minute / 60) % 24]].name; }, 'tag info')));
     el.appendChild(this.sec('dt-time', '时间与时段', '', function () {
-      return h('div', { class: 'note' }, '1× 速度下游戏中一天约 ' + Math.round(CFG.time.secPerHour * 24) + ' 秒。时段：早高峰 7–9 时、日间平峰、晚高峰 17–19 时、夜间；地铁运营 06:00–24:00。暂停时可以建设、预测和调整票价（默认规则，待确认）。跳月/跳年会逐日结算票款与运营费用，并处理每月的拨款、城市发展、区域开放与任务。');
+      return h('div', { class: 'note' }, '1× 速度下游戏中一天约 ' + Math.round(CFG.time.secPerHour * 24) + ' 秒。时段：早高峰 7–9 时、日间平峰、晚高峰 17–19 时、夜间；地铁运营 06:00–24:00。暂停时可以建设、预测和调整票价。跳月 / 跳年会逐日结算票款与运营费用，并处理每月的拨款、城市发展、区域开放与任务；真实城市每年 1 月结算上一年的城市经济。');
     }));
     // 城市发展的关键节点见统计面板的「里程碑」（区域开放与逐条发展记录不在这里重复列出）
     const ms = CM.Milestones ? CM.Milestones.state(g).list.filter(function (r) { return r.id !== 'start'; }) : [];
@@ -559,6 +559,13 @@
       h('span', { class: 'ms-medal sm' }, CM.icon('book', 18)),
       h('div', { class: 'grow' }, h('b', null, '城市纪事 · ' + ms.length + ' 个里程碑'), h('small', null, last ? '最近：' + last.title + '（' + last.y + '年' + last.m + '月）' : '首条地铁开通、人口与客流跨越关口等关键节点会记录在这里')),
       CM.icon('chev', 16)));
+    if (g.macro && CM.Macro) {
+      const mv = CM.Macro.view(g);
+      el.appendChild(h('button', { class: 'ms-link alt', onclick: function () { self.openTop('econ'); } },
+        h('span', { class: 'ms-medal sm alt' }, CM.icon('trend', 18)),
+        h('div', { class: 'grow' }, h('b', null, '城市经济 · ' + mv.env.label), h('small', null, (mv.last ? mv.last.y + ' 年 GDP ' + UI.fmtBig(mv.last.nom) + (mv.last.growth != null ? '，实际增长 ' + UI.pctS(mv.last.growth) : '') : '本年 GDP 预测 ' + UI.fmtBig(mv.fc.nom)) + ' · ' + mv.trendLabel)),
+        CM.icon('chev', 16)));
+    }
     if (D.briefing) el.appendChild(h('button', { class: 'ms-link alt', onclick: function () { self.showBriefing(); } },
       h('span', { class: 'ms-medal sm alt' }, CM.icon('briefing', 18)),
       h('div', { class: 'grow' }, h('b', null, '开局简报'), h('small', null, CFG.START.y + ' 年这座城市的交通格局与你的起点')),
@@ -573,48 +580,291 @@
       return h('div', { style: { marginTop: i ? '6px' : '0' } }, r[0] ? h('span', { class: 'tag ' + (r[1] || '') }, r[0]) : null, (r[0] ? ' ' : '') + r[2]);
     }));
   };
-  // ======================== 页面：财政 ========================
-  UI.prototype.page_finance = function () {
-    const g = this.g(), E = g.econ, self = this;
-    const el = h('div');
-    const free = E.isFree();
-    const grid = h('div', { class: 'stat-grid' });
-    const sF = this.stat(free ? '资金' : '一般资金', '—'), sC = this.stat('建设专项资金', '—'), sD = this.stat('债务余额', '—'),
-      sG = this.stat('本月拨款', '—'), sR = this.stat('本月票款', '—'), sO = this.stat('本月运营成本', '—');
-    if (free) grid.append(sF, sG, sR, sO); else grid.append(sF, sC, sD, sG, sR, sO);
-    el.appendChild(grid);
-    const upd = function () {
-      const c = E.cur;
-      sF.setV(free ? '不限' : U.fmtMoney(E.funds), free ? '自由建造' : (E.funds < 0 ? '负余额' : '运营、利息与还本从这里支付'), E.funds < 0 ? 'bad' : 'muted');
-      sC.setV(U.fmtMoney(E.capex), '债券募集，只能用于建设');
-      sD.setV(U.fmtMoney(E.debtTotal()), E.overdue > CM.Economy.MONEY_EPS ? '含逾期 ' + U.fmtMoney(E.overdue) : (E.bonds.some(function (b) { return !b.done; }) ? E.bonds.filter(function (b) { return !b.done; }).length + ' 笔未到期' : '暂无债务'), E.overdue > CM.Economy.MONEY_EPS ? 'bad' : 'muted');
-      sG.setV(U.fmtMoney(c.grant), free ? '自由建造不发放' : '每月初发放');
-      sR.setV(U.fmtMoney(c.fare), c.days + ' 天累计');
-      sO.setV(U.fmtMoney(c.ops), c.days + ' 天累计');
-    };
-    upd(); this.live.push(upd);
-    if (!free && E.overdue > CM.Economy.MONEY_EPS) el.appendChild(this.callout('bad', 'warn', '存在逾期债务 ' + U.fmtMoney(E.overdue) + '（已 ' + E.overdueMonths + ' 个月）：每月收取逾期费用，' + (E.overdueMonths >= 6 ? '已暂停全部债券发行' : '城投债已暂停发行') + '。一般资金有余额时会自动偿还。'));
-    el.appendChild(this.sec('fi-fare', '票价', UI.fmtFare(E.fare.flat), function () { return self.fareEditor(); }, true, 'ticket'));
-    el.appendChild(this.sec('fi-month', '收支明细', g.clock.y + '年' + g.clock.m + '月', function () { return self.ledgerBlock(); }, false, 'coin'));
-    if (!free && E.canBorrow()) {
-      el.appendChild(this.sec('fi-bond', '债券融资', U.fmtMoney(E.principalDebt()) + ' 未偿本金', function () { return self.bondBlock(); }, true, 'wallet'));
-      el.appendChild(this.sec('fi-debt', '债务详情与偿债预测', '', function () { return self.debtBlock(); }, false, 'calYear'));
+  // ======================== 页面：财政与经济 ========================
+  // 分页：概览（资金、本月收支、经济摘要、下月拨款、票价）· 经济（GDP、增长来源、交通影响、经济事件、历年数据）·
+  // 财政（地方财政收入、拨款依据、收支明细、流水、失败条件）· 融资（利率报价、发债、债务与偿债预测）
+  const pctS = function (x, d) { return x == null || !isFinite(x) ? '—' : (x > 0 ? '+' : (x < 0 ? '−' : '±')) + Math.abs(x * 100).toFixed(d == null ? 1 : d) + '%'; };
+  const ppS = function (x, d) { return x == null || !isFinite(x) ? '—' : (x > 0 ? '+' : (x < 0 ? '−' : '±')) + Math.abs(x * 100).toFixed(d == null ? 2 : d) + ' 个百分点'; };
+  UI.pctS = pctS;
+  // 金额（含万亿）：内部单位为「万 + 本城货币」
+  UI.fmtBig = function (wan) {
+    if (!isFinite(wan)) return '—';
+    const mo = CFG.money, a = Math.abs(wan);
+    if (a >= 1e8) return (wan < 0 ? '−' : '') + (a / 1e8).toFixed(a >= 1e9 ? 1 : 2) + ' 万' + mo.yi;
+    return U.fmtMoney(wan, a >= 1e6 ? 0 : 1);
+  };
+  UI.prototype.pageTabs = function (tabs, cur, onPick) {
+    const bar = h('div', { class: 'ptabs', role: 'tablist' });
+    for (const t of tabs) bar.appendChild(h('button', { class: t[0] === cur ? 'on' : '', role: 'tab', 'aria-selected': t[0] === cur ? 'true' : 'false', 'data-silent': '1', onclick: function () { if (t[0] !== cur) { snd2('soft'); onPick(t[0]); } } }, CM.icon(t[2], 15), h('span', null, t[1])));
+    return bar;
+  };
+  const snd2 = function (n) { if (CM.Sound) CM.Sound.play(n); };
+  UI.prototype.page_finance = function (id) {
+    const g = this.g(), E = g.econ, self = this, free = E.isFree();
+    const mv = CM.Macro && g.macro ? CM.Macro.view(g) : null;
+    const tabs = [['ov', '概览', 'chart']];
+    if (mv) tabs.push(['econ', '经济', 'trend']);
+    tabs.push(['fisc', '财政', 'bank']);
+    if (!free && E.canBorrow()) tabs.push(['debt', '融资', 'wallet']);
+    let tab = id || this.finTab || 'ov';
+    if (!tabs.some(function (t) { return t[0] === tab; })) tab = 'ov';
+    this.finTab = tab;
+    const el = h('div', { class: 'fin-page' });
+    el.appendChild(this.pageTabs(tabs, tab, function (t) {
+      self.finTab = t;
+      const top = self.stack[self.stack.length - 1]; if (top && top.kind === 'finance') top.id = t;
+      self.renderPage(false); self.rBody.scrollTop = 0;
+    }));
+    const body = h('div', { class: 'fin-body page-enter' });
+    el.appendChild(body);
+    if (tab === 'econ') this.finEcon(body, mv);
+    else if (tab === 'fisc') this.finFiscal(body, mv);
+    else if (tab === 'debt') this.finDebt(body);
+    else this.finOverview(body, mv);
+    if (g.macroError) body.appendChild(this.callout('warn', 'warn', g.macroError));
+    return { title: '财政与经济', el: el };
+  };
+  const goFin = function (self, t) { self.finTab = t; self.openPage('finance', t, { replaceTop: self.topIs(['finance']), root: !self.topIs(['finance']) }); };
+
+  // ---------- 概览 ----------
+  UI.prototype.finOverview = function (el, mv) {
+    const g = this.g(), E = g.econ, self = this, free = E.isFree(), EPS = CM.Economy.MONEY_EPS;
+    // 资金：一般资金 / 专项 / 债务（自由建造为不限）
+    if (free) el.appendChild(h('div', { class: 'fin-free' }, h('span', { class: 'badge b-teal' }, CM.icon('sparkle')), h('div', null, h('b', null, '自由建造 · 资金不限'), h('small', null, '建设不受资金限制，没有拨款、债务与经营失败；票款、运营成本与城市经济照常计算，供参考。'))));
+    else {
+      const grid = h('div', { class: 'fin-cards' });
+      const sF = this.stat('一般资金', '—', '', '', 'coin'), sC = this.stat('建设专项资金', '—', '', '', 'hammer'), sD = this.stat('债务余额', '—', '', '', 'wallet');
+      grid.append(sF, sC, sD);
+      el.appendChild(grid);
+      const upd = function () {
+        sF.setV(U.fmtMoney(E.funds), E.funds < 0 ? '负余额' : '运营、利息与还本', E.funds < 0 ? 'bad' : 'muted');
+        sC.setV(U.fmtMoney(E.capex), '只能用于建设');
+        const live = E.bonds.filter(function (b) { return !b.done; }).length;
+        sD.setV(U.fmtMoney(E.debtTotal()), E.overdue > EPS ? '含逾期 ' + U.fmtMoney(E.overdue) : (live ? live + ' 笔未到期' : '暂无债务'), E.overdue > EPS ? 'bad' : 'muted');
+      };
+      upd(); this.live.push(upd);
+      for (const w of E.warnings()) el.appendChild(this.callout(w.level === 'danger' ? 'bad' : 'warn', 'warn', w.text));
+      if (E.overdue > EPS) el.appendChild(this.callout('bad', 'warn', '存在逾期债务 ' + U.fmtMoney(E.overdue) + '（已 ' + E.overdueMonths + ' 个月）：每月收取逾期费用，' + (E.overdueMonths >= 6 ? '已暂停全部债券发行' : '城投债已暂停发行') + '。一般资金有余额时会自动偿还。'));
     }
+    // 本月收支：一行一项，收入绿色、支出橙色
+    const mbox = h('div', { class: 'fin-month' });
+    const row = function (icon, label, v, cls) { return h('div', { class: 'fm-row ' + cls }, CM.icon(icon, 15), h('span', { class: 'grow' }, label), h('b', { class: 'num' }, v)); };
+    const drawMonth = function () {
+      const c = E.cur;
+      // 原生 replaceChildren 会把 null 写成文字，只传实际存在的节点
+      mbox.replaceChildren.apply(mbox, [
+        h('div', { class: 'fm-h' }, h('b', null, '本月收支'), h('span', { class: 'tiny muted' }, g.clock.y + '年' + g.clock.m + '月 · 已结算 ' + c.days + ' 天')),
+        free ? null : row('bank', '政府拨款', '+' + U.fmtMoney(c.grant), 'in'),
+        row('ticket', '票款', '+' + U.fmtMoney(c.fare), 'in'),
+        free || !c.reward ? null : row('gift', '任务奖励', '+' + U.fmtMoney(c.reward), 'in'),
+        row('train', '运营成本', '−' + U.fmtMoney(c.ops), 'out'),
+        (function () { let b = 0; for (const k of CM.Economy.BUILD_KINDS) b += c[k] || 0; return b > 0.5 ? row('hammer', '建设支出', '−' + U.fmtMoney(b), 'out') : null; })(),
+        free || !((c.interest || 0) + (c.principal || 0) + (c.penalty || 0)) ? null : row('wallet', '偿债', '−' + U.fmtMoney((c.interest || 0) + (c.principal || 0) + (c.penalty || 0)), 'debt'),
+        h('button', { class: 'linkbtn', onclick: function () { goFin(self, 'fisc'); } }, '收支明细与资金流水', CM.icon('chev', 14))].filter(Boolean));
+    };
+    drawMonth(); mbox._d = E.cur.days; this.live.push(function () { if (E.cur.days !== mbox._d) { mbox._d = E.cur.days; drawMonth(); } });
+    el.appendChild(mbox);
+    // 城市经济摘要
+    if (mv) el.appendChild(this.econCard(mv, function () { goFin(self, 'econ'); }));
+    // 下月拨款（经营挑战）
+    if (!free) {
+      const ny = g.clock.m === 12 ? g.clock.y + 1 : g.clock.y, nm = g.clock.m % 12 + 1;
+      el.appendChild(h('div', { class: 'fin-grant clickable', onclick: function () { goFin(self, 'fisc'); } },
+        h('div', { class: 'fg-h' }, CM.icon('bank', 16), h('b', null, '下月拨款预计'), h('span', { class: 'grow' }), h('b', { class: 'num' }, U.fmtMoney(E.grantFor(ny, nm))), CM.icon('chev', 14)),
+        this.grantChain(ny, nm, true)));
+    }
+    el.appendChild(this.sec('fi-fare', '票价', UI.fmtFare(E.fare.flat), function () { return self.fareEditor(); }, true, 'ticket'));
+  };
+  // 经济摘要卡：最近一年的 GDP 与增速、经济环境、交通对经济的影响
+  UI.prototype.econCard = function (mv, onOpen) {
+    const L = mv.last, fc = mv.fc;
+    const val = L ? UI.fmtBig(L.nom) : UI.fmtBig(fc.nom);
+    const sub = L ? L.y + ' 年地图范围 GDP' + (L.part ? '（接入当年，' + L.n + ' 个月）' : '') : fc.y + ' 年地图范围 GDP（预测）';
+    const gr = L && L.growth != null ? L.growth : fc.growth;
+    return h('div', { class: 'econ-card' + (onOpen ? ' clickable' : ''), onclick: onOpen || null },
+      h('div', { class: 'ec-top' }, h('span', { class: 'badge b-violet' }, CM.icon('trend')), h('div', { class: 'grow' }, h('small', null, sub), h('b', { class: 'num' }, val)),
+        h('span', { class: 'env-chip ' + mv.env.cls }, CM.icon('pulse', 13), mv.env.label), onOpen ? CM.icon('chev', 14) : null),
+      h('div', { class: 'ec-row' },
+        h('div', null, h('small', null, L && L.growth != null ? '实际增长' : fc.y + ' 年预测增长'), h('b', { class: gr == null ? 'muted' : (gr >= 0 ? 'good' : 'bad') }, pctS(gr))),
+        h('div', null, h('small', null, '价格涨幅'), h('b', null, pctS(L ? L.infl : fc.infl))),
+        h('div', null, h('small', null, '交通对经济'), h('b', { class: mv.te.eff >= 1 ? 'good' : 'bad' }, pctS(mv.te.eff - 1)))),
+      mv.shocks.length ? h('div', { class: 'ec-shock' }, CM.icon('bolt', 13), h('span', null, mv.shocks.slice(0, 2).map(function (s) { return s.ev.title.replace(/^模拟：/, ''); }).join('、') + (mv.shocks.length > 2 ? ' 等 ' + mv.shocks.length + ' 项' : '') + ' 正在影响经济')) : null);
+  };
+  // 拨款依据：基础额度 × 财力系数 × 满意度系数 × 任务修正 = 拨款
+  UI.prototype.grantChain = function (y, m, compact) {
+    const E = this.g().econ;
+    const box = h('div', { class: 'gchain' + (compact ? ' compact' : '') });
+    const step = function (label, v, cls) { box.appendChild(h('div', { class: 'gc-step ' + (cls || '') }, h('small', null, label), h('b', { class: 'num' }, v))); };
+    step('基础额度', U.fmtMoney(E.grantQuota(y, m)));
+    for (const f of E.grantFactors(y, m)) step(f.kind === 'fisc' ? '财力' : (f.kind === 'sat' ? '满意度' : '任务'), '×' + f.f.toFixed(2), f.f >= 1.005 ? 'up' : (f.f <= 0.995 ? 'down' : ''));
+    return box;
+  };
+
+  // ---------- 经济 ----------
+  UI.prototype.finEcon = function (el, mv) {
+    const g = this.g(), self = this, c = mv.cfg, st = mv.st, L = mv.last, fc = mv.fc, base = CFG.econBase || CFG.START.y;
+    el.appendChild(this.econCard(mv, null));
+    if (g.macroNote) el.appendChild(this.callout('info', 'info', g.macroNote));
+    // 经济环境与外部形势
+    el.appendChild(h('div', { class: 'econ-env' },
+      h('div', null, h('small', null, '经济环境'), h('b', { class: mv.env.cls }, mv.env.label), h('span', { class: 'tiny muted' }, '本年较上年 ' + pctS(mv.mom))),
+      h('div', null, h('small', null, '增长阶段'), h('b', null, mv.trendLabel), h('span', { class: 'tiny muted' }, '生产率趋势 ' + pctS(mv.trend))),
+      h('div', null, h('small', null, mv.sim ? '模拟周期' : '资料范围'), h('b', null, mv.sim ? '已进入' : '至 ' + mv.histEnd + ' 年'), h('span', { class: 'tiny muted' }, mv.sim ? '按存档生成，非史实' : '之后为模拟周期'))));
+    // 本年预测
+    el.appendChild(h('div', { class: 'econ-fc' }, h('span', { class: 'tag fc' }, '预测'),
+      h('span', { class: 'grow small' }, fc.y + ' 年 GDP 约 ' + UI.fmtBig(fc.nom) + (fc.growth != null ? '，实际增长约 ' + pctS(fc.growth) : '') + '（已过 ' + fc.months + ' 个月；不含尚未发生的事件）')));
+    // 增长来源
+    if (L && L.c) {
+      el.appendChild(this.sec('ec-src', '增长来源（' + L.y + ' 年）', '实际 ' + pctS(L.growth), function () {
+        const list = [['people', '就业岗位', L.c.jobs, '地图内就业变化（已扣除周期波动）'], ['factory', '生产率趋势', L.c.prod, '本城所处发展阶段的趋势增长'], ['metro', '交通效率', L.c.te, '通勤、拥堵与地铁可达性的变化'], ['pulse', '经济周期', L.c.cyc, '景气波动'], ['bolt', '经济事件', L.c.shock, '历史或模拟事件的冲击与恢复']];
+        let mx = 0.005; for (const x of list) mx = Math.max(mx, Math.abs(x[2]));
+        const box = h('div', { class: 'dbars' });
+        for (const x of list) {
+          const w = Math.min(50, Math.abs(x[2]) / mx * 50);
+          box.appendChild(h('div', { class: 'dbar', 'data-tip': x[3] }, h('span', { class: 'dl' }, CM.icon(x[0], 14), x[1]),
+            h('span', { class: 'dt' }, h('i', { class: x[2] >= 0 ? 'pos' : 'neg', style: { width: w + '%', left: x[2] >= 0 ? '50%' : (50 - w) + '%' } })),
+            h('b', { class: 'num ' + (x[2] >= 0 ? 'good' : 'bad') }, pctS(x[2]))));
+        }
+        box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '各项相乘得到实际增长（价格变化不计入实际增长）。名义 GDP 增长 ' + pctS(L.nomGrowth) + '，其中价格涨幅 ' + pctS(L.infl) + '。'));
+        return box;
+      }, true, 'chart'));
+    }
+    // 交通与经济
+    el.appendChild(this.sec('ec-te', '交通对经济的影响', pctS(mv.te.eff - 1), function () {
+      const p = mv.te.parts, s = mv.te.sample, b = mv.te.base;
+      const box = h('div');
+      box.appendChild(self.kv([
+        ['可达性（覆盖与地铁分担）', pctS(p.acc, 2), p.acc >= 0 ? 'good' : 'bad'],
+        ['平均通勤时间' + (s && b.comm ? '（' + U.fmtNum(b.comm, 1) + ' → ' + U.fmtNum(s.comm, 1) + ' 分钟）' : ''), pctS(p.comm, 2), p.comm >= 0 ? 'good' : 'bad'],
+        ['道路拥堵' + (s ? '（' + b.cong.toFixed(2) + ' → ' + s.cong.toFixed(2) + '）' : ''), pctS(p.cong, 2), p.cong >= 0 ? 'good' : 'bad'],
+        ['当前交通效率', pctS(mv.te.now - 1, 2), mv.te.now >= 1 ? 'good' : 'bad'],
+        ['已计入 GDP 的效率', pctS(mv.te.eff - 1, 2), mv.te.eff >= 1 ? 'good' : 'bad'],
+      ]));
+      box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '与' + (st.origin === 'legacy' ? '接入时（' + st.since[0] + '年' + st.since[1] + '月）' : '开局时') + '相比。通勤与拥堵变差会全部拖累经济；它们的改善按地铁分担率的提高计入（道路自然扩容带来的改善不算地铁的贡献）。交通效率按全年平均逐步计入生产率（约 −6% 至 +8%），不能保证建了地铁就一定增长，也不能抵消外部危机；较好的交通能让负面冲击小一些（最多约 −20%）。车站覆盖带来的人口吸引在城市发展中单独计算，不重复计入。'));
+      return box;
+    }, false, 'metro'));
+    // 经济事件
+    el.appendChild(this.sec('ec-ev', '经济事件', mv.shocks.length ? mv.shocks.length + ' 项影响中' : '暂无', function () {
+      const box = h('div');
+      if (!mv.shocks.length) box.appendChild(h('div', { class: 'note' }, '目前没有正在影响本城经济的事件。' + (mv.sim ? '模拟阶段偶尔会出现模拟的景气或衰退事件。' : '历史经济事件按真实年月发生。')));
+      for (const x of mv.shocks) {
+        const ev = x.ev, f = x.f, neg = Math.min.apply(null, ev.lv) < 0;
+        box.appendChild(h('div', { class: 'ev-card ' + (neg ? 'neg' : 'pos') },
+          h('div', { class: 'row' }, h('span', { class: 'tag ' + (ev.tag === '模拟' ? 'sim' : 'hist') }, ev.tag === '模拟' ? '模拟' : '史实'), h('span', { class: 'tag' }, ev.scope || CM.Macro.kindName(ev.kind)), h('b', { class: 'grow' }, ev.title.replace(/^模拟：/, '')), h('span', { class: 'tiny muted' }, ev.y + '.' + ev.m)),
+          h('div', { class: 'small', style: { margin: '4px 0' } }, ev.desc),
+          h('div', { class: 'ev-fx' }, h('span', null, '今年 ', h('b', { class: x.now >= 0 ? 'good' : 'bad' }, pctS(x.now))), h('span', null, '明年 ', h('b', { class: x.next >= 0 ? 'good' : 'bad' }, pctS(x.next))),
+            h('span', { class: 'tiny muted' }, f.pre ? '接入前已发生' : '强度 ×' + f.k.toFixed(2) + '（结构 ×' + f.sm.toFixed(2) + (f.scale !== 1 ? ' · 本地 ×' + f.scale.toFixed(2) : '') + (f.resil ? ' · 交通韧性 −' + Math.round(f.resil * 20) + '%' : '') + (f.stress ? ' · 财政压力 +' + Math.round(f.stress * 25) + '%' : '') + '）'))));
+      }
+      box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '事件的影响按本城的产业结构（外贸、金融、工业、旅游消费、房地产）计算；负面事件发生时，较好的交通与稳健的财政能减轻冲击。强度在发生时确定，之后不再改变，同一事件只生效一次。'));
+      return box;
+    }, mv.shocks.length > 0, 'bolt'));
+    // 城市发展的反应
+    if (mv.factors) {
+      const F = mv.factors;
+      el.appendChild(this.sec('ec-city', '对城市发展的影响', F.dev >= 0.005 ? '促进' : (F.dev <= -0.005 ? '放缓' : '中性'), function () {
+        return h('div', null, self.kv([['人口增速', '×' + F.popGrowth.toFixed(2), F.popGrowth >= 1 ? 'good' : 'bad'], ['就业岗位水平', '×' + F.jobs.toFixed(3), F.jobs >= 1 ? 'good' : 'bad'], ['商业办公发展', '×' + F.com.toFixed(2), F.com >= 1 ? 'good' : 'bad']]),
+          h('div', { class: 'note', style: { marginTop: '6px' } }, '每月城市发展时生效：繁荣时人口增长加快、就业与商业扩张，新区可提前一年开放；衰退时增长放缓。长期人口仍回到本城的历史与模拟人口曲线。'));
+      }, false, 'building'));
+    }
+    // 历年数据
+    el.appendChild(this.sec('ec-table', '历年数据', st.rec.length + ' 年', function () {
+      const ref = c.ref;
+      const t = h('table', { class: 'tbl econ-tbl' }, h('tr', null, h('th', null, '年份'), h('th', null, 'GDP'), h('th', null, '实际增长'), h('th', null, '价格'), ref ? h('th', null, '参考') : null));
+      const refCell = function (Y) { const r = CM.Macro.refAt(c, Y); if (!r) return h('td', { class: 'muted' }, '—'); return h('td', { class: 'ref', 'data-tip': ref.label + (r.kind === 'period' ? '（' + r.from + '–' + r.to + ' 年平均）' : '') }, (r.kind === 'year' ? '' : '≈') + (r.v * 100).toFixed(1) + '%'); };
+      t.appendChild(h('tr', { class: 'fc' }, h('td', null, fc.y, h('span', { class: 'tag fc' }, '预测')), h('td', null, UI.fmtBig(fc.nom)), h('td', null, pctS(fc.growth)), h('td', null, pctS(fc.infl)), ref ? refCell(fc.y) : null));
+      for (const r of st.rec.slice().reverse()) {
+        t.appendChild(h('tr', null, h('td', null, r.y, r.part ? h('span', { class: 'tag' }, r.n + ' 月') : null, r.sim ? h('span', { class: 'tag sim' }, '模拟') : null), h('td', null, UI.fmtBig(r.nom)), h('td', { class: r.growth == null ? 'muted' : (r.growth >= 0 ? '' : 'bad') }, pctS(r.growth)), h('td', null, pctS(r.infl)), ref ? refCell(r.y) : null));
+      }
+      const box = h('div', null, h('div', { class: 'tbl-wrap' }, t));
+      if (!st.rec.length) box.appendChild(h('div', { class: 'note' }, '第一个完整年度在明年 1 月结算后显示。'));
+      box.appendChild(h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm', onclick: function () { self.openStats('econ'); } }, CM.icon('chart', 15), '查看经济图表')));
+      return box;
+    }, true, 'calYear'));
+    // 数据说明
+    el.appendChild(this.sec('ec-note', '数据口径与来源', '', function () {
+      const rows = [
+        ['游戏结果', '', '每年 1 月按本局实际的岗位、交通、经济周期与事件结算的地图范围 GDP（名义值按当年价格，实际增长按 ' + base + ' 年价格计算，价格变化不计入实际增长）。'],
+        ['预测', 'fc', '当年尚未结束时的估算，只包含已经发生的事件。'],
+        ['模型估算', 'est', '开局 GDP、生产率趋势、价格涨幅与财政比重为参考公开统计的估算参数。' + (c.area ? '统计范围：' + c.area + '。' : '') + (c.note || '')],
+        ['史实参考', 'hist', ref() ],
+        ['模拟', 'sim', mv.histEnd + ' 年之后的经济周期与模拟事件由存档种子生成，不代表真实历史或预测。'],
+      ];
+      function ref() { return c.ref ? c.ref.label + '：' + c.ref.src + '。为全国或地区口径，不是地图范围数据，只作背景对照。' : '本地图没有可用的史实参考数据。'; }
+      const box = h('div', { class: 'note' });
+      rows.forEach(function (r, i) { box.appendChild(h('div', { style: { marginTop: i ? '6px' : '0' } }, h('span', { class: 'tag ' + r[1] }, r[0]), ' ' + r[2])); });
+      if (st.origin === 'legacy') box.appendChild(h('div', { style: { marginTop: '6px' } }, '本进度自 ' + st.since[0] + '年' + st.since[1] + '月 起接入城市经济，此前的经济数据没有记录，也不补造。'));
+      return box;
+    }, false, 'info'));
+  };
+
+  // ---------- 财政 ----------
+  UI.prototype.finFiscal = function (el, mv) {
+    const g = this.g(), E = g.econ, self = this, free = E.isFree();
+    const L = mv && mv.last;
+    if (mv) {
+      const F = mv.fisc || {};
+      const rr = L ? L.rev / Math.max(1, L.nom) : null;
+      const card = h('div', { class: 'fisc-card' },
+        h('div', { class: 'ec-top' }, h('span', { class: 'badge b-gold' }, CM.icon('bank')), h('div', { class: 'grow' }, h('small', null, L ? L.y + ' 年地方财政收入（地图范围）' : '地方财政收入'), h('b', { class: 'num' }, L ? UI.fmtBig(L.rev) : '待结算')),
+          L ? h('span', { class: 'env-chip ' + (L.fRaw >= 1 ? 'good' : 'warn') }, '为预期的 ' + Math.round(L.fRaw * 100) + '%') : null),
+        h('div', { class: 'ec-row' },
+          h('div', null, h('small', null, '占 GDP'), h('b', null, rr ? (rr * 100).toFixed(1) + '%' : '—')),
+          h('div', null, h('small', null, (F.y || g.clock.y) + ' 年财力系数'), h('b', { class: (F.f || 1) >= 1 ? 'good' : 'warn' }, '×' + (F.f || 1).toFixed(2))),
+          h('div', null, h('small', null, '地铁资金占比'), h('b', null, !free && L ? ((E.grantQuota(g.clock.y, g.clock.m) * (F.f || 1) * 12) / Math.max(1, L.rev) * 100).toFixed(1) + '%' : '—'))));
+      el.appendChild(card);
+      el.appendChild(h('div', { class: 'note', style: { margin: '4px 2px 8px' } }, 'GDP 不等于财政收入：地方财政收入约为地图范围 GDP 的一定比例，随经济周期的波动更大；其中只有一部分安排给地铁。每年 1 月按上一年的实际财政收入与预期之比确定当年的财力系数（平滑后限定在 ×0.70–1.30），全年不变。' + (L ? '' : '第一个完整年度结算后开始生效。')));
+    }
+    if (!free) {
+      const ny = g.clock.m === 12 ? g.clock.y + 1 : g.clock.y, nm = g.clock.m % 12 + 1;
+      el.appendChild(this.sec('fi-grant', '地铁拨款依据', '下月 ' + U.fmtMoney(E.grantFor(ny, nm)), function () {
+        const b = h('div');
+        b.appendChild(self.grantChain(ny, nm, false));
+        b.appendChild(h('div', { class: 'chg small', style: { marginTop: '6px' } }, h('b', null, '下月（' + ny + '年' + nm + '月）拨款'), h('b', { class: 'num' }, U.fmtMoney(E.grantFor(ny, nm)))));
+        for (const f of E.grantFactors(ny, nm)) if (f.kind === 'task') b.appendChild(h('div', { class: 'tiny muted' }, '· ' + f.label + ' ×' + f.f.toFixed(2)));
+        b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '基础额度按城市与年代设定；财力系数来自城市经济（上一年地方财政收入）；满意度系数 ×0.6–1.4；任务未完成时在 ' + CFG.economy.failGrantMonths + ' 个月内 ×' + CFG.economy.failGrantFactor + '（多项叠加最低按 ×0.6）。拨款每月初发放一次，不会重复发放或补发。'));
+        return b;
+      }, true, 'bank'));
+    }
+    el.appendChild(this.sec('fi-month', '收支明细', g.clock.y + '年' + g.clock.m + '月', function () { return self.ledgerBlock(); }, free, 'coin'));
     if (!free) el.appendChild(this.sec('fi-flow', '资金流水', '最近 ' + Math.min(40, E.flow.length) + ' 笔', function () { return self.flowBlock(); }, false, 'tasks'));
     if (!free) {
-      el.appendChild(this.sec('fi-rule', '拨款与失败条件', '', function () {
+      el.appendChild(this.sec('fi-rule', '经营失败条件', E.negMonths || E.lowSatMonths ? '有预警' : '正常', function () {
         const b = h('div');
-        // 下月：按下个月的拨款基数与届时仍生效的调整计算（满意度取当前值）
-        const ny = g.clock.m === 12 ? g.clock.y + 1 : g.clock.y, nm = g.clock.m % 12 + 1;
-        b.appendChild(h('div', { class: 'small' }, '下月（' + ny + '年' + nm + '月）拨款预计 ' + U.fmtMoney(E.grantFor(ny, nm))));
-        for (const f of E.grantFactors(ny, nm)) b.appendChild(h('div', { class: 'chg small' }, h('span', null, f.label), h('span', { class: 'num' }, '×' + f.f.toFixed(2))));
         const lim = CFG.economy.debtLimit * E.costIndex(g.clock.y);
         b.appendChild(self.kv([['连续负余额', E.negMonths + ' / ' + CFG.economy.negMonthsLimit + ' 个月', E.negMonths ? 'warn' : ''], ['负债下限', U.fmtMoney(lim)], ['满意度低于 ' + CFG.economy.satFail, E.lowSatMonths + ' / ' + CFG.economy.satFailMonths + ' 个月', E.lowSatMonths ? 'warn' : '']]));
-        b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '拨款随满意度（×0.6–1.4）与任务结果变化。允许短期亏损；长期负余额、低于负债下限或满意度长期过低会导致挑战失败。'));
+        b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '允许短期亏损；长期负余额、低于负债下限或满意度长期过低会导致挑战失败。经济衰退会减少下一年的拨款，但不会直接导致失败。'));
         return b;
       }, false, 'info'));
     }
-    return { title: '财政与票价', el: el };
+  };
+
+  // ---------- 融资 ----------
+  UI.prototype.finDebt = function (el) {
+    const g = this.g(), E = g.econ, self = this, y = g.clock.y, D0 = CM.Economy.BOND_DEF;
+    // 利率报价
+    const q = h('div', { class: 'quote-card' });
+    q.appendChild(h('div', { class: 'fg-h' }, CM.icon('percent', 16), h('b', null, '新发行利率报价'), h('span', { class: 'grow' }), h('span', { class: 'tiny muted' }, y + '年' + g.clock.m + '月')));
+    const grid = h('div', { class: 'quote-grid' });
+    grid.appendChild(h('div', { class: 'qh' }));
+    grid.append(h('div', { class: 'qh' }, '3 年期'), h('div', { class: 'qh' }, '6 年期'));
+    for (const k of ['local', 'ct']) {
+      const block = E.bondBlock(k);
+      grid.append(h('div', { class: 'qk' }, D0[k].name), h('div', { class: 'qv' + (block ? ' off' : '') }, (E.bondRate(k, y, 3) * 100).toFixed(2) + '%'), h('div', { class: 'qv' + (block ? ' off' : '') }, (E.bondRate(k, y, 6) * 100).toFixed(2) + '%'));
+    }
+    q.appendChild(grid);
+    const parts = E.bondQuote('local', y, 3).parts;
+    const pl = h('div', { class: 'qparts' });
+    for (const p of parts) pl.appendChild(h('div', { class: 'chg small' }, h('span', null, p.label), h('span', { class: 'num ' + (p.k === 'base' ? '' : (p.v > 0.00005 ? 'bad' : (p.v < -0.00005 ? 'good' : 'muted'))) }, p.k === 'base' ? (p.v * 100).toFixed(2) + '%' : ppS(p.v))));
+    q.appendChild(this.sec('fi-qparts', '地方债 3 年期的报价构成', '', function () {
+      const b = h('div', null, pl);
+      const sub = (parts.find(function (p) { return p.k === 'fis'; }) || {}).sub;
+      if (sub) b.appendChild(h('div', { class: 'tiny muted', style: { marginTop: '4px' } }, '负债率（未偿本金 ÷ 全年地铁基础额度）' + sub.load.toFixed(2) + ' · 负债 ' + ppS(sub.debt) + ' · 财力 ' + ppS(sub.fiscF) + (sub.overdue ? ' · 逾期 ' + ppS(sub.overdue) : '') + (sub.neg ? ' · 负余额 ' + ppS(sub.neg) : '')));
+      b.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '报价随年代的市场利率、经济环境与本市财政状况变化：财政稳健时融资成本较低，负债偏高、财力不足或出现逾期时较高；城投债对财政状况更敏感。已发行债券在发行时锁定利率，按原合同付息，不受之后的报价变化影响。'));
+      return b;
+    }, false, 'info'));
+    el.appendChild(q);
+    el.appendChild(this.sec('fi-bond', '债券融资', U.fmtMoney(E.principalDebt()) + ' 未偿本金', function () { return self.bondBlock(); }, true, 'wallet'));
+    el.appendChild(this.sec('fi-debt', '债务详情与偿债预测', E.bonds.filter(function (b) { return !b.done; }).length + ' 笔未到期', function () { return self.debtBlock(); }, false, 'calYear'));
   };
   // ---------- 财政：月度账本（科目分开：财政收入、融资到账、建设支出、运营成本、利息、本金偿还、逾期费用） ----------
   const BK = CM.Economy.BUILD_KINDS;
@@ -663,8 +913,8 @@
     if (!live.length) box.appendChild(h('div', { class: 'note' }, '目前没有未到期的债券。'));
     for (const b of live.concat(overdue)) {
       const k = b.paidYears + 1, t = b.ym0 + 12 * k, ny = Math.floor(t / 12), nm = t % 12 + 1, due = b.amount * b.rate + (k >= b.term ? b.amount : 0);
-      box.appendChild(h('div', { class: 'debt-card' },
-        h('div', { class: 'row between' }, h('b', null, D0[b.kind].name + ' · ' + U.fmtMoney(b.amount)), h('span', { class: 'tag' + (b.done ? ' bad' : '') }, b.done ? '已到期 · 本息未还清' : b.term + ' 年期 · ' + (b.rate * 100).toFixed(2) + '%')),
+      box.appendChild(h('div', { class: 'debt-card', 'data-tip': b.quote ? '发行时报价：' + b.quote.map(function (p) { return p[0] + ' ' + (p[1] * 100).toFixed(2) + '%'; }).join('；') : null },
+        h('div', { class: 'row between' }, h('b', null, D0[b.kind].name + ' · ' + U.fmtMoney(b.amount)), h('span', { class: 'tag' + (b.done ? ' bad' : '') }, b.done ? '已到期 · 本息未还清' : b.term + ' 年期 · 合同利率 ' + (b.rate * 100).toFixed(2) + '%')),
         h('div', { class: 'tiny muted' }, b.issued[0] + '年' + b.issued[1] + '月发行 · ' + (b.issued[0] + b.term) + '年' + b.issued[1] + '月到期 · 实付利息 ' + U.fmtMoney(b.interestPaid) + '（已结算 ' + b.paidYears + ' / ' + b.term + ' 期）'),
         b.done ? null : h('div', { class: 'small', style: { marginTop: '3px' } }, '下次还款：' + ny + '年' + nm + '月 ' + U.fmtMoney(due) + (k >= b.term ? '（含到期本金）' : '（利息）')),
         (b.interestArrears || 0) + (b.principalArrears || 0) > CM.Economy.MONEY_EPS ? h('div', { class: 'small bad', style: { marginTop: '3px' } }, '逾期利息 ' + U.fmtMoney(b.interestArrears || 0) + ' · 逾期本金 ' + U.fmtMoney(b.principalArrears || 0)) : null));
@@ -713,7 +963,7 @@
       if (!r.ok) { self.toast(r.error, 'bad'); return; }
       CM.Sound && CM.Sound.play('coin');
       self.toast('已发行' + D0[kind].name + ' ' + U.fmtMoney(r.bond.amount) + '，资金进入建设专项资金', 'good');
-      self.closeScreen(); self.markUnsaved(); self.openPage('finance', null, { root: true });
+      self.closeScreen(); self.markUnsaved(); self.finTab = 'debt'; self.openPage('finance', 'debt', { root: true });
     } }, CM.icon('check'), '确认发行');
     const termCtl = h('div', { class: 'seg-ctl' });
     const draw = function () {
@@ -734,11 +984,12 @@
       show();
     };
     const show = function () {
-      const rate = E.bondRate(kind, y, term), it = amount * rate;
+      const q = E.bondQuote(kind, y, term), rate = q.rate, it = amount * rate;
       amt.textContent = U.fmtMoney(amount);
       pv.innerHTML = '';
-      pv.appendChild(self.kv([['年利率（发行时固定）', (rate * 100).toFixed(2) + '%'], ['每年利息', U.fmtMoney(it)], ['利息合计（' + term + ' 年）', U.fmtMoney(it * term)],
+      pv.appendChild(self.kv([['年利率（发行时锁定）', (rate * 100).toFixed(2) + '%'], ['每年利息', U.fmtMoney(it)], ['利息合计（' + term + ' 年）', U.fmtMoney(it * term)],
         ['首次付息', (g.clock.y + 1) + '年' + g.clock.m + '月'], ['到期还本', (g.clock.y + term) + '年' + g.clock.m + '月 ' + U.fmtMoney(amount)], ['发行后建设专项资金', U.fmtMoney(E.capex + amount)]]));
+      pv.appendChild(h('div', { class: 'qline' }, q.parts.map(function (p, i) { return h('span', { class: p.k === 'base' ? '' : (p.v > 0.00005 ? 'bad' : (p.v < -0.00005 ? 'good' : 'muted')) }, (i ? (p.v < 0 ? ' − ' : ' + ') : '') + p.label.replace(/（.*）/, '') + ' ' + (Math.abs(p.v) * 100).toFixed(2) + '%'); })));
       ok.disabled = !(amount > 0);
     };
     slider.addEventListener('input', function () { amount = +slider.value; show(); });
@@ -778,6 +1029,7 @@
       const v = +slider.value;
       if (v === E.fare.flat) return;
       E.fare = { mode: 'flat', flat: v }; g.model.fare = E.fare; g.model.sinceChange = 0; g.touch();
+      g.invalidatePrediction('票价已修改，建设预测需要按新票价重新计算');
       g.logEvent({ tag: '经营', title: '调整票价', desc: '全网统一票价 ' + v + ' ' + CFG.money.unit + '/次' });
       self.toast('票价已调整为 ' + UI.fmtFare(v) + '，居民出行选择正在重新计算', 'good');
       self.markUnsaved();
@@ -793,37 +1045,91 @@
   };
 
   // ======================== 页面：任务 ========================
-  UI.prototype.page_tasks = function () {
-    const g = this.g(), T = g.tasks, self = this, ch = g.econ.mode === 'challenge';
-    const el = h('div');
-    if (!ch) el.appendChild(h('div', { class: 'callout info' }, '自由建造模式：任务仅供参考，未完成不会产生后果。'));
+  // 分页：进行中 / 已完成 / 未完成。进行中的任务按剩余时间排序；每张卡片：类型图标、进度环、目标与当前值、
+  // 连接任务的站点清单、连续月数、期限条（越临近越醒目）、奖励与未完成后果、定位入口
+  const TASK_TYPE = {
+    connect: ['route', '连通线路'], coverage: ['target', '地铁覆盖'], zoneCong: ['car', '缓解拥堵'], zoneCov: ['map', '片区覆盖'],
+    stationCrowd: ['people', '车站拥挤'], ridership: ['train', '客流增长'], recovery: ['coin', '运营收支'],
+  };
+  UI.prototype.taskRing = function (v, cls) {
+    const p = U.clamp(v || 0, 0, 1), C = 2 * Math.PI * 17;
+    return h('span', { class: 'tk-ring ' + (cls || ''), html: '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="17" class="bg"/><circle cx="20" cy="20" r="17" class="fg" stroke-dasharray="' + C.toFixed(2) + '" stroke-dashoffset="' + (C * (1 - p)).toFixed(2) + '"/></svg><b>' + Math.round(p * 100) + '<small>%</small></b>' });
+  };
+  UI.prototype.page_tasks = function (id) {
+    const g = this.g(), T = g.tasks, self = this, ch = g.econ.mode === 'challenge', E = CFG.economy;
     const ym = g.ym();
-    const card = function (t, done) {
+    const tab = id || this.taskTab || 'active';
+    this.taskTab = tab;
+    const el = h('div', { class: 'tk-page' });
+    el.appendChild(this.pageTabs([['active', '进行中 ' + T.active.length, 'flag'], ['done', '已完成 ' + T.done.length, 'check'], ['failed', '未完成 ' + T.failed.length, 'error']], tab, function (t) {
+      self.taskTab = t; const top = self.stack[self.stack.length - 1]; if (top && top.kind === 'tasks') top.id = t; self.renderPage(false); self.rBody.scrollTop = 0;
+    }));
+    const body = h('div', { class: 'page-enter' });
+    el.appendChild(body);
+    const kindTag = function (t) { return t.kind === 'hist' ? h('span', { class: 'tag hist' }, '历史参考') : (t.cityId ? h('span', { class: 'tag est' }, '本城动态') : h('span', { class: 'tag info' }, '动态任务')); };
+    const typeOf = function (t) { return TASK_TYPE[t.type] || ['flag', '任务']; };
+    const card = function (t) {
       const ev = t.progress || T.evaluate(t, g);
-      const left = U.ymIndex(t.deadline[0], t.deadline[1]) - ym;
-      const b = h('div', { style: { padding: '10px 0', borderBottom: '1px solid var(--line)' } });
-      b.appendChild(h('div', { class: 'row' }, h('span', { class: 'tag ' + (t.kind === 'hist' ? 'hist' : 'info') }, t.kind === 'hist' ? '历史参考' : '动态任务'), h('b', { class: 'grow' }, t.title)));
-      b.appendChild(h('div', { class: 'note', style: { margin: '4px 0' } }, t.desc));
-      if (!done) {
-        b.appendChild(h('div', { class: 'progress', style: { margin: '6px 0 4px' } }, h('i', { style: { width: Math.round(U.clamp(ev.value, 0, 1) * 100) + '%' } })));
-        b.appendChild(h('div', { class: 'tiny muted' }, ev.text));
-        b.appendChild(h('div', { class: 'tiny', style: { marginTop: '4px' } }, '截止 ' + t.deadline[0] + '年' + t.deadline[1] + '月（' + (left > 0 ? '剩 ' + left + ' 个月' : '本月到期') + '）' + (t.sustain ? '；需连续满足 ' + t.sustain + ' 个月' : '') + '；进度每月初评估'));
-        b.appendChild(h('div', { class: 'tiny', style: { marginTop: '2px' } }, ch ? '奖励：拨款 ' + U.fmtMoney(t.reward) + '、满意度 +4（6 个月）；未完成：' + CFG.economy.failGrantMonths + ' 个月拨款 ×' + CFG.economy.failGrantFactor + '、满意度 ' + CFG.economy.failSat : '自由模式：无奖励与后果'));
-        const locs = [];
-        if (t.anchors) for (const a of t.anchors) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locatePoint(a.x, a.y, a.name, a.r || 2); } }, '⊙ ' + a.name));
-        if (t.zone !== undefined) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(t.zone); } }, '⊙ 定位片区（' + g.zoneName(t.zone).replace(/^片区（(.*)）$/, '$1').replace(/（.*）/, '') + '）'));
-        if (t.station) { const s = g.net.stations[t.station]; if (s) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locatePoint(s.x, s.y, s.name, 0.8); } }, '⊙ ' + s.name)); }
-        if (locs.length) b.appendChild(h('div', { class: 'row', style: { flexWrap: 'wrap', marginTop: '4px', gap: '2px' } }, locs));
-      } else {
-        b.appendChild(h('div', { class: 'tiny ' + (t.status === 'done' ? 'good' : 'bad') }, (t.status === 'done' ? '已完成' : '未完成') + '（' + t.closedAt[0] + '年' + t.closedAt[1] + '月）'));
+      const dl = U.ymIndex(t.deadline[0], t.deadline[1]), st0 = t.issuedAt ? U.ymIndex(t.issuedAt[0], t.issuedAt[1]) : dl - 24;
+      const left = dl - ym, span = Math.max(1, dl - st0), used = U.clamp((ym - st0) / span, 0, 1);
+      const urg = left <= 3 ? 'hot' : (left <= 12 ? 'warm' : '');
+      const ty = typeOf(t);
+      const c = h('div', { class: 'tk-card ' + urg + (ev.ok ? ' ok' : '') });
+      c.appendChild(h('div', { class: 'tk-top' },
+        h('span', { class: 'badge ' + (t.kind === 'hist' ? 'b-orange' : 'b-violet') }, CM.icon(ty[0])),
+        h('div', { class: 'grow' }, h('div', { class: 'tk-meta' }, kindTag(t), h('span', { class: 'tiny muted' }, ty[1])), h('b', { class: 'tk-title' }, t.title)),
+        this.taskRing(ev.value, ev.ok ? 'ok' : '')));
+      c.appendChild(h('div', { class: 'tk-desc' }, t.desc));
+      // 目标与当前值；连接任务列出每个站点区域是否已有车站
+      if (t.type === 'connect' && t.anchors) {
+        const C0 = g.compiled, hit = t.anchors.map(function (a) { return C0.stations.some(function (s, i) { return C0.serviced[i] && U.dist(s.x, s.y, a.x, a.y) <= a.r; }); });
+        c.appendChild(h('div', { class: 'tk-anchors' }, t.anchors.map(function (a, i) {
+          return h('button', { class: 'tk-anchor' + (hit[i] ? ' on' : ''), 'data-tip': '在地图上定位「' + a.name + '」（半径约 ' + Math.round(a.r * CFG.CELL_M) + ' m）', onclick: function () { self.locatePoint(a.x, a.y, a.name, a.r || 2); } }, CM.icon(hit[i] ? 'check' : 'locate', 13), a.name);
+        })));
+        c.appendChild(h('div', { class: 'tk-goal' }, CM.icon('target', 14), h('span', null, ev.ok ? '已全部连通' : (hit.every(Boolean) ? '各处都有车站，但还没有连成同一网络' : '还差 ' + hit.filter(function (x) { return !x; }).length + ' 处没有运营车站'))));
+      } else c.appendChild(h('div', { class: 'tk-goal' }, CM.icon('target', 14), h('span', null, ev.text)));
+      if (t.sustain) {
+        const dots = h('span', { class: 'tk-dots' });
+        for (let k = 0; k < t.sustain; k++) dots.appendChild(h('i', { class: k < (t.streak || 0) ? 'on' : '' }));
+        c.appendChild(h('div', { class: 'tk-sustain' }, '需连续满足 ' + t.sustain + ' 个月', dots, h('span', { class: 'tiny muted' }, '已 ' + (t.streak || 0) + ' 个月')));
       }
-      return b;
+      // 期限条
+      c.appendChild(h('div', { class: 'tk-time' },
+        h('div', { class: 'tk-tbar' }, h('i', { style: { width: (used * 100).toFixed(1) + '%' } })),
+        h('div', { class: 'tk-tl' }, CM.icon('hourglass', 13), h('b', null, left > 0 ? '剩 ' + left + ' 个月' : '本月到期'), h('span', { class: 'muted' }, '截止 ' + t.deadline[0] + '年' + t.deadline[1] + '月 · 每月初评估'))));
+      // 奖励与后果
+      if (ch) c.appendChild(h('div', { class: 'tk-stakes' },
+        h('span', { class: 'tk-chip good' }, CM.icon('gift', 13), '奖励 ' + U.fmtMoney(t.reward)), h('span', { class: 'tk-chip good' }, CM.icon('smile', 13), '满意度 +4（6 个月）'),
+        h('span', { class: 'tk-chip bad', 'data-tip': '到期未完成：未来 ' + E.failGrantMonths + ' 个月（含当月）拨款 ×' + E.failGrantFactor + '，满意度 ' + E.failSat }, CM.icon('warn', 13), '未完成：拨款 ×' + E.failGrantFactor + '（' + E.failGrantMonths + ' 个月）')));
+      // 定位
+      const locs = [];
+      if (t.zone !== undefined) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.locateZone(t.zone); } }, CM.icon('locate', 14), '定位片区'));
+      if (t.station) { const s = g.net.stations[t.station]; if (s) locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.select({ kind: 'station', id: t.station }); self.flyTo(s.x, s.y, Math.max(self.R.cam.zoom, 22)); } }, CM.icon('station', 14), s.name)); }
+      if (t.type === 'coverage') locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.setLayer('cover'); } }, CM.icon('lyCover', 14), '查看覆盖图层'));
+      if (t.type === 'zoneCong') locs.push(h('button', { class: 'btn sm ghost', onclick: function () { self.setLayer('cong'); } }, CM.icon('lyCong', 14), '拥堵图层'));
+      if (locs.length) c.appendChild(h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '4px', marginTop: '6px' } }, locs));
+      return c;
+    }.bind(this);
+    const closedRow = function (t) {
+      const ok = t.status === 'done', ty = typeOf(t);
+      return h('div', { class: 'tk-row ' + (ok ? 'ok' : 'fail') }, h('span', { class: 'tk-res' }, CM.icon(ok ? 'check' : 'close', 14)),
+        h('div', { class: 'grow' }, h('div', { class: 'tk-meta' }, kindTag(t), h('span', { class: 'tiny muted' }, ty[1])), h('b', null, t.title),
+          h('div', { class: 'tiny muted' }, (ok ? '完成于 ' : '到期于 ') + t.closedAt[0] + '年' + t.closedAt[1] + '月' + (ch ? (ok ? ' · 获得奖励 ' + U.fmtMoney(t.reward) : ' · 拨款 ×' + E.failGrantFactor + '（' + E.failGrantMonths + ' 个月）') : ''))));
     };
-    if (!T.active.length) el.appendChild(h('div', { class: 'note' }, '暂无进行中的任务。历史参考任务按年份发布，动态任务根据城市状态每 6 个月生成。'));
-    for (const t of T.active) el.appendChild(card(t, false));
-    el.appendChild(this.sec('tk-done', '已完成', T.done.length + ' 项', function () { const b = h('div'); for (const t of T.done.slice().reverse()) b.appendChild(card(t, true)); if (!T.done.length) b.appendChild(h('div', { class: 'note' }, '暂无')); return b; }));
-    el.appendChild(this.sec('tk-failed', '未完成', T.failed.length + ' 项', function () { const b = h('div'); for (const t of T.failed.slice().reverse()) b.appendChild(card(t, true)); if (!T.failed.length) b.appendChild(h('div', { class: 'note' }, '暂无')); return b; }));
-    el.appendChild(this.sec('tk-rule', '任务说明', '', function () { return h('div', { class: 'note' }, (D.taskNote || '历史参考任务参考本城的发展需求，但不要求按真实线路走向建设，只需满足目标描述。') + '动态任务根据当前拥堵、覆盖、车站拥挤与客流情况生成。单个任务失败不会直接结束游戏。'); }));
+    if (tab === 'active') {
+      if (!ch) body.appendChild(this.callout('info', 'info', '自由建造模式：任务仅供参考，没有奖励，未完成也不会有后果。'));
+      const list = T.active.slice().sort(function (a, b) { return U.ymIndex(a.deadline[0], a.deadline[1]) - U.ymIndex(b.deadline[0], b.deadline[1]); });
+      if (!list.length) body.appendChild(h('div', { class: 'tk-empty' }, CM.icon('flag', 26), h('b', null, '暂无进行中的任务'), h('span', null, (D.histTasks && D.histTasks.length ? '历史参考任务按年份发布；' : '') + (D.noDynTasks ? '本地图不生成动态任务。' : '动态任务根据拥堵、覆盖、车站拥挤与客流情况，开局一年后约每 6 个月生成。'))));
+      for (const t of list) body.appendChild(card(t));
+      // 即将发布的历史任务（只显示年份与标题，不提前给出目标）
+      const next = (D.histTasks || []).filter(function (x) { return !T.issued[x.id] && U.ymIndex(x.appear[0], x.appear[1]) > ym; }).slice(0, 3);
+      if (next.length) body.appendChild(h('div', { class: 'tk-next' }, h('div', { class: 'fl-h' }, '即将发布的历史任务'), next.map(function (x) { return h('div', { class: 'tiny' }, h('b', null, x.appear[0] + '年' + x.appear[1] + '月'), ' · ' + x.title); })));
+    } else {
+      const arr = (tab === 'done' ? T.done : T.failed).slice().reverse();
+      if (!arr.length) body.appendChild(h('div', { class: 'tk-empty' }, CM.icon(tab === 'done' ? 'trophy' : 'flag', 26), h('b', null, tab === 'done' ? '还没有完成的任务' : '没有未完成的任务'), h('span', null, tab === 'done' ? '完成任务可获得奖励拨款与满意度。' : '到期未达成的任务会列在这里。')));
+      for (const t of arr) body.appendChild(closedRow(t));
+    }
+    body.appendChild(this.sec('tk-rule', '任务说明', '', function () { return h('div', { class: 'note' }, (D.taskNote || '历史参考任务参考本城的发展需求，但不要求按真实线路走向建设，只需满足目标描述。') + '动态任务根据当前拥堵、覆盖、车站拥挤与客流情况生成。进度每月初评估；单个任务失败不会直接结束游戏。'); }, false, 'info'));
     return { title: '任务', el: el };
   };
 
@@ -866,12 +1172,12 @@
   // ======================== 页面：帮助 ========================
   UI.prototype.page_help = function () {
     const el = h('div');
-    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图（可平滑缩放、导出 PNG）'], ['点击行驶中的列车', '跟随这列车；H 隐藏 / 显示界面，Esc 或拖动地图退出'], ['/', '搜索车站、线路、道路、区域与地名'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
+    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['1–9（线路选择框）', '起点同时是多条线路的端点时，选择要延长的线路'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图（可平滑缩放、导出 PNG）'], ['点击行驶中的列车', '跟随这列车；H 隐藏 / 显示界面，Esc 或拖动地图退出'], ['/', '搜索车站、线路、道路、区域与地名'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
     const t = h('table', { class: 'tbl' });
     for (const r of rows) t.appendChild(h('tr', null, h('td', null, h('kbd', null, r[0])), h('td', { style: { textAlign: 'left' } }, r[1])));
     el.appendChild(t);
     el.appendChild(h('h3', null, '玩法提示'));
-    el.appendChild(h('div', { class: 'note' }, '界面：左上为日期与时间控制（暂停、速度、+1 月、+1 年）；右上为关键指标与任务、统计、设置、菜单；左侧切换视图与图层；底部为建设工具；左下为缩放。'));
+    el.appendChild(h('div', { class: 'note' }, '界面：左上为日期与时间控制（暂停、速度、+1 月、+1 年）；右上为关键指标（资金、经济增长、人口、分担率、拥堵、满意度）与搜索、任务、统计、设置、菜单；左侧切换视图与图层；底部为建设工具；左下为缩放。点击指标打开对应详情：资金与经济增长共用「财政与经济」面板。'));
     el.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '1. 打开「人口密度」「道路拥堵」「出行方向」图层，找到出行集中的走廊。2. 用「绘线」连接主要起终点，车站间距 0.8–1.5 km 较常见。3. 查看右侧费用与效果预测，无冲突后确认建设，线路立即投入运营。4. 观察车站客流与道路变化，再升级车站、延长线路或建设换乘。绕行严重、换乘不便、过度拥挤或票价过高的线路吸引力有限。'));
     el.appendChild(h('h3', null, '经营与融资'));
     el.appendChild(this.econGuide());

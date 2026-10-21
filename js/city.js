@@ -792,16 +792,19 @@
   };
 
   // ---------------- 城市发展（每月） ----------------
-  // ctx: { year, monthIndex, zoneAccess (Float32Array 0..1), cellWalk (Float32Array m), rng }
+  // ctx: { year, monthIndex, zoneAccess (Float32Array 0..1), cellWalk (Float32Array m), coverage, econ }
+  // econ（城市经济，可空）：popGrowth 人口增速系数、jobs 就业水平系数、com 商业发展系数。只调整增速与就业水平，
+  // 长期人口仍回到本城的人口曲线；地铁覆盖对人口的吸引（boost）不经过经济系数，避免重复计算
   City.prototype.growMonth = function (ctx) {
     const N = this.N, W = this.W, year = ctx.year;
     const tot = this.totals();
+    const E = ctx.econ || null, egp = E ? E.popGrowth : 1, ejf = E ? E.jobs : 1, ecom = E ? E.com : 1;
     const boost = 1 + CFG.growth.metroBoostMax * U.clamp((ctx.coverage || 0) / 0.5, 0, 1);
     const target = U.interp(CFG.growth.popCurve, year + 1 / 12) * boost;
     const targetNow = U.interp(CFG.growth.popCurve, year) * boost;
-    let dP = (target - targetNow) + 0.04 * (targetNow - tot.pop);
+    let dP = (target - targetNow) * egp + 0.04 * (targetNow - tot.pop);
     dP = Math.max(dP, -0.002 * tot.pop);
-    const tJ = target * U.interp(CFG.growth.jobsRatio, year + 1 / 12);
+    const tJ = target * U.interp(CFG.growth.jobsRatio, year + 1 / 12) * ejf;
     let dJ = (tJ - tot.jobs) * 0.12 + Math.max(0, dP) * U.interp(CFG.growth.jobsRatio, year) * 0.3;
     dJ = Math.max(dJ, -0.002 * tot.jobs);
     const eraMul = year < 2000 ? 0.8 : (year < 2010 ? 0.8 + 0.2 * (year - 2000) / 10 : Math.min(1.15, 1 + 0.15 * (year - 2010) / 20));
@@ -837,7 +840,7 @@
       const remR = cr - this.pop[c], remJ = cj - this.jobs[c];
       if (remR > 0) { wR[c] = remR * (0.25 + acc) * (1 + 1.6 * st) * (0.3 + nb) * rnd * seed; sR += wR[c]; }
       if (remJ > 0) {
-        const comBoost = (P === LU.COM || P === LU.MIX) ? 2.0 : 1;
+        const comBoost = (P === LU.COM || P === LU.MIX) ? 2.0 * ecom : 1;
         wJ[c] = remJ * (0.2 + acc * 1.2) * (1 + 1.6 * st * comBoost) * (0.3 + nb) * rnd * seed; sJ += wJ[c];
       }
     }

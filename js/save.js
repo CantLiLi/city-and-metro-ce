@@ -69,6 +69,15 @@
   }
 
   const Save = {};
+  let writeTail = Promise.resolve(), writeSeq = 0, lastSavedAt = 0;
+  function queueWrite(work) {
+    const next = writeTail.then(work);
+    writeTail = next.then(function () {}, function () {});
+    return next;
+  }
+  function uniqueWriteId() { return U.uid('') + '-' + (++writeSeq).toString(36); }
+  // 同一时钟刻度内也按写入顺序排序，确保自动轮换及「最近存档」正确。
+  function savedAt(requested) { lastSavedAt = Math.max(Date.now(), requested || 0, lastSavedAt + 1); return lastSavedAt; }
   Save.init = function () { return openDB(); };
   Save.backend = function () { return db ? 'IndexedDB' : 'localStorage'; };
   Save.available = function () {
@@ -80,38 +89,40 @@
   };
   // kind: 'auto' | 'manual'；opts: { slotId（覆盖）, label }。返回 Promise<{ok, error, slotId}>
   Save.save = function (game, kind, opts) {
-    opts = opts || {};
-    let env, str;
-    try { env = Save.envelope(game); str = JSON.stringify(env); } catch (e) { return Promise.resolve({ ok: false, error: '序列化失败：' + errMsg(e) }); }
-    const idx = readIndex();
-    let slotId = opts.slotId;
-    if (kind === 'auto') {
-      const a1 = idx.slots[game.id + '.a1'], a2 = idx.slots[game.id + '.a2'];
-      slotId = !a1 ? game.id + '.a1' : (!a2 ? game.id + '.a2' : (a1.savedAt <= a2.savedAt ? game.id + '.a1' : game.id + '.a2'));
-    } else if (!slotId) {
-      const manual = Object.values(idx.slots).filter(function (s) { return s.gameId === game.id && s.kind === 'manual'; });
-      if (manual.length >= CFG.saves.maxManual) return Promise.resolve({ ok: false, error: '该进度的手动存档已达上限（' + CFG.saves.maxManual + ' 个），请覆盖或删除旧存档' });
-      slotId = game.id + '.m' + Date.now().toString(36);
-    }
-    const old = idx.slots[slotId];
-    const key = P + 'slot.' + slotId + '.' + Date.now().toString(36);
-    const meta = {
-      slotId: slotId, key: key, gameId: game.id, kind: kind, label: opts.label || (kind === 'auto' ? '自动存档' : '手动存档'),
-      date: [game.clock.y, game.clock.m, game.clock.d], savedAt: env.savedAt, size: str.length, mode: game.mode, name: game.name, map: game.mapId || 'gz',
-      stations: game.compiled.stations.length, funds: game.econ.isFree() ? null : game.econ.funds,
-    };
-    // 先写数据，再写索引；任一步失败都不影响已有存档
-    return store.put(key, str).then(function (where) {
-      return store.get(key, where).then(function (back) {
-        if (!back || back.length !== str.length) { store.del(key, where); return { ok: false, error: '写入后校验失败' }; }
-        const idx2 = readIndex();
-        idx2.games[game.id] = { gameId: game.id, name: game.name, mode: game.mode, map: game.mapId || 'gz', createdAt: game.createdAt, updatedAt: env.savedAt };
-        meta.store = where;
-        idx2.slots[slotId] = meta;
-        try { writeIndex(idx2); }
-        catch (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; }
-        if (old && old.key && old.key !== key) store.del(old.key, old.store);
-        return { ok: true, slotId: slotId, savedAt: env.savedAt, size: str.length };
+    opts = Object.assign({}, opts);
+    let env;
+    try { env = Save.envelope(game); } catch (e) { return Promise.resolve({ ok: false, error: '序列化失败：' + errMsg(e) }); }
+    // 请求时即冻结快照及索引摘要；排队期间时间推进、切图或改名不改写本次快照。
+    const snap = { id: game.id, name: game.name, mode: game.mode, map: game.mapId || 'gz', createdAt: game.createdAt,
+      date: [game.clock.y, game.clock.m, game.clock.d], stations: game.compiled.stations.length, funds: game.econ.isFree() ? null : game.econ.funds };
+    return queueWrite(function () {
+      const idx = readIndex(); let slotId = opts.slotId;
+      if (kind === 'auto') {
+        const a1 = idx.slots[snap.id + '.a1'], a2 = idx.slots[snap.id + '.a2'];
+        slotId = !a1 ? snap.id + '.a1' : (!a2 ? snap.id + '.a2' : (a1.savedAt <= a2.savedAt ? snap.id + '.a1' : snap.id + '.a2'));
+      } else if (!slotId || !idx.slots[slotId]) {
+        const manual = Object.values(idx.slots).filter(function (s) { return s.gameId === snap.id && s.kind === 'manual'; });
+        if (manual.length >= CFG.saves.maxManual) return { ok: false, error: '该进度的手动存档已达上限（' + CFG.saves.maxManual + ' 个），请覆盖或删除旧存档' };
+        slotId = snap.id + '.m' + uniqueWriteId();
+      }
+      const old = idx.slots[slotId];
+      if (old && old.gameId !== snap.id) return { ok: false, error: '不能覆盖其他进度的存档' };
+      const key = P + 'slot.' + slotId + '.' + uniqueWriteId();
+      env.savedAt = savedAt(env.savedAt); const str = JSON.stringify(env);
+      const meta = { slotId: slotId, key: key, gameId: snap.id, kind: kind, label: opts.label || (kind === 'auto' ? '自动存档' : '手动存档'),
+        date: snap.date, savedAt: env.savedAt, size: str.length, mode: snap.mode, name: snap.name, map: snap.map, stations: snap.stations, funds: snap.funds };
+      // 写入串行化，使额度、轮换和覆盖均依据上一次已提交的索引；失败不覆盖旧数据。
+      return store.put(key, str).then(function (where) {
+        return store.get(key, where).then(function (back) {
+          if (back !== str) { store.del(key, where); return { ok: false, error: '写入后校验失败' }; }
+          const idx2 = readIndex();
+          idx2.games[snap.id] = { gameId: snap.id, name: snap.name, mode: snap.mode, map: snap.map, createdAt: snap.createdAt, updatedAt: env.savedAt };
+          meta.store = where; idx2.slots[slotId] = meta;
+          try { writeIndex(idx2); }
+          catch (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; }
+          if (old && old.key && old.key !== key) store.del(old.key, old.store);
+          return { ok: true, slotId: slotId, savedAt: env.savedAt, size: str.length };
+        });
       });
     }).catch(function (e) { return { ok: false, error: errMsg(e) }; });
   };
@@ -224,22 +235,24 @@
   Save.importText = function (text) {
     let r;
     try { r = Save.parseEnvelope(text); } catch (e) { return Promise.reject(e); }
-    const idx = readIndex();
-    const p = r.payload;
-    let gameId = p.meta.gameId, name = p.meta.name;
-    if (idx.games[gameId]) { gameId = U.uid('g'); name = name + '（导入）'; p.meta.gameId = gameId; p.meta.name = name; }
-    const body = JSON.stringify(p);
-    const env = { format: CFG.SAVE_FORMAT, version: CFG.SAVE_VERSION, gameVersion: CFG.GAME_VERSION, savedAt: Date.now(), checksum: U.fnv(body), body: body };
-    const str = JSON.stringify(env);
-    const slotId = gameId + '.m' + Date.now().toString(36);
-    const key = P + 'slot.' + slotId + '.' + Date.now().toString(36);
-    return store.put(key, str).then(function (where) {
-      const idx2 = readIndex();
-      idx2.games[gameId] = { gameId: gameId, name: name, mode: p.meta.mode, map: p.meta.map || 'gz', createdAt: p.meta.createdAt, updatedAt: env.savedAt };
-      idx2.slots[slotId] = { slotId: slotId, key: key, store: where, gameId: gameId, kind: 'manual', label: '导入的存档', date: [p.clock.y, p.clock.m, p.clock.d], savedAt: env.savedAt, size: str.length, mode: p.meta.mode, map: p.meta.map || 'gz', name: name, stations: Object.keys(p.net.stations || {}).length, funds: p.econ.mode === 'free' ? null : p.econ.funds };
-      try { writeIndex(idx2); } catch (e) { store.del(key, where); throw new Error(errMsg(e)); }
-      return { slotId: slotId, gameId: gameId, name: name, map: p.meta.map || 'gz' };
-    }, function (e) { throw new Error(errMsg(e)); });
+    return queueWrite(function () {
+      const idx = readIndex();
+      const p = r.payload;
+      let gameId = p.meta.gameId, name = p.meta.name;
+      if (idx.games[gameId]) { gameId = U.uid('g'); name = name + '（导入）'; p.meta.gameId = gameId; p.meta.name = name; }
+      const body = JSON.stringify(p);
+      const env = { format: CFG.SAVE_FORMAT, version: CFG.SAVE_VERSION, gameVersion: CFG.GAME_VERSION, savedAt: savedAt(), checksum: U.fnv(body), body: body };
+      const str = JSON.stringify(env);
+      const slotId = gameId + '.m' + uniqueWriteId();
+      const key = P + 'slot.' + slotId + '.' + uniqueWriteId();
+      return store.put(key, str).then(function (where) {
+        const idx2 = readIndex();
+        idx2.games[gameId] = { gameId: gameId, name: name, mode: p.meta.mode, map: p.meta.map || 'gz', createdAt: p.meta.createdAt, updatedAt: env.savedAt };
+        idx2.slots[slotId] = { slotId: slotId, key: key, store: where, gameId: gameId, kind: 'manual', label: '导入的存档', date: [p.clock.y, p.clock.m, p.clock.d], savedAt: env.savedAt, size: str.length, mode: p.meta.mode, map: p.meta.map || 'gz', name: name, stations: Object.keys(p.net.stations || {}).length, funds: p.econ.mode === 'free' ? null : p.econ.funds };
+        try { writeIndex(idx2); } catch (e) { store.del(key, where); throw new Error(errMsg(e)); }
+        return { slotId: slotId, gameId: gameId, name: name, map: p.meta.map || 'gz' };
+      }, function (e) { throw new Error(errMsg(e)); });
+    });
   };
   Save.usage = function () {
     let n = 0;

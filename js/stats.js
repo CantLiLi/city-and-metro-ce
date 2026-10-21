@@ -8,7 +8,7 @@
     light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
     dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
   };
-  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['finance', '财政', 'wallet'], ['milestones', '城市纪事', 'book']];
+  const TABS = [['overview', '概览', 'chart'], ['traffic', '交通', 'metro'], ['econ', '经济', 'trend'], ['finance', '财政', 'wallet'], ['milestones', '城市纪事', 'book']];
   let ui = null, tab = 'overview', range = 'all', isOpen = false, charts = [], body = null, sig = '';
 
   function pal() { return PALETTE[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']; }
@@ -202,6 +202,59 @@
     return sh.card;
   }
 
+  // ---------- 增长率柱状图（正负柱；游戏结果、预测与史实参考分开标识） ----------
+  // o.items: [{ lab, x, v（游戏结果或预测）, fc（是否预测）, ref: { v, kind } }]
+  function growthChart(o) {
+    const P = pal();
+    const legend = [{ name: '游戏结果（实际增长）', color: P[0], sq: true }, { name: '本年预测', color: P[3], sq: true }];
+    if (o.refLabel) legend.push({ name: o.refLabel + '（参考）', color: P[1] });
+    const sh = shell(o, legend);
+    const draw = function () {
+      const items = o.items, n = items.length;
+      if (!n) { emptyState(sh, o.empty || '第一个完整年度在明年 1 月结算后显示。'); return; }
+      let lo = 0, hi = 0.02;
+      for (const it of items) { if (it.v != null) { lo = Math.min(lo, it.v); hi = Math.max(hi, it.v); } if (it.ref) { lo = Math.min(lo, it.ref.v); hi = Math.max(hi, it.ref.v); } }
+      const W = Math.max(260, sh.plot.clientWidth || 420), Hh = o.height || 180, pl = 44, pr = 10, pt = 10, pb = 22;
+      const nt = niceTicks(lo, hi, 4);
+      const Y = function (v) { return pt + (1 - (v - nt.lo) / (nt.hi - nt.lo)) * (Hh - pt - pb); };
+      const slot = (W - pl - pr) / n, bw = Math.max(2, Math.min(22, slot * 0.62));
+      const X = function (i) { return pl + slot * (i + 0.5); };
+      let s = '<svg viewBox="0 0 ' + W + ' ' + Hh + '" height="' + Hh + '" font-size="10.5">';
+      s += '<defs><pattern id="fcHatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="' + P[3] + '" fill-opacity="0.25"/><line x1="0" y1="0" x2="0" y2="5" stroke="' + P[3] + '" stroke-width="2"/></pattern></defs>';
+      for (const t of nt.ticks) { const y = Y(t).toFixed(1); s += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(' + (Math.abs(t) < 1e-9 ? '--line-strong' : '--line') + ')"/><text x="' + (pl - 6) + '" y="' + y + '" dy="3.5" text-anchor="end" style="fill:var(--muted)">' + esc(Math.round(t * 100) + '%') + '</text>'; }
+      const nx = Math.min(n, Math.max(2, Math.floor((W - pl) / 54))), seen = {};
+      for (let q = 0; q < nx; q++) { const i = nx === 1 ? 0 : Math.round(q / (nx - 1) * (n - 1)); if (seen[i]) continue; seen[i] = 1; s += '<text x="' + X(i).toFixed(1) + '" y="' + (Hh - 5) + '" text-anchor="middle" style="fill:var(--muted)">' + esc(items[i].x) + '</text>'; }
+      const y0 = Y(0);
+      items.forEach(function (it, i) {
+        s += '<g class="col">';
+        if (it.v != null) {
+          const y1 = Y(it.v), top = Math.min(y0, y1), hh = Math.max(0.8, Math.abs(y1 - y0));
+          s += '<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + hh.toFixed(1) + '" rx="' + Math.min(3, bw / 4) + '" fill="' + (it.fc ? 'url(#fcHatch)' : (it.v >= 0 ? P[0] : P[7])) + '"' + (it.fc ? ' stroke="' + P[3] + '" stroke-dasharray="3 2"' : '') + '/>';
+        }
+        if (it.ref) {
+          const yr = Y(it.ref.v).toFixed(1);
+          if (it.ref.kind === 'period') s += '<line x1="' + (X(i) - slot / 2).toFixed(1) + '" x2="' + (X(i) + slot / 2).toFixed(1) + '" y1="' + yr + '" y2="' + yr + '" stroke="' + P[1] + '" stroke-width="2" stroke-dasharray="4 3"/>';
+          else s += '<path d="M' + X(i).toFixed(1) + ' ' + (yr - 4.5) + 'l4.5 4.5-4.5 4.5-4.5-4.5z" fill="' + P[1] + '" style="stroke:var(--surface-solid)" stroke-width="1.2"/>';
+        }
+        s += '</g>';
+      });
+      s += '<rect class="hit" x="' + pl + '" y="0" width="' + (W - pl - pr) + '" height="' + Hh + '" fill="transparent"/></svg>';
+      sh.plot.innerHTML = s; sh.plot.appendChild(sh.tip);
+      const cols = sh.plot.querySelectorAll('.col');
+      sh.plot.onmousemove = function (e) {
+        const r = sh.plot.getBoundingClientRect(), sx = (e.clientX - r.left) * W / r.width;
+        const i = U.clamp(Math.floor((sx - pl) / slot), 0, n - 1), it = items[i];
+        cols.forEach(function (c, k) { c.style.opacity = k === i ? '1' : '0.5'; });
+        const rows = [{ name: it.fc ? '本年预测' : '游戏结果', color: it.fc ? P[3] : P[0], v: it.v == null ? '—' : (it.v * 100).toFixed(1) + '%' }];
+        if (it.ref) rows.push({ name: o.refLabel + (it.ref.kind === 'period' ? '（' + it.ref.from + '–' + it.ref.to + ' 年平均）' : ''), color: P[1], v: (it.ref.kind === 'year' ? '' : '约 ') + (it.ref.v * 100).toFixed(1) + '%' });
+        showTip(sh, tipRows(it.lab, rows), X(i) * r.width / W, 4);
+      };
+      sh.plot.onmouseleave = function () { cols.forEach(function (c) { c.style.opacity = '1'; }); hideTip(sh); };
+    };
+    charts.push(draw);
+    return sh.card;
+  }
+
   // ---------- 横向条形图（排名；线路用线路自身颜色） ----------
   function hbarChart(o) {
     const sh = shell(Object.assign({}, o, { table: function () {
@@ -346,6 +399,45 @@
       lineChart({ title: '收入与支出', sub: (E.ledger.length > 36 ? '按年' : '按月') + '合计：财政收入 = 拨款 + 票款 + 奖励（借款不计入）；支出 = 建设 + 运营' + (anyDebt ? '；偿债 = 利息 + 本金 + 逾期费用' : ''), icon: 'wallet', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }), series: [{ name: '财政收入', color: P[2], vals: rows.map(function (o) { return inc(o.r); }) }, { name: '建设与运营支出', color: P[1], vals: rows.map(function (o) { return exp(o.r); }) }].concat(anyDebt ? [{ name: '偿债', color: P[6], vals: rows.map(function (o) { return svc(o.r); }) }] : []), fmt: function (v) { return U.fmtMoney(v); }, axisFmt: axisYi, empty: '尚无完整月份的记录。' }));
     el.appendChild(cg);
   }
+  // ---------- 城市经济：GDP、增长率（游戏结果 / 预测 / 史实参考分开）、地方财政与地铁拨款、交通与周期 ----------
+  function pageEcon(g, el) {
+    const P = pal(), mv = CM.Macro && g.macro ? CM.Macro.view(g) : null;
+    if (!mv) { el.appendChild(h('div', { class: 'empty-chart' }, '本地图没有启用城市经济模拟。')); return; }
+    const st = mv.st, c = mv.cfg, recs = st.rec, L = mv.last, fc = mv.fc, free = g.econ.isFree();
+    const base = CM.CFG.econBase || CM.CFG.START.y;
+    const big = CM.UI.fmtBig, pctS = CM.UI.pctS;
+    const grid = h('div', { class: 'kpi-grid' });
+    const vals = function (k) { return recs.slice(-12).map(function (r) { return r[k]; }); };
+    grid.append(
+      kpi({ icon: 'trend', badge: 'b-violet', label: (L ? L.y : fc.y) + ' 年地图范围 GDP' + (L ? '' : '（预测）'), value: big(L ? L.nom : fc.nom), vals: vals('nom'), note: L && L.part ? '接入当年（' + L.n + ' 个月）' : (L ? '名义值，按当年价格' : '第一个完整年度明年 1 月结算') }),
+      kpi({ icon: 'pulse', badge: mv.env.cls === 'good' ? 'b-green' : (mv.env.cls === 'bad' ? 'b-red' : (mv.env.cls === 'warn' ? 'b-orange' : 'b-blue')), label: (L && L.growth != null ? L.y + ' 年实际增长' : fc.y + ' 年预测增长'), value: L && L.growth != null ? pctS(L.growth) : pctS(fc.growth), vals: vals('growth'), note: '当前经济环境：' + mv.env.label + (L ? ' · ' + L.y + ' 年价格涨幅 ' + pctS(L.infl) : '') }),
+      kpi({ icon: 'people', badge: 'b-blue', label: '人均 GDP', value: L ? U.fmtInt(L.nom * 1e4 / Math.max(1, L.pop)) : U.fmtInt(fc.nom * 1e4 / Math.max(1, g.city.totals().pop)), unit: CM.CFG.money.unit, vals: recs.slice(-12).map(function (r) { return r.nom / Math.max(1, r.pop); }), note: '地图范围常住人口' }),
+      kpi({ icon: 'bank', badge: 'b-gold', label: '地方财政收入', value: L ? big(L.rev) : '待结算', vals: vals('rev'), note: L ? '为预期的 ' + Math.round(L.fRaw * 100) + '% · ' + (mv.fisc ? mv.fisc.y + ' 年财力 ×' + mv.fisc.f.toFixed(2) : '') : '' }),
+      kpi({ icon: 'metro', badge: 'b-teal', label: '交通对经济', value: pctS(mv.te.eff - 1, 2), vals: vals('te'), note: '当前交通效率 ' + pctS(mv.te.now - 1, 2) }),
+      kpi({ icon: 'bolt', badge: mv.shocks.length ? 'b-orange' : 'b-slate', label: '经济事件', value: String(mv.shocks.length), unit: '项影响中', vals: [], note: mv.shocks.length ? mv.shocks.map(function (s) { return s.ev.title.replace(/^模拟：/, ''); }).slice(0, 2).join('、') : (mv.sim ? '模拟阶段' : '暂无') }));
+    el.appendChild(grid);
+    const cg = h('div', { class: 'chart-grid' });
+    const rows = recs.map(function (r) { return { lab: r.y + ' 年' + (r.part ? '（' + r.n + ' 个月）' : '') + (r.sim ? ' · 模拟' : ''), x: String(r.y), r: r }; });
+    const fcRow = { lab: fc.y + ' 年 · 预测', x: String(fc.y), r: null };
+    const all = rows.concat([fcRow]);
+    cg.append(lineChart({ title: '地图范围 GDP', sub: '名义值按当年价格；实际值按 ' + base + ' 年价格（剔除价格变化）。最后一点为本年预测', icon: 'trend', labels: all, xs: all.map(function (o) { return o.x; }), tips: all.map(function (o) { return o.lab; }),
+      series: [{ name: '名义 GDP', color: P[0], vals: rows.map(function (o) { return o.r.nom; }).concat([fc.nom]) }, { name: '实际 GDP（' + base + ' 年价格）', color: P[2], vals: rows.map(function (o) { return o.r.real; }).concat([fc.real]) }],
+      fmt: function (v) { return big(v); }, axisFmt: function (v) { return v >= 1e8 ? (v / 1e8).toFixed(1) + '万亿' : (v / 1e4).toFixed(0) + '亿'; }, empty: '至少需要两个年度的记录。' }));
+    const items = recs.map(function (r) { return { lab: r.y + ' 年', x: String(r.y), v: r.growth == null ? null : r.growth, ref: CM.Macro.refAt(c, r.y) }; });
+    items.push({ lab: fc.y + ' 年（预测，不含尚未发生的事件）', x: String(fc.y), v: fc.growth, fc: true, ref: CM.Macro.refAt(c, fc.y) });
+    cg.append(growthChart({ title: '实际增长率', sub: '柱：本局地图范围的游戏结果（虚线柱为本年预测）' + (c.ref ? '；橙色：' + c.ref.label + '（全国 / 地区口径的近似参考，菱形为当年值，虚线为时期平均）' : ''), icon: 'chart', items: items, refLabel: c.ref ? c.ref.label : null, wide: false }));
+    const anyGrant = !free && g.econ.ledger.length;
+    const byY = {};
+    for (const r of g.econ.ledger) byY[r.y] = (byY[r.y] || 0) + (r.grant || 0);
+    cg.append(lineChart({ title: free ? '地方财政收入' : '地方财政收入与地铁拨款', sub: 'GDP 不等于财政收入；拨款只占财政收入的一部分' + (anyGrant ? '（拨款为当年已发放合计）' : ''), icon: 'bank', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }),
+      series: [{ name: '地方财政收入', color: P[3], vals: rows.map(function (o) { return o.r.rev; }) }].concat(anyGrant ? [{ name: '地铁拨款', color: P[1], vals: rows.map(function (o) { return byY[o.r.y] != null ? byY[o.r.y] : null; }) }] : []),
+      fmt: function (v) { return big(v); }, axisFmt: function (v) { return v >= 1e8 ? (v / 1e8).toFixed(1) + '万亿' : (v / 1e4).toFixed(0) + '亿'; }, empty: '至少需要两个年度的记录。' }));
+    cg.append(lineChart({ title: '交通效率与经济周期', sub: '交通效率：已计入 GDP 的生产率影响；周期与事件：经济周期与事件冲击使 GDP 偏离趋势的幅度', icon: 'pulse', labels: rows, xs: rows.map(function (o) { return o.x; }), tips: rows.map(function (o) { return o.lab; }),
+      series: [{ name: '交通效率', color: P[2], vals: rows.map(function (o) { return o.r.te - 1; }) }, { name: '周期与事件', color: P[7], vals: rows.map(function (o) { return (1 + o.r.gap) * o.r.shock - 1; }) }],
+      fmt: function (v) { return pctS(v, 2); }, axisFmt: function (v) { return (v * 100).toFixed(0) + '%'; }, min0: false, refs: [{ v: 0, label: '' }], empty: '至少需要两个年度的记录。' }));
+    el.appendChild(cg);
+  }
+
   // ---------- 城市纪事：里程碑书页（文字 + 简笔画）、翻页与时间轴 ----------
   let msFilter = 'all', msAt = null, msFlip = null;
   // 简笔画的笔触：轻微抖动的墨线（SVG 滤镜，全局一份）
@@ -498,9 +590,10 @@
     drawBook(0);
     requestAnimationFrame(function () { syncTl(false); });
   }
-  const PAGES = { overview: pageOverview, traffic: pageTraffic, finance: pageFinance, milestones: pageMilestones };
+  const PAGES = { overview: pageOverview, traffic: pageTraffic, econ: pageEcon, finance: pageFinance, milestones: pageMilestones };
   const NOTES = {
     milestones: '只记录关键节点：地铁建设的「第一次」与里程关口、客流与分担率关口、人口关口、本地图的重大历史事件、地标落成与填海成陆。',
+    econ: '按年记录：每年 1 月结算上一年。游戏结果为本局地图范围的模拟值；预测只包含已经发生的事件；参考数据为全国或地区口径的近似值，与地图范围数据分开显示。',
     _: '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。',
   };
 
@@ -525,10 +618,10 @@
     root.onclick = function () { Stats.close(); };
   }
   function syncTabs(g, instant) {
-    const free = g.econ.isFree();
-    if (tab === 'finance' && free) tab = 'overview';
+    const free = g.econ.isFree(), eco = !!(g.macro && CM.Macro);
+    if ((tab === 'finance' && free) || (tab === 'econ' && !eco)) tab = 'overview';
     for (const k in tabBtns) {
-      tabBtns[k].style.display = k === 'finance' && free ? 'none' : '';
+      tabBtns[k].style.display = (k === 'finance' && free) || (k === 'econ' && !eco) ? 'none' : '';
       tabBtns[k].classList.toggle('on', k === tab); tabBtns[k].setAttribute('aria-selected', k === tab ? 'true' : 'false');
     }
     const b = tabBtns[tab];
@@ -568,6 +661,7 @@
   function signature(g) {
     const th = document.documentElement.dataset.theme, n = g.milestones ? g.milestones.list.length : 0;
     if (tab === 'milestones') return 'ms|' + n + '|' + th + '|' + (window.innerWidth < 820 ? 1 : 2);
+    if (tab === 'econ') return 'ec|' + g.clock.y + '-' + g.clock.m + '|' + (g.macro ? g.macro.rec.length + '|' + g.macro.gv : '') + '|' + th;
     return g.clock.y + '-' + g.clock.m + '-' + g.clock.d + '|' + (g.model.dailyStale ? 0 : 1) + '|' + g.history.length + '|' + g.econ.ledger.length + '|' + g.netVersion + '|' + th + '|' + n;
   }
   function redrawCharts() { for (const d of charts) d(); }

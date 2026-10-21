@@ -46,6 +46,8 @@
     if (e0) g.logEvent({ tag: e0.tag || '史实', title: e0.title, desc: e0.desc });
     g.firedEvents = { 0: 1 };
     g.tasks.monthly(g).forEach(function (o) { g.logTask(o); });
+    // 城市经济：真实城市开局即接入（教程不启用）；开局当月已发生的经济事件一并记录
+    if (CM.Macro) for (const x of CM.Macro.create(g) || []) g.logMacroEvent(x);
     g.recordHistory();
     if (CM.Milestones) CM.Milestones.onStart(g);
     return g;
@@ -80,6 +82,16 @@
     this.events.push(e);
     if (this.events.length > 400) this.events.shift();
     this.emit('event', e);
+  };
+  // 经济事件：记入城市纪事的事件列表（史实 / 模拟），说明本城受影响的程度
+  Game.prototype.logMacroEvent = function (x) {
+    const ev = x.ev, f = x.f, k = f.k, neg = Math.min.apply(null, ev.lv) < 0;
+    const peak = ev.lv.reduce(function (a, v) { return Math.abs(v) > Math.abs(a) ? v : a; }, 0) * k;
+    const lvl = Math.abs(peak) < 0.005 ? '较小' : (Math.abs(peak) < 0.02 ? '中等' : (Math.abs(peak) < 0.045 ? '较大' : '严重'));
+    const sim = ev.tag === '模拟', name = ev.title.replace(/^模拟：/, '');
+    this.logEvent({ tag: ev.tag || '史实', kind: 'econ', econId: ev.id, title: (sim ? '经济（模拟）：' : '经济：') + name, desc: ev.desc + (neg ? ' 对本城经济的影响：' + lvl + '。' : ' 对本城经济的带动：' + lvl + '。') });
+    this.emit('toast', { kind: neg ? 'warn' : 'info', text: sim ? '经济（模拟）：' + name : ev.y + ' 年：' + name });
+    this.emit('macroEvent', x);
   };
   Game.prototype.logTask = function (o) {
     const t = o.task;
@@ -146,6 +158,9 @@
       if (this.firedEvents[k]) return;
       if (U.ymIndex(e.y, e.m) <= U.ymIndex(y, m)) { this.firedEvents[k] = 1; this.logEvent({ tag: e.tag, title: e.title, desc: e.desc }); this.emit('toast', { kind: 'info', text: e.y + ' 年：' + e.title }); if (CM.Milestones) CM.Milestones.onEvent(this, e, k); }
     });
+    // 城市经济：1 月结算上一年 GDP 与地方财政、确定本年预算与经济周期；触发到期的经济事件（每个事件只生效一次）
+    if (this.macro && CM.Macro) for (const x of CM.Macro.month(this, y, m)) this.logMacroEvent(x);
+    const ef = this.macro && CM.Macro ? CM.Macro.cityFactors(this) : null;
     if (D.airport && yr >= D.airport.closeYear + 7 / 12) {
       if (city.lu.some(function (v) { return v === CM.LU.AIRPORT; })) city.closeAirport();
     }
@@ -177,7 +192,8 @@
       if (city.regionOpen[k] || rg.open == null) continue;
       if (rg.id === 'airport' && yr < D.airport.closeYear + 7 / 12) continue;
       const byYear = y >= rg.open;
-      const early = rg.pop && tot.pop >= rg.pop && y >= rg.open - 3;
+      // 人口提前达到门槛时可提前开放；经济繁荣时提前窗口放宽一年，衰退时门槛略为提高
+      const early = rg.pop && tot.pop >= rg.pop * (ef && ef.dev < -0.03 ? 1.03 : 1) && y >= rg.open - (ef && ef.dev > 0.02 ? 4 : 3);
       if (byYear || early) {
         city.openRegion(k, y, m);
         const why = byYear ? '参考 ' + rg.open + ' 年开放' : '城市人口增长，提前开放（参考 ' + rg.open + ' 年）';
@@ -188,7 +204,8 @@
     yield;
     // 城市发展
     const acc = model.net ? model.net.acc : null;
-    const gr = city.growMonth({ year: yr, monthIndex: this.ym(), zoneAccess: model.zoneAccessNorm, cellWalk: acc ? acc.cellWalk : null, coverage: acc ? acc.coverage : 0 });
+    const econF = this.macro && CM.Macro ? CM.Macro.applyFactors(this) : null;
+    const gr = city.growMonth({ year: yr, monthIndex: this.ym(), zoneAccess: model.zoneAccessNorm, cellWalk: acc ? acc.cellWalk : null, coverage: acc ? acc.coverage : 0, econ: econF });
     yield;
     if (gr.streetsChanged || roadsChanged) { if (roadsChanged) city.updateStreets(); city.buildGraphs(); yield; }
     // 编译与模型刷新分多步执行；this.compiled 与模型网络在同一步内一起替换
@@ -196,6 +213,7 @@
     yield;
     yield* model.refreshCityGen(C);
     this.compiled = C;
+    if (this.macro && CM.Macro) CM.Macro.sample(this);   // 本月的岗位与交通效率（年度 GDP 取全年平均）
     yield;
     // 经营与任务：上月已封账，先开新月账本，任务奖励记入新月，最后按本月任务结果发放拨款
     this.econ.updateSatisfaction(model.daily, model, y, m);
@@ -285,7 +303,8 @@
     const d = this.model.daily || {};
     const tot = this.city.totals();
     let open = 0; for (let k = 0; k < this.city.regions.length; k++) open += this.city.regionOpen[k];
-    return { pop: tot.pop, jobs: tot.jobs, funds: this.econ.funds, share: d.metroShare || 0, cong: d.cong || 1, commute: d.commute || 0, riders: d.metro || 0, sat: this.econ.sat, regions: open, events: this.events.length, tasksDone: this.tasks.done.length, tasksFailed: this.tasks.failed.length };
+    return { pop: tot.pop, jobs: tot.jobs, funds: this.econ.funds, capex: this.econ.capex, debt: this.econ.debtTotal(), share: d.metroShare || 0, cong: d.cong || 1, commute: d.commute || 0, riders: d.metro || 0, sat: this.econ.sat, regions: open, events: this.events.length, tasksDone: this.tasks.done.length, tasksFailed: this.tasks.failed.length,
+      coverage: d.coverage || 0, stations: this.compiled.stations.length, fiscF: this.econ.fiscalFactor(), macroRecs: this.macro ? this.macro.rec.length : 0 };
   };
 
   // ---------------- 建设草案 ----------------
@@ -316,8 +335,9 @@
   Game.prototype.liveEdit = function (fn) { const d = this.ensureDraft(); fn(d.net); d.ver++; this.invalidatePrediction(); this.emit('draftLive'); };
   Game.prototype.endLive = function (changed) {
     const d = this.draft; if (!d || !d.liveSnap) return;
-    if (changed) { d.undo.push(d.liveSnap); d.redo = []; }
-    d.liveSnap = null; d.ver++; this.emit('draft');
+    if (changed) { d.undo.push(d.liveSnap); if (d.undo.length > 120) d.undo.shift(); d.redo = []; }
+    else d.net = JSON.parse(d.liveSnap);
+    d.liveSnap = null; d.ver++; this.invalidatePrediction(); this.emit('draft');
   };
   Game.prototype.undo = function () {
     const d = this.draft; if (!d || !d.undo.length) return false;
@@ -351,6 +371,7 @@
   Game.prototype.canConfirm = function () {
     const ev = this.draftEval();
     if (!ev) return { ok: false, reason: '没有草案' };
+    if (this.draft.liveSnap) return { ok: false, reason: '请先松开鼠标或结束当前拖动，再确认建设' };
     if (!ev.changed) return { ok: false, reason: '草案没有变化' };
     if (ev.conflicts.length) return { ok: false, reason: '存在 ' + ev.conflicts.length + ' 处冲突，需先解决' };
     if (!this.econ.canAffordBuild(ev.total)) return { ok: false, reason: '资金不足：需要 ' + U.fmtMoney(ev.total) + '，当前一般资金 ' + U.fmtMoney(this.econ.funds) + (this.econ.capex > 0.5 ? ' + 建设专项资金 ' + U.fmtMoney(this.econ.capex) : '') };
@@ -465,6 +486,7 @@
       tutorial: this.tutorial || null,
       milestones: this.milestones || null,
       mapInit: this.mapInit || null,
+      macro: this.macro && CM.Macro ? CM.Macro.serialize(this.macro) : null,
     };
   };
   Game.restore = function (s) {
@@ -492,6 +514,18 @@
     g.milestones = s.milestones || null;
     g.model.solveNow(2);
     if (CM.Milestones) CM.Milestones.backfill(g);
+    // 城市经济：有数据则恢复；1.7 及更早的存档（或数据不完整）从当前状态接入，不补造过去的记录，不改变已有资金与债务。
+    // 接入失败时本局不启用经济模拟，原存档不受影响
+    g.macro = null;
+    if (CM.Macro && CM.Macro.enabled()) {
+      try { CM.Macro.attach(g, s.macro || null); }
+      catch (e) {
+        console.error(e);
+        try { g.macro = null; CM.Macro.attach(g, null); g.macroNote = '存档中的城市经济数据无法识别，已从当前状态重新接入'; }
+        catch (e2) { console.error(e2); g.macro = null; g.econ.fisc = null; g.econ.quoteFn = null; g.macroError = '城市经济数据未能初始化（' + (e2 && e2.message || e2) + '），本局暂不启用；原存档未受影响'; }
+      }
+      if (g.macro && !s.macro) g.macroNote = '城市经济自 ' + g.clock.y + ' 年 ' + g.clock.m + ' 月起接入：此前的经济数据未记录，不作补造';
+    }
     return g;
   };
 })(window.CM);

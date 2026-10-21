@@ -188,6 +188,7 @@
       el = h('aside', { id: 'coach' });
       document.getElementById('app').appendChild(el);
       document.body.classList.add('has-coach');
+      if (ui.placeFeed) ui.placeFeed();
       mini = false;
       go(g.tutorial.step || 0);
     },
@@ -198,6 +199,7 @@
       if (ui && ui.R.hl && ui.R.hl.tutorial) ui.R.setHighlight(null);
       if (el) { el.remove(); el = null; }
       document.body.classList.remove('has-coach');
+      if (ui && ui.placeFeed) ui.placeFeed();
       idx = -1;
     },
     active: function () { return !!el; },

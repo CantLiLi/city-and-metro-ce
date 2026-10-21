@@ -21,8 +21,8 @@
     return out;
   }
 
-  // ---------------- 布局：从地理位置出发，迭代使区间趋向 0°/45°/90°、间距均匀 ----------------
-  function layout(net, xfers, geographic) {
+  // 两种布局都从真实网络取站点、区间及换乘；简洁图另行排布八方向线路。
+  function layout(net, xfers) {
     const pairs = new Map();
     for (const id in net.segments) {
       const s = net.segments[id];
@@ -35,66 +35,203 @@
     const st = [], ix = new Map();
     const add = function (sid) { if (!ix.has(sid)) { ix.set(sid, st.length); st.push(sid); } };
     pairs.forEach(function (e) { add(e.a); add(e.b); });
-    const N = st.length, X = new Float64Array(N), Y = new Float64Array(N), GX = new Float64Array(N), GY = new Float64Array(N);
+    const N = st.length;
     const edges = [];
     pairs.forEach(function (e) { const A = net.stations[e.a], B = net.stations[e.b]; edges.push({ a: ix.get(e.a), b: ix.get(e.b), lines: e.lines, geo: U.dist(A.x, A.y, B.x, B.y) }); });
     const xEdges = [];
     for (const t of xfers) if (ix.has(t.a) && ix.has(t.b)) xEdges.push({ a: ix.get(t.a), b: ix.get(t.b), xfer: true, len: 0.75 });
-    if (!N) return { st: st, X: X, Y: Y, edges: edges, xEdges: xEdges, nb: [] };
+    if (!N) return { st: st, edges: edges, xEdges: xEdges, nb: [] };
     const lens = edges.map(function (e) { return e.geo; }).sort(function (a, b) { return a - b; });
     const L = Math.max(0.5, lens[Math.floor(lens.length / 2)]);
-    for (let i = 0; i < N; i++) { const s = net.stations[st[i]]; GX[i] = X[i] = s.x / L; GY[i] = Y[i] = s.y / L; }
     const nb = st.map(function () { return []; });
-    for (const e of edges) { nb[e.a].push(e.b); nb[e.b].push(e.a); e.len = 1 + 0.35 * U.clamp(e.geo / L - 1, 0, 2); }
-    if (geographic) return { st: st, X: X, Y: Y, edges: edges, xEdges: xEdges, nb: nb, L: L };
-    const all = edges.concat(xEdges);
-    const Q = Math.PI / 4, iters = N > 260 ? 240 : 380;
-    const relax = function (k) {
-      for (const e of all) {
-        const dx = X[e.b] - X[e.a], dy = Y[e.b] - Y[e.a];
-        const th = Math.round(Math.atan2(dy, dx) / Q) * Q;
-        const cx = (Math.cos(th) * e.len - dx) * k * 0.5, cy = (Math.sin(th) * e.len - dy) * k * 0.5;
-        X[e.a] -= cx; Y[e.a] -= cy; X[e.b] += cx; Y[e.b] += cy;
-      }
-    };
-    for (let it = 0; it < iters; it++) {
-      relax(0.3 * (1 - it / (iters * 1.15)));
-      for (let i = 0; i < N; i++) {
-        if (nb[i].length !== 2) continue;
-        const a = nb[i][0], b = nb[i][1];
-        X[i] += ((X[a] + X[b]) / 2 - X[i]) * 0.06; Y[i] += ((Y[a] + Y[b]) / 2 - Y[i]) * 0.06;
-      }
-      for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
-        const dx = X[j] - X[i], dy = Y[j] - Y[i], d = Math.hypot(dx, dy);
-        if (d >= 0.9 || d < 1e-9) continue;
-        const p = (0.9 - d) / d * 0.25;
-        X[i] -= dx * p; Y[i] -= dy * p; X[j] += dx * p; Y[j] += dy * p;
-      }
-      if (it < iters * 0.6) for (let i = 0; i < N; i++) { X[i] += (GX[i] - X[i]) * 0.006; Y[i] += (GY[i] - Y[i]) * 0.006; }
+    for (const e of edges) { nb[e.a].push(e.b); nb[e.b].push(e.a); }
+    return { st: st, edges: edges, xEdges: xEdges, nb: nb, L: L };
+  }
+
+  const cross = function (ax, ay, bx, by) { return ax * by - ay * bx; };
+  function diagramAxis(size, values, L, stations, axis) {
+    const sorted = Array.from(new Set(values)).sort(function (a, b) { return a - b; }), groups = [];
+    for (const v of sorted) { const g = groups[groups.length - 1]; if (g && v - g[g.length - 1] < L * 0.26 && v - g[0] < L * 0.5 && !stations.some(function (a) { return a[axis] === v && stations.some(function (b) { const other = axis === 'x' ? 'y' : 'x'; return b[axis] >= g[0] && b[axis] <= g[g.length - 1] && Math.abs(a[other] - b[other]) < L * 0.55; }); })) g.push(v); else groups.push([v]); }
+    const knots = []; let last = null, dest = 0;
+    for (const g of groups) {
+      const a = g[0], b = g[g.length - 1], c = (a + b) / 2;
+      dest = last == null ? c : dest + Math.max(L * 0.8, c - last);
+      if (a === b) knots.push([a, dest]); else knots.push([a, dest - (b - a) * 0.05], [b, dest + (b - a) * 0.05]);
+      last = c;
     }
-    for (let it = 0; it < 80; it++) relax(0.5);
-    return { st: st, X: X, Y: Y, edges: edges, xEdges: xEdges, nb: nb, L: L };
+    if (knots[0][0] > 0) knots.unshift([0, knots[0][1] - knots[0][0]]);
+    if (knots.at(-1)[0] < size) { const p = knots.at(-1); knots.push([size, p[1] + size - p[0]]); }
+    if (knots.length === 1) knots.push([knots[0][0] + 1, knots[0][1] + 1]);
+    const map = function (x, inverse) { const k = inverse ? 1 : 0, v = 1 - k; let lo = 0, hi = knots.length - 1; while (hi - lo > 1) { const mid = (hi + lo) >> 1; if (knots[mid][k] <= x) lo = mid; else hi = mid; } return knots[lo][v] + (x - knots[lo][k]) / (knots[hi][k] - knots[lo][k]) * (knots[hi][v] - knots[lo][v]); };
+    return { knots: knots, map: function (x) { return map(x, false); }, inverse: function (x) { return map(x, true); } };
+  }
+  function schematicProjection(net, lay, spacing) {
+    const scale = UNIT * spacing / lay.L;
+    const ax = diagramAxis(CM.CFG.W, lay.st.map(function (sid) { return net.stations[sid].x; }), lay.L, Object.values(net.stations), 'x'), ay = diagramAxis(CM.CFG.H, lay.st.map(function (sid) { return net.stations[sid].y; }), lay.L, Object.values(net.stations), 'y');
+    const base = function (x, y) { return [ax.map(x) * scale + base.ox, ay.map(y) * scale + base.oy]; };
+    base.ox = 0; base.oy = 0; base.scale = scale; base.ax = ax; base.ay = ay;
+    base.inverse = function (x, y) { return [ax.inverse((x - base.ox) / scale), ay.inverse((y - base.oy) / scale)]; };
+    base.sourcePath = function (pts) { return pts.map(function (p) { return base.inverse(p[0], p[1]); }); };
+    base.path = function (pts, closed) { if (!pts.length) return []; const out = [base(pts[0][0], pts[0][1])]; for (let i = 1; i < pts.length + (closed ? 1 : 0); i++) { const a = pts[i - 1], b = pts[i % pts.length], cuts = [1]; for (const pair of [[ax, 0], [ay, 1]]) { const k = pair[1], d = b[k] - a[k]; if (d) for (const knot of pair[0].knots) { const t = (knot[0] - a[k]) / d; if (t > 0 && t < 1) cuts.push(t); } } cuts.sort(function (a, b) { return a - b; }); for (const t of cuts) out.push(base(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)); } return out; };
+    return base;
+  }
+
+  function cleanPoints(points) {
+    const out = [];
+    for (const p of points) {
+      if (out.length && Math.hypot(p[0] - out[out.length - 1][0], p[1] - out[out.length - 1][1]) < 1e-9) continue;
+      while (out.length > 1) { const a = out[out.length - 2], b = out[out.length - 1], ux = b[0] - a[0], uy = b[1] - a[1], vx = p[0] - b[0], vy = p[1] - b[1]; if (Math.abs(cross(ux, uy, vx, vy)) > 1e-9 || ux * vx + uy * vy < 0) break; out.pop(); }
+      out.push(p.slice());
+    }
+    return out;
+  }
+  function simplifyPoints(points, tolerance, closed) {
+    let src = points;
+    if (closed && src.length > 1 && U.dist(src[0][0], src[0][1], src[src.length - 1][0], src[src.length - 1][1]) < 1e-6) src = src.slice(0, -1);
+    const reduce = function (p) {
+      if (p.length < 3) return p;
+      const keep = new Set([0, p.length - 1]), stack = [[0, p.length - 1]];
+      while (stack.length) {
+        const range = stack.pop(), a = p[range[0]], b = p[range[1]], dx = b[0] - a[0], dy = b[1] - a[1], len = dx * dx + dy * dy;
+        let furthest = -1, max = tolerance * tolerance;
+        for (let i = range[0] + 1; i < range[1]; i++) { const q = p[i], t = len ? U.clamp(((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / len, 0, 1) : 0, d = Math.pow(q[0] - a[0] - dx * t, 2) + Math.pow(q[1] - a[1] - dy * t, 2); if (d > max) { max = d; furthest = i; } }
+        if (furthest >= 0) { keep.add(furthest); stack.push([range[0], furthest], [furthest, range[1]]); }
+      }
+      return p.filter(function (v, i) { return keep.has(i); });
+    };
+    if (!closed) return reduce(src);
+    if (src.length < 5) return src;
+    const mid = Math.floor(src.length / 2), out = reduce(src.slice(0, mid + 1)).slice(0, -1).concat(reduce(src.slice(mid).concat([src[0]])).slice(0, -1));
+    return out.length >= 3 ? out : src;
+  }
+  function roundRoute(points, radius, closed) {
+    const p = cleanPoints(points), samples = [], f = function (p) { return p[0].toFixed(3) + ' ' + p[1].toFixed(3); };
+    if (p.length < 2) return { d: p.length ? 'M' + f(p[0]) : '', samples: p };
+    const corner = function (i) {
+      const a = p[(i - 1 + p.length) % p.length], b = p[i], c = p[(i + 1) % p.length], da = U.dist(a[0], a[1], b[0], b[1]), dc = U.dist(c[0], c[1], b[0], b[1]), r = Math.min(typeof radius === 'function' ? radius(b, i) : radius, da * 0.4, dc * 0.4);
+      return { b: b, round: r, before: [b[0] + (a[0] - b[0]) * r / (da || 1), b[1] + (a[1] - b[1]) * r / (da || 1)], after: [b[0] + (c[0] - b[0]) * r / (dc || 1), b[1] + (c[1] - b[1]) * r / (dc || 1)] };
+    };
+    const first = closed ? corner(0).after : p[0]; let d = 'M' + f(first); samples.push(first);
+    for (let k = 1; k < p.length + (closed ? 1 : 0); k++) {
+      if (!closed && k === p.length - 1) { d += 'L' + f(p[k]); samples.push(p[k]); continue; }
+      const c = corner(k % p.length); d += 'L' + f(c.before); samples.push(c.before);
+      if (c.round > 0) { d += 'Q' + f(c.b) + ' ' + f(c.after); for (let j = 1; j <= 8; j++) { const t = j / 8, u = 1 - t; samples.push([u * u * c.before[0] + 2 * u * t * c.b[0] + t * t * c.after[0], u * u * c.before[1] + 2 * u * t * c.b[1] + t * t * c.after[1]]); } }
+    }
+    return { d: d + (closed ? 'Z' : ''), samples: samples };
+  }
+  function octilinearOptions(a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], sx = Math.sign(dx), sy = Math.sign(dy), m = Math.min(Math.abs(dx), Math.abs(dy)), out = [];
+    if (Math.min(Math.abs(dx), Math.abs(dy), Math.abs(Math.abs(dx) - Math.abs(dy))) < 1e-6) out.push([a, b]);
+    out.push([a, [a[0] + sx * m, a[1] + sy * m], b], [a, [b[0] - sx * m, b[1] - sy * m], b]);
+    if (Math.abs(dx) > Math.abs(dy)) { const l = (Math.abs(dx) - Math.abs(dy)) / 2; out.push([a, [a[0] + sx * l, a[1]], [b[0] - sx * l, b[1]], b]); }
+    else { const l = (Math.abs(dy) - Math.abs(dx)) / 2; out.push([a, [a[0], a[1] + sy * l], [b[0], b[1] - sy * l], b]); }
+    for (const t of [0.35, 0.5, 0.65]) { const x = a[0] + dx * t, y = a[1] + dy * t; out.push([a, [x, a[1]], [x, b[1]], b], [a, [a[0], y], [b[0], y], b]); }
+    const seen = new Set();
+    return out.map(cleanPoints).filter(function (p) { const key = p.map(function (v) { return v[0].toFixed(6) + ',' + v[1].toFixed(6); }).join(';'); if (seen.has(key)) return false; seen.add(key); return true; });
+  }
+  function diagramRoute(track, net, base) {
+    const s = track.seg, a = base(net.stations[s.a].x, net.stations[s.a].y), b = base(net.stations[s.b].x, net.stations[s.b].y);
+    const tangent = function (sid, other) {
+      const p = base(net.stations[sid].x, net.stations[sid].y), end = base(net.stations[other].x, net.stations[other].y), len = U.dist(p[0], p[1], end[0], end[1]) || 1;
+      let dx = (end[0] - p[0]) / len, dy = (end[1] - p[1]) / len, best = null, dot = 0.4;
+      for (const id in net.segments) { const e = net.segments[id]; if (e.line !== s.line || e.id === s.id || (e.a !== sid && e.b !== sid)) continue; const o = net.stations[e.a === sid ? e.b : e.a], q = base(o.x, o.y), l = U.dist(p[0], p[1], q[0], q[1]) || 1, ox = (q[0] - p[0]) / l, oy = (q[1] - p[1]) / l, d = dx * ox + dy * oy; if (d < dot) { dot = d; best = [ox, oy]; } }
+      if (best) { dx -= best[0]; dy -= best[1]; }
+      const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * Math.PI / 4; return [Math.cos(angle), Math.sin(angle)];
+    };
+    const ta = tangent(s.a, s.b), tb = tangent(s.b, s.a), arm = Math.min(20, U.dist(a[0], a[1], b[0], b[1]) / 5);
+    const aa = [a[0] + ta[0] * arm, a[1] + ta[1] * arm], bb = [b[0] + tb[0] * arm, b[1] + tb[1] * arm];
+    let best = null;
+    const inspect = function (raw, radius, fallback) {
+      const clean = cleanPoints(raw), rounded = roundRoute(clean, radius, false);
+      let obstacles = 0;
+      for (const node of base.nodes) {
+        if (node.id === s.a || node.id === s.b) continue;
+        for (let i = 1; i < rounded.samples.length; i++) {
+          const p = rounded.samples[i - 1], q = rounded.samples[i], dx = q[0] - p[0], dy = q[1] - p[1], len = dx * dx + dy * dy;
+          const t = len ? U.clamp(((node.p[0] - p[0]) * dx + (node.p[1] - p[1]) * dy) / len, 0, 1) : 0;
+          if (U.dist(node.p[0], node.p[1], p[0] + t * dx, p[1] + t * dy) < 16) { obstacles++; break; }
+        }
+      }
+      let length = 0; for (let i = 1; i < clean.length; i++) length += U.dist(clean[i - 1][0], clean[i - 1][1], clean[i][0], clean[i][1]);
+      const score = obstacles * 1e6 + length + clean.length * 22 + (18 - radius) * 0.5 + (fallback ? 4 : 0);
+      if (!best || score < best.score) best = { raw: clean, radius: radius, samples: rounded.samples, obstacles: obstacles, score: score };
+    };
+    for (const raw of octilinearOptions(a, b)) inspect(raw, 18, false);
+    if (!best.obstacles && best.raw.length === 2) return best;
+    for (const raw of octilinearOptions(aa, bb)) inspect([a].concat(raw, [b]), 14, false);
+    if (best.obstacles) for (const offset of [20, -20, 36, -36, 64, -64, 96, -96, 160, -160, 256, -256]) {
+      const x = (a[0] + b[0]) / 2 + offset, y = (a[1] + b[1]) / 2 + offset;
+      inspect([a, [a[0], y], [b[0], y], b], 18, false);
+      inspect([a, [x, a[1]], [x, b[1]], b], 18, false);
+    }
+    if (best.obstacles) for (const tolerance of [24, 10, 3, 0.5, 0]) {
+      const skeleton = tolerance ? simplifyPoints(track.screen, tolerance, false) : track.screen, raw = [skeleton[0]];
+      for (let i = 1; i < skeleton.length; i++) { const options = octilinearOptions(skeleton[i - 1], skeleton[i]); const choice = options[Math.abs(skeleton[i][0] - skeleton[i - 1][0]) > Math.abs(skeleton[i][1] - skeleton[i - 1][1]) ? 0 : 1] || options[0]; raw.push.apply(raw, choice.slice(1)); }
+      for (const radius of [14, 5, 0]) inspect(raw, radius, true);
+      if (!best.obstacles) break;
+    }
+    // 地图拉直后不让区间穿过无关站标，避免制造不存在的换乘。
+    for (let pass = 0; pass < 6 && best.obstacles; pass++) {
+      const raw = best.raw;
+      for (let i = 1; i < raw.length; i++) {
+        const p = raw[i - 1], q = raw[i], len = U.dist(p[0], p[1], q[0], q[1]); if (len < 1) continue;
+        const ux = (q[0] - p[0]) / len, uy = (q[1] - p[1]) / len;
+        for (const node of base.nodes) {
+          if (node.id === s.a || node.id === s.b) continue;
+          const along = (node.p[0] - p[0]) * ux + (node.p[1] - p[1]) * uy, normal = -(node.p[0] - p[0]) * uy + (node.p[1] - p[1]) * ux;
+          if (along < 0 || along > len || Math.abs(normal) >= 16) continue;
+          const t0 = Math.max(0, along - 32), t1 = Math.min(len, along + 32), a = [p[0] + ux * t0, p[1] + uy * t0], b = [p[0] + ux * t1, p[1] + uy * t1];
+          for (const side of [20, -20, 32, -32, 64, -64]) inspect(raw.slice(0, i).concat([a, [a[0] - uy * side, a[1] + ux * side], [b[0] - uy * side, b[1] + ux * side], b], raw.slice(i)), 14, true);
+        }
+      }
+      if (raw === best.raw) break;
+    }
+    return best;
+  }
+
+  function projection(net, lay, spacing) {
+    if (!geographic) return schematicProjection(net, lay, spacing);
+    const unit = UNIT * spacing;
+    const identity = function (size) { return { knots: [[0, 0], [size, size]], map: function (x) { return x; } }; };
+    const ax = identity(CM.CFG.W);
+    const ay = identity(CM.CFG.H);
+    const base = function (x, y) { return [ax.map(x) * unit / lay.L + base.ox, ay.map(y) * unit / lay.L + base.oy]; };
+    base.ox = 0; base.oy = 0; base.scale = unit / lay.L; base.ax = ax; base.ay = ay;
+    // 地理模式的轨道、水岸与岛屿使用同一等比例投影。
+    base.path = function (pts, closed) {
+      if (!pts.length) return [];
+      const out = [base(pts[0][0], pts[0][1])];
+      for (let i = 1; i < pts.length + (closed ? 1 : 0); i++) {
+        const a = pts[i - 1], b = pts[i % pts.length], cuts = [1];
+        cuts.sort(function (a, b) { return a - b; });
+        let last = -1;
+        for (const t of cuts) { if (t - last < 1e-8) continue; out.push(base(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)); last = t; }
+      }
+      return out;
+    };
+    return base;
   }
 
   // 地理线网中，地形、实际轨道和车站共用等比例投影；不移动岸线或省略小水面。
   let showTerrain = true, geographic = true;
   function terrainSVG(net, lay, base, boxes) {
+    if (!geographic) return '';
     const Geo = CM.Geo, city = game() && game().city;
     if (!Geo || !Geo.water || !lay.L) return '';
     const f = function (v) { return v.toFixed(2); };
-    const points = function (p) {
-      const out = [];
-      for (let k = 0; k + 1 < p.length; k += 2) { const q = base(p[k], p[k + 1]); out.push(f(q[0]) + ' ' + f(q[1])); }
-      return out.length ? 'M' + out.join('L') : '';
+    const points = function (p, closed) {
+      const src = []; for (let k = 0; k + 1 < p.length; k += 2) src.push([p[k], p[k + 1]]);
+      const out = base.path(src, closed);
+      return out.length ? pathPoints(out) : '';
     };
-    const polygon = function (feat) { return feat.rings.map(function (r) { const d = points(r.p); return d ? d + 'Z' : ''; }).join(''); };
+    const polygon = function (feat) { return feat.rings.map(function (r) { const d = points(r.p, true); return d ? d + 'Z' : ''; }).join(''); };
     const inMap = function (b) { return b && b[2] >= 0 && b[0] <= CM.CFG.W && b[3] >= 0 && b[1] <= CM.CFG.H; };
     const named = [];
     const features = function (feats, cls) {
       let out = '';
       for (const feat of feats) {
         if (!inMap(feat.bbox)) continue;
-        const d = polygon(feat);
+        const d = polygon(feat, cls);
         if (d) out += '<path class="' + cls + '" fill-rule="evenodd" d="' + d + '"/>';
         if (cls === 'nm-water' && feat.name && feat.rings.length) {
           const p = feat.rings[0].p, k = Math.floor(p.length / 4) * 2;
@@ -103,15 +240,16 @@
       }
       return out;
     };
-    const green = features(Geo.reserves.concat(Geo.woods, Geo.parks), 'nm-green');
+    const greenFeats = Geo.reserves.concat(Geo.woods, Geo.parks);
+    const green = features(greenFeats, 'nm-green');
     let water = features(Geo.water, 'nm-water'), rivers = '';
     // 历史上尚未填出的土地仍是水面，沿用城市系统当前年份的几何。
     if (city && city.reclaimFeats) water += features(city.reclaimFeats(true), 'nm-water');
     for (const river of Geo.waterLines) {
       if (!inMap(river.bbox)) continue;
+      // 地理模式直接绘制原河道及其等比例宽度。
       const d = points(river.p); if (!d) continue;
-      // 与城市水域判定一致，不再为了可见性把窄河夸大到数个像素宽。
-      rivers += '<path d="' + d + '" stroke-width="' + f(Math.max(river.w, 0.05) * UNIT / lay.L) + '"/>';
+      rivers += '<path d="' + d + '" stroke-width="' + f(Math.max(river.w, 0.05) * base.scale) + '"/>';
       const k = Math.floor(river.p.length / 4) * 2;
       if (river.name && k + 1 < river.p.length) named.push({ name: river.name, q: base(river.p[k], river.p[k + 1]), size: river.p.length });
     }
@@ -119,30 +257,26 @@
     named.sort(function (a, b) { return b.size - a.size; });
     for (const item of named) {
       const q = item.q;
-      if (seen.has(item.name) || seen.size >= 8 || q[0] < 0 || q[0] > lay.vw || q[1] < 0 || q[1] > lay.vh) continue;
+      if (seen.has(item.name) || seen.size >= 6 || q[0] < 0 || q[0] > lay.vw || q[1] < 0 || q[1] > lay.vh) continue;
       const tw = item.name.length * 13 + 6, box = [q[0] - tw / 2, q[1] - 9, q[0] + tw / 2, q[1] + 9];
       if (boxes.some(function (b) { return Math.min(box[2], b[2]) > Math.max(box[0], b[0]) && Math.min(box[3], b[3]) > Math.max(box[1], b[1]); })) continue;
       seen.add(item.name); boxes.push(box);
       labels += '<text x="' + f(q[0]) + '" y="' + f(q[1] + 4.5) + '" text-anchor="middle" class="nm-wlabel">' + U.esc(item.name) + '</text>';
     }
     const a = base(0, 0), b = base(CM.CFG.W, CM.CFG.H);
-    return '<defs><clipPath id="nmGeoClip"><rect x="' + f(a[0]) + '" y="' + f(a[1]) + '" width="' + f(b[0] - a[0]) + '" height="' + f(b[1] - a[1]) + '"/></clipPath></defs>' +
+    const clip = '<rect x="' + f(a[0]) + '" y="' + f(a[1]) + '" width="' + f(b[0] - a[0]) + '" height="' + f(b[1] - a[1]) + '"/>';
+    return '<defs><clipPath id="nmGeoClip">' + clip + '</clipPath></defs>' +
       '<g class="nm-terrain" clip-path="url(#nmGeoClip)" stroke-linejoin="round" stroke-linecap="round">' + green + water + '<g class="nm-river" fill="none">' + rivers + '</g>' + labels + '</g>';
   }
 
   // ---------------- 绘制 ----------------
-  const UNIT = 80;
+  const UNIT = 96;
+  const LABEL_SIZE = 20;
   const TYPE_NAME = { underground: '地下', surface: '地面', elevated: '高架' };
-  function seg(x1, y1, x2, y2, col, type, lid) {
-    const d = 'M' + x1.toFixed(1) + ' ' + y1.toFixed(1) + 'L' + x2.toFixed(1) + ' ' + y2.toFixed(1);
-    let s = '<g data-line="' + lid + '"><path d="' + d + '" stroke="' + col + '" stroke-width="' + (type === 'elevated' ? 7.5 : 6) + '"/>';
-    if (type === 'elevated') s += '<path d="' + d + '" class="nm-elev"/>';          // 高架：中间白线（双线）
-    else if (type === 'surface') s += '<path d="' + d + '" class="nm-surf"/>';      // 地面：白色枕木纹
-    return s + '</g>';
-  }
+  const pathPoints = function (pts) { const digits = geographic ? 2 : 3; return 'M' + pts.map(function (p) { return p[0].toFixed(digits) + ' ' + p[1].toFixed(digits); }).join('L'); };
   function geoSeg(entry, base, net, width) {
     const s = entry.seg, L = net.lines[s.line];
-    const d = 'M' + entry.geom.pts.map(function (p) { const q = base(p[0], p[1]); return q[0].toFixed(2) + ' ' + q[1].toFixed(2); }).join('L');
+    const d = entry.route ? roundRoute(entry.route.raw, entry.route.radius, false).d : pathPoints(entry.screen);
     let out = '<g data-line="' + s.line + '" data-segment="' + s.id + '"><title>' + U.esc(L.name + ' · ' + TYPE_NAME[s.type] + '区间') + '</title><path d="' + d + '" stroke="' + L.color + '" stroke-width="' + width + '"/>';
     if (s.type === 'elevated') out += '<path d="' + d + '" class="nm-elev"/>';
     else if (s.type === 'surface') out += '<path d="' + d + '" class="nm-surf"/>';
@@ -152,7 +286,7 @@
   // 深色外环 + 按各线路颜色分段的内环 + ⇄ 换乘箭头（上箭头向右、下箭头向左）
   function stationMark(s, x, y, lines, net, inter, tip) {
     const attrs = 'data-st="' + s.id + '" data-lines="' + lines.join(' ') + '"', f = function (v) { return v.toFixed(1); };
-    if (!inter) return '<circle ' + attrs + ' cx="' + f(x) + '" cy="' + f(y) + '" r="5.5" class="nm-st" stroke="' + net.lines[lines[0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
+    if (!inter) return '<circle ' + attrs + ' cx="' + f(x) + '" cy="' + f(y) + '" r="6.5" class="nm-st" stroke="' + net.lines[lines[0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
     const r = 11, ow = 3.3, rr = r - ow / 2 - 1.5, n = lines.length, gap = n > 1 ? 0.22 : 0;
     let out = '<g ' + attrs + ' class="nm-x"><title>' + U.esc(tip) + '</title><circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
     if (n === 1) out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + f(rr) + '" class="nm-xa" stroke="' + net.lines[lines[0]].color + '"/>';
@@ -164,67 +298,123 @@
     out += '<path class="nm-xg" d="M' + f(x - gs) + ' ' + f(y - a) + 'L' + f(x + gs) + ' ' + f(y - a) + 'L' + f(x + gs - hd) + ' ' + f(y - a - hd) + 'M' + f(x + gs) + ' ' + f(y + a) + 'L' + f(x - gs) + ' ' + f(y + a) + 'L' + f(x - gs + hd) + ' ' + f(y + a + hd) + '"/>';
     return out + '</g>';
   }
-  function build(g) {
+  // 站名采用实际字体量宽；空间网格让密集线网的避让只查询邻近占位。
+  function labelIndex() {
+    const cells = new Map(), boxes = [], cell = 64;
+    const keys = function (b, visit) {
+      for (let x = Math.floor(b[0] / cell); x <= Math.floor(b[2] / cell); x++) for (let y = Math.floor(b[1] / cell); y <= Math.floor(b[3] / cell); y++) visit(x + ':' + y);
+    };
+    return {
+      boxes: boxes,
+      add: function (b, weight) {
+        const o = { b: b, weight: weight || 1 }; boxes.push(b);
+        keys(b, function (key) { if (!cells.has(key)) cells.set(key, []); cells.get(key).push(o); });
+      },
+      overlap: function (b) {
+        let score = 0; const seen = new Set();
+        keys(b, function (key) { for (const o of cells.get(key) || []) {
+          if (seen.has(o)) continue; seen.add(o);
+          const w = Math.min(b[2], o.b[2]) - Math.max(b[0], o.b[0]), hh = Math.min(b[3], o.b[3]) - Math.max(b[1], o.b[1]);
+          if (w > 0 && hh > 0) score += w * hh * o.weight;
+        } });
+        return score;
+      }
+    };
+  }
+  function stationText(name, measure) {
+    const chars = Array.from(String(name)), width = measure.measureText(name).width;
+    if (width <= 112) return [String(name)];
+    const count = Math.ceil(width / 112), target = width / count, rows = [];
+    let row = '';
+    for (const c of chars) {
+      if (row && measure.measureText(row + c).width > target + measure.measureText(c).width * 0.4 && rows.length < count - 1) { rows.push(row); row = ''; }
+      row += c;
+    }
+    if (row) rows.push(row);
+    return rows;
+  }
+  function build(g, spacing, attempt) {
+    spacing = spacing || 1; attempt = attempt || 0;
     const net = useDraft && g.draft ? g.draft.net : g.net;
     const xfers = walkTransfers(g, net);
-    const lay = layout(net, xfers, geographic);
+    const lay = layout(net, xfers);
     const N = lay.st.length;
     if (!N) return h('div', { class: 'nm-empty' }, CM.icon('network', 40), h('div', null, useDraft ? '草案中还没有轨道。' : '还没有运营线路。'), h('div', { class: 'tiny muted' }, '用「绘线」工具连接两座以上的车站，确认建设后会显示在这里。'));
-    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    for (let i = 0; i < N; i++) { x0 = Math.min(x0, lay.X[i]); x1 = Math.max(x1, lay.X[i]); y0 = Math.min(y0, lay.Y[i]); y1 = Math.max(y1, lay.Y[i]); }
-    const tracks = [];
-    if (geographic) for (const id of M.sortIds(Object.keys(net.segments))) {
+    const base = projection(net, lay, spacing);
+    if (!geographic) base.nodes = lay.st.map(function (sid) { const s = net.stations[sid]; return { id: sid, p: base(s.x, s.y) }; });
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const bound = function (p) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); };
+    for (const sid of lay.st) { const s = net.stations[sid]; bound(base(s.x, s.y)); }
+    const tracks = [], sharedRoutes = new Map();
+    for (const id of M.sortIds(Object.keys(net.segments))) {
       const s = net.segments[id];
       if (!net.lines[s.line] || !net.stations[s.a] || !net.stations[s.b]) continue;
-      const geom = M.segGeom(net, s, g.city); tracks.push({ seg: s, geom: geom });
-      for (const p of geom.pts) { x0 = Math.min(x0, p[0] / lay.L); x1 = Math.max(x1, p[0] / lay.L); y0 = Math.min(y0, p[1] / lay.L); y1 = Math.max(y1, p[1] / lay.L); }
+      const geom = M.segGeom(net, s, g.city), screen = base.path(geom.pts);
+      const track = { seg: s, geom: geom, screen: screen };
+      if (!geographic) {
+        const points = geom.pts.map(function (p) { return p[0].toFixed(6) + ',' + p[1].toFixed(6); }), forward = points.join(';'), reverse = points.slice().reverse().join(';'), key = forward < reverse ? forward : reverse, previous = sharedRoutes.get(key);
+        if (previous) {
+          const same = previous.forward === forward, route = previous.route;
+          track.route = Object.assign({}, route, { raw: route.raw.map(function (p) { return p.slice(); }), samples: route.samples.map(function (p) { return p.slice(); }) });
+          if (!same) { track.route.raw.reverse(); track.route.samples.reverse(); }
+        } else { track.route = diagramRoute(track, net, base); sharedRoutes.set(key, { forward: forward, route: track.route }); }
+        track.screen = track.route.samples;
+      }
+      tracks.push(track); track.screen.forEach(bound);
     }
-    const pad = 1.8, W = (x1 - x0 + 2 * pad) * UNIT, H = (y1 - y0 + 2 * pad) * UNIT;
-    const px = function (i) { return (lay.X[i] - x0 + pad) * UNIT; }, py = function (i) { return (lay.Y[i] - y0 + pad) * UNIT; };
-    const base = function (x, y) { return [(x / lay.L - x0 + pad) * UNIT, (y / lay.L - y0 + pad) * UNIT]; };
+    const pad = 64, W = x1 - x0 + 2 * pad, H = y1 - y0 + 2 * pad;
+    base.ox = pad - x0; base.oy = pad - y0;
+    for (const track of tracks) {
+      for (const p of track.screen) { p[0] += base.ox; p[1] += base.oy; }
+      if (track.route) for (const p of track.route.raw) { p[0] += base.ox; p[1] += base.oy; }
+    }
+    const positions = lay.st.map(function (sid) { const s = net.stations[sid]; return base(s.x, s.y); });
+    const px = function (i) { return positions[i][0]; }, py = function (i) { return positions[i][1]; };
     const linesOf = lay.st.map(function () { return []; });
     for (const e of lay.edges) for (const l of e.lines) { if (linesOf[e.a].indexOf(l.lid) < 0) linesOf[e.a].push(l.lid); if (linesOf[e.b].indexOf(l.lid) < 0) linesOf[e.b].push(l.lid); }
     const walkSet = new Set(); for (const e of lay.xEdges) { walkSet.add(e.a); walkSet.add(e.b); }
     // 占位：车站、线路（每 9 px 一个小方块）
-    const boxes = [];
-    const overlap = function (b) { let s = 0; for (const o of boxes) { const w = Math.min(b[2], o[2]) - Math.max(b[0], o[0]), hh = Math.min(b[3], o[3]) - Math.max(b[1], o[1]); if (w > 0 && hh > 0) s += w * hh; } return s; };
-    for (let i = 0; i < N; i++) { const r = linesOf[i].length > 1 || walkSet.has(i) ? 11 : 8; boxes.push([px(i) - r, py(i) - r, px(i) + r, py(i) + r]); }
+    const index = labelIndex(), boxes = index.boxes;
+    const overlap = index.overlap;
+    const extent = [0, 0, W, H];
+    const expand = function (b) { extent[0] = Math.min(extent[0], b[0] - 20); extent[1] = Math.min(extent[1], b[1] - 20); extent[2] = Math.max(extent[2], b[2] + 20); extent[3] = Math.max(extent[3], b[3] + 20); };
+    for (let i = 0; i < N; i++) { const r = linesOf[i].length > 1 || walkSet.has(i) ? 14 : 10; index.add([px(i) - r, py(i) - r, px(i) + r, py(i) + r], 8); }
     const occupy = function (pts) {
       let length = 0, next = 9;
       for (let k = 1; k < pts.length; k++) {
         const a = pts[k - 1], b = pts[k], d = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        while (d > 0 && next < length + d) { const t = (next - length) / d, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t; boxes.push([x - 5, y - 5, x + 5, y + 5]); next += 9; }
+        while (d > 0 && next < length + d) { const t = (next - length) / d, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t; index.add([x - 6, y - 6, x + 6, y + 6]); next += 9; }
         length += d;
       }
     };
-    if (geographic) for (const track of tracks) occupy(track.geom.pts.map(function (p) { return base(p[0], p[1]); }));
-    for (const e of geographic ? lay.xEdges : lay.edges.concat(lay.xEdges)) occupy([[px(e.a), py(e.a)], [px(e.b), py(e.b)]]);
+    for (const track of tracks) occupy(track.screen);
+    for (const e of lay.xEdges) occupy([[px(e.a), py(e.a)], [px(e.b), py(e.b)]]);
     const origin = base(0, 0);
-    let svg = '<svg class="nm-svg" data-mode="' + (geographic ? 'geographic' : 'schematic') + '" data-scale="' + UNIT / lay.L + '" data-origin-x="' + origin[0] + '" data-origin-y="' + origin[1] + '" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W.toFixed(0) + ' ' + H.toFixed(0) + '">';
+    const axes = ' data-projection="' + (geographic ? 'geographic' : 'octilinear') + '" data-axis-x="' + JSON.stringify(base.ax.knots.map(function (k) { return [k[0], base(k[0], 0)[0]]; })) + '" data-axis-y="' + JSON.stringify(base.ay.knots.map(function (k) { return [k[0], base(0, k[0])[1]]; })) + '"';
+    let svg = '<svg class="nm-svg" data-mode="' + (geographic ? 'geographic' : 'schematic') + '" data-spacing="' + spacing + '"' + axes + ' data-scale="' + base.scale + '" data-origin-x="' + origin[0] + '" data-origin-y="' + origin[1] + '" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W.toFixed(0) + ' ' + H.toFixed(0) + '">';
     // 站外换乘连线（虚线）
     svg += '<g class="nm-walk">';
-    for (const e of lay.xEdges) svg += '<path d="M' + px(e.a).toFixed(1) + ' ' + py(e.a).toFixed(1) + 'L' + px(e.b).toFixed(1) + ' ' + py(e.b).toFixed(1) + '"/>';
+    for (const e of lay.xEdges) svg += '<path data-lines="' + Array.from(new Set(linesOf[e.a].concat(linesOf[e.b]))).join(' ') + '" d="M' + px(e.a).toFixed(1) + ' ' + py(e.a).toFixed(1) + 'L' + px(e.b).toFixed(1) + ' ' + py(e.b).toFixed(1) + '"/>';
     svg += '</g>';
-    // 地理线网逐段沿实际轨道绘制；完全共线的区间用同心色带区分，不平移中心线。
-    svg += '<g class="nm-lines" stroke-linecap="round" stroke-linejoin="round" fill="none">';
-    if (geographic) {
+    // 地理图沿实际轨道，简洁图沿八方向骨架；完全共线区间复用路径并以同心色带区分。
+    let casing = '', routes = '';
+    {
       const groups = new Map();
       for (const track of tracks) {
-        const pts = track.geom.pts.map(function (p) { return p[0].toFixed(4) + ',' + p[1].toFixed(4); });
+        const pts = track.geom.pts.map(function (p) { return p[0].toFixed(6) + ',' + p[1].toFixed(6); });
         const forward = pts.join(';'), reverse = pts.slice().reverse().join(';'), key = forward < reverse ? forward : reverse;
         if (!groups.has(key)) groups.set(key, []); groups.get(key).push(track);
       }
-      for (const group of groups.values()) group.forEach(function (track, i) { svg += geoSeg(track, base, net, (track.seg.type === 'elevated' ? 7.5 : 6) + (group.length - 1 - i) * 4); });
-    } else for (const e of lay.edges) {
-      const ax = px(e.a), ay = py(e.a), bx = px(e.b), by = py(e.b);
-      const l = Math.hypot(bx - ax, by - ay) || 1, nx = -(by - ay) / l, ny = (bx - ax) / l;
-      e.lines.forEach(function (ln, q) {
-        const o = (q - (e.lines.length - 1) / 2) * 8, L = net.lines[ln.lid];
-        svg += seg(ax + nx * o, ay + ny * o, bx + nx * o, by + ny * o, L.color, ln.type, ln.lid);
-      });
+      for (const group of groups.values()) {
+        const widths = group.map(function (track, i) { return (track.seg.type === 'elevated' ? 9.5 : 8) + (group.length - 1 - i) * 4; });
+        const entry = group[0], d = entry.route ? roundRoute(entry.route.raw, entry.route.radius, false).d : pathPoints(entry.screen);
+        casing += '<path data-lines="' + group.map(function (track) { return track.seg.line; }).join(' ') + '" d="' + d + '" stroke-width="' + (Math.max.apply(null, widths) + 3) + '"/>';
+        group.forEach(function (track, i) { routes += geoSeg(track, base, net, widths[i]); });
+      }
     }
-    svg += '</g>';
-    // 终点线路编号
+    svg += '<g class="nm-casing" fill="none" stroke-linecap="round" stroke-linejoin="round">' + casing + '</g><g class="nm-lines" stroke-linecap="round" stroke-linejoin="round" fill="none">' + routes + '</g>';
+    const measure = document.createElement('canvas').getContext('2d'), font = getComputedStyle(document.body).fontFamily;
+    // 终点编号也参与避让，不盖住相邻车站和线路；长编号按文字宽度扩展。
     svg += '<g class="nm-badges">';
     for (const lid in net.lines) {
       const tp = M.lineTopo(net, lid);
@@ -233,53 +423,71 @@
         const i = lay.st.indexOf(sid); if (i < 0) continue;
         const jj = lay.st.indexOf(tp.adj.get(sid)[0].other); if (jj < 0) continue;
         const dx = px(i) - px(jj), dy = py(i) - py(jj), l = Math.hypot(dx, dy) || 1;
-        const L = net.lines[lid], bx = px(i) + dx / l * 26, by = py(i) + dy / l * 26, txt = String(L.num || L.name.replace(/[^0-9]/g, '') || '•');
-        boxes.push([bx - 13, by - 11, bx + 13, by + 11]);
-        svg += '<g data-line="' + lid + '"><rect x="' + (bx - 12).toFixed(1) + '" y="' + (by - 10).toFixed(1) + '" width="24" height="20" rx="6" fill="' + L.color + '"/><text x="' + bx.toFixed(1) + '" y="' + (by + 4.5).toFixed(1) + '" text-anchor="middle" class="nm-badge-t">' + U.esc(txt) + '</text></g>';
+        const L = net.lines[lid], txt = String(L.num || L.name.replace(/[^0-9]/g, '') || '•');
+        measure.font = '800 14px ' + font;
+        const w = Math.max(28, Math.ceil(measure.measureText(txt).width) + 12), dirs = [[dx / l, dy / l], [-dy / l, dx / l], [dy / l, -dx / l], [0, -1], [0, 1], [1, 0], [-1, 0]];
+        let best = null;
+        for (const dist of [30, 48, 70, 96]) {
+          for (const d of dirs) {
+            const bx = px(i) + d[0] * (dist + w * Math.abs(d[0]) / 2), by = py(i) + d[1] * dist;
+            const b = [bx - w / 2 - 2, by - 14, bx + w / 2 + 2, by + 14], ov = overlap(b);
+            if (!best || ov < best.ov) best = { x: bx, y: by, b: b, ov: ov };
+            if (!ov) break;
+          }
+          if (!best.ov) break;
+        }
+        index.add(best.b, 8); expand(best.b);
+        svg += '<g data-line="' + lid + '"><rect x="' + (best.x - w / 2).toFixed(1) + '" y="' + (best.y - 12).toFixed(1) + '" width="' + w + '" height="24" rx="7" fill="' + L.color + '"/><text x="' + best.x.toFixed(1) + '" y="' + (best.y + 5).toFixed(1) + '" text-anchor="middle" class="nm-badge-t">' + U.esc(txt) + '</text></g>';
       }
     }
     svg += '</g>';
-    // 车站与站名：先放换乘站，候选位置为 8 个方向 × 2 个距离，取无重叠（否则重叠最少）的位置
+    // 站名就近交错、长名分行；位置不足时扩展整张图，不用大量引线把名字拉走。
     const order = []; for (let i = 0; i < N; i++) order.push(i);
     order.sort(function (a, b) { return (linesOf[b].length + (walkSet.has(b) ? 1 : 0)) - (linesOf[a].length + (walkSet.has(a) ? 1 : 0)); });
-    let lab = '', dots = '';
-    const DIRS = [[1, 0], [-1, 0], [0, -1], [0, 1], [0.7, -0.7], [-0.7, -0.7], [0.7, 0.7], [-0.7, 0.7]];
+    let lab = '', dots = '', needsRoom = false;
+    const DIRS = [[0, -1], [0, 1], [1, 0], [-1, 0], [0.707, -0.707], [-0.707, -0.707], [0.707, 0.707], [-0.707, 0.707]];
     for (const i of order) {
       const s = net.stations[lay.st[i]], xfer = linesOf[i].length > 1, walk = walkSet.has(i), x = px(i), y = py(i);
-      const tw = s.name.length * 12.5 + 4, th = 15, r = xfer || walk ? 15 : 11;
-      // 优先放在与第一条相邻区段垂直的两侧
+      measure.font = (xfer || walk ? '700 ' : '500 ') + LABEL_SIZE + 'px ' + font;
+      const rows = stationText(s.name, measure), lineHeight = LABEL_SIZE + 5;
+      const tw = Math.ceil(Math.max.apply(null, rows.map(function (t) { return measure.measureText(t).width; }))) + 12, th = rows.length * lineHeight + 4, r = xfer || walk ? 18 : 14;
       const cands = [];
       if (lay.nb[i].length) { const a = lay.nb[i][0], vx = px(a) - x, vy = py(a) - y, l = Math.hypot(vx, vy) || 1; cands.push([-vy / l, vx / l], [vy / l, -vx / l]); }
       for (const d of DIRS) cands.push(d);
       let best = null;
-      for (const dist of [r, r + 16]) {
+      for (const dist of [r, r + 8, r + 18, r + 30, r + 44, r + 64, r + 90]) {
         for (const c of cands) {
           const cx = x + c[0] * dist, cy = y + c[1] * dist;
           const anchor = c[0] > 0.35 ? 'start' : (c[0] < -0.35 ? 'end' : 'middle');
           const bx0 = anchor === 'start' ? cx : (anchor === 'end' ? cx - tw : cx - tw / 2);
           const by0 = c[1] > 0.35 ? cy : (c[1] < -0.35 ? cy - th : cy - th / 2);
           const b = [bx0, by0, bx0 + tw, by0 + th], ov = overlap(b);
-          if (!best || ov < best.ov) best = { b: b, anchor: anchor, ov: ov };
-          if (ov === 0) break;
+          if (!best || ov < best.ov) best = { b: b, ov: ov, dist: dist };
+          if (!ov) break;
         }
-        if (best.ov === 0) break;
+        if (!best.ov) break;
       }
-      boxes.push(best.b);
-      const tx = best.anchor === 'start' ? best.b[0] : (best.anchor === 'end' ? best.b[2] : (best.b[0] + best.b[2]) / 2);
-      lab += '<text data-st="' + s.id + '" x="' + tx.toFixed(1) + '" y="' + (best.b[1] + 12).toFixed(1) + '" text-anchor="' + best.anchor + '" class="nm-label' + (xfer || walk ? ' x' : '') + '" data-lines="' + linesOf[i].join(' ') + '">' + U.esc(s.name) + '</text>';
+      index.add(best.b, 8); expand(best.b);
+      if (best.ov || best.dist > r + 18) needsRoom = true;
+      const tx = (best.b[0] + 6).toFixed(1), ty = best.b[1] + LABEL_SIZE + 2;
+      lab += '<text data-st="' + s.id + '" x="' + tx + '" y="' + ty.toFixed(1) + '" class="nm-label' + (xfer || walk ? ' x' : '') + '" data-lines="' + linesOf[i].join(' ') + '">' + rows.map(function (text, k) { return '<tspan x="' + tx + '" y="' + (ty + k * lineHeight).toFixed(1) + '">' + U.esc(text) + '</tspan>'; }).join('') + '</text>';
       const tip = s.name + (xfer ? '（站内换乘：' + linesOf[i].map(function (l) { return net.lines[l].name; }).join('、') + '）' : '') + (walk ? '（可步行换乘）' : '') + ' · ' + TYPE_NAME[s.type] + '站 · 点击在地图上定位';
       dots += stationMark(s, x, y, linesOf[i], net, xfer || walk, tip);
     }
+    if (needsRoom && attempt < 3) return build(g, spacing * 1.3, attempt + 1);
     svg += '<g class="nm-dots">' + dots + '</g><g class="nm-labels">' + lab + '</g></svg>';
+    // 留足全部站名与终点编号的边距；改变画幅而不移动任何地形、轨道或站标。
+    const fullW = Math.ceil(extent[2] - extent[0]), fullH = Math.ceil(extent[3] - extent[1]);
+    svg = svg.replace(/viewBox="[^"]*"/, 'viewBox="' + extent[0] + ' ' + extent[1] + ' ' + fullW + ' ' + fullH + '"');
     // 地形画在最下层；在车站与站名都放好之后再放水系名称（避让它们）
     if (geographic && showTerrain) {
-      lay.px = px; lay.py = py; lay.vw = W; lay.vh = H; lay.x0 = x0; lay.y0 = y0; lay.pad = pad;
+      lay.vw = W; lay.vh = H;
       const t = terrainSVG(net, lay, base, boxes);
       const at = svg.indexOf('>') + 1; svg = svg.slice(0, at) + t + svg.slice(at);
     }
     const wrap = h('div', { class: 'nm-canvas', html: svg });
     wrap.querySelectorAll('.nm-lines > g').forEach(function (node, i) { node.dataset.order = i; });
-    view = { x: 0, y: 0, w: W, h: H, W: W, H: H };
+    view = { x: extent[0], y: extent[1], w: fullW, h: fullH, W: fullW, H: fullH, fullX: extent[0], fullY: extent[1], cx: positions.reduce(function (sum, p) { return sum + p[0]; }, 0) / N, cy: positions.reduce(function (sum, p) { return sum + p[1]; }, 0) / N };
     return wrap;
   }
 
@@ -309,7 +517,7 @@
     const k = 1 - Math.exp(-dt * 14);
     view.x += (tgt.x - view.x) * k; view.y += (tgt.y - view.y) * k; view.w += (tgt.w - view.w) * k; view.h += (tgt.h - view.h) * k;
     const eps = view.w * 0.0015;
-    if (Math.abs(tgt.w - view.w) < eps && Math.abs(tgt.x - view.x) < eps && Math.abs(tgt.y - view.y) < eps) { Object.assign(view, tgt); tgt = null; }
+    if (Math.abs(tgt.w - view.w) < eps && Math.abs(tgt.h - view.h) < eps && Math.abs(tgt.x - view.x) < eps && Math.abs(tgt.y - view.y) < eps) { Object.assign(view, tgt); tgt = null; }
     setView();
     if (tgt) raf = requestAnimationFrame(tween); else lastT = 0;
   }
@@ -321,10 +529,21 @@
     const s = Math.max(base.w / r.width, base.h / r.height);
     const ox = (r.width - base.w / s) / 2, oy = (r.height - base.h / s) / 2;
     const mx = base.x + (clientX - r.left - ox) * s, my = base.y + (clientY - r.top - oy) * s;
-    const nw = U.clamp(base.w * f, view.W * 0.08, view.W * 2), k = nw / base.w;
+    const nw = U.clamp(base.w * f, Math.min(view.W, view.readW || view.W) * 0.08, Math.max(view.W, view.readW || view.W) * 2), k = nw / base.w;
     animateTo({ x: mx - (mx - base.x) * k, y: my - (my - base.y) * k, w: nw, h: base.h * k });
   }
-  function fitView() { if (view) animateTo({ x: 0, y: 0, w: view.W, h: view.H }); }
+  function fitView() { if (view) animateTo({ x: view.fullX, y: view.fullY, w: view.W, h: view.H }); }
+  function readableView(canvas) {
+    if (!view || !canvas.clientWidth || !canvas.clientHeight) return;
+    const w = canvas.clientWidth, hh = canvas.clientHeight, fit = Math.min(w / view.W, hh / view.H);
+    const scale = U.clamp(fit, (innerWidth <= 760 ? 13 : 14) / LABEL_SIZE, 1);
+    if (Math.abs(scale - fit) < 0.001) { view.readW = view.w; return; }
+    view.w = w / scale; view.h = hh / scale;
+    const center = function (c, size, start, full) { return size < full ? U.clamp(c - size / 2, start, start + full - size) : start + (full - size) / 2; };
+    view.x = center(view.cx, view.w, view.fullX, view.W); view.y = center(view.cy, view.h, view.fullY, view.H);
+    view.readW = view.w;
+    setView();
+  }
   function bindPanZoom(canvas) {
     const svg = canvas.querySelector('.nm-svg'); if (!svg) return;
     canvas.addEventListener('wheel', function (e) {
@@ -388,10 +607,10 @@
   // ---------------- 导出 PNG：完整网络（不受当前缩放与聚焦影响）+ 标题、日期与线路图例 ----------------
   function exportCSS(font) {
     return 'text{font-family:' + font + '}.nm-elev{fill:none;stroke:#fff;stroke-width:2.2}.nm-surf{fill:none;stroke:rgba(255,255,255,.95);stroke-width:3;stroke-dasharray:2 5;stroke-linecap:butt}' +
-      '.nm-walk path{fill:none;stroke:#25334a;stroke-width:3;stroke-dasharray:2 4;stroke-linecap:round;opacity:.8}.nm-st{fill:#fff;stroke-width:3.2}' +
+      '.nm-walk path{fill:none;stroke:#25334a;stroke-width:2;stroke-dasharray:2 4;stroke-linecap:round;opacity:.55}.nm-st{fill:#fff;stroke-width:3.2}.nm-casing{stroke:#fff}' +
       '.nm-xo{fill:#fff;stroke:#25334a;stroke-width:3.3}.nm-xa{fill:none;stroke-width:2.3}.nm-xg{fill:none;stroke:#25334a;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}' +
-      '.nm-label{font-size:12.5px;fill:#1f2a3a;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.nm-label.x{font-weight:700}.nm-badge-t{font-size:12px;font-weight:800;fill:#fff}' +
-      '.nm-water{fill:#dcecf8;stroke:none}.nm-river path{stroke:#dcecf8}.nm-green{fill:#e6f2e2}.nm-wlabel{font-size:12.5px;font-style:italic;letter-spacing:2px;fill:#6f9cc4}';
+      '.nm-label{font-size:' + LABEL_SIZE + 'px;font-weight:500;fill:#1f2a3a;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.nm-label.x{font-weight:700}.nm-badge-t{font-size:14px;font-weight:800;fill:#fff}' +
+      '.nm-water{fill:#dcecf8;stroke:none}.nm-river path{stroke:#dcecf8}.nm-river .nm-river-area{fill:#dcecf8;stroke:none}.nm-green{fill:#e6f2e2;opacity:.65}.nm-terrain.simple .nm-green{opacity:.4}.nm-wlabel{font-size:12.5px;font-style:italic;letter-spacing:2px;fill:#6f9cc4}';
   }
   function exportPNG() {
     const g = game(), svg = root && root.querySelector('.nm-svg');
@@ -400,7 +619,7 @@
     const font = getComputedStyle(document.body).fontFamily || 'sans-serif';
     const W = view.W, H = view.H;
     const clone = svg.cloneNode(true);
-    clone.setAttribute('viewBox', '0 0 ' + W.toFixed(0) + ' ' + H.toFixed(0));
+    clone.setAttribute('viewBox', view.fullX + ' ' + view.fullY + ' ' + W + ' ' + H);
     clone.setAttribute('width', W.toFixed(0)); clone.setAttribute('height', H.toFixed(0));
     clone.classList.remove('focusing');
     clone.querySelectorAll('.on').forEach(function (el) { el.classList.remove('on'); });
@@ -438,7 +657,7 @@
       });
       c.fillStyle = '#9aa5b5'; c.font = (12 * sc) + 'px ' + font; c.textAlign = 'right';
       c.fillText('线型：实线为地下，带白色中线为高架，带白色枕木纹为地面；⇄ 圆环为换乘站，虚线相连为站外步行换乘', cw - M0, ch - 38 * sc);
-      c.fillText(isGeo ? '按游戏地图中的实际站点、轨道与地形等比例绘制；共线区间以同心色带区分，站外虚线只表示换乘联系。' : '简洁示意突出连接与换乘关系，不代表地理距离和实际走向。', cw - M0, ch - 20 * sc);
+      c.fillText(isGeo ? '按游戏地图中的实际站点、轨道与地形等比例绘制；共线区间以同心色带区分，站外虚线只表示换乘联系。' : '仅示意线路、站序与换乘关系，不显示地形；站距及线形不代表实际距离或轨道走向。', cw - M0, ch - 20 * sc);
       c.textAlign = 'left';
       cv.toBlob(function (blob) {
         if (!blob) { ui.toast('导出失败：浏览器无法生成图片', 'bad'); return; }
@@ -468,7 +687,9 @@
       if (tp.topo === 'empty') continue;
       chips.appendChild(h('button', { class: 'nm-chip', 'data-id': lid, 'data-silent': '1', onclick: function () { focus = focus === lid ? null : lid; applyFocus(); } }, h('span', { class: 'swatch', style: { background: L.color } }), L.name, h('span', { class: 'tiny muted' }, M.TOPO_NAME[tp.topo] + ' · ' + tp.stations.length + ' 站')));
     }
-    const head = h('div', { class: 'stats-head' }, h('span', { class: 'badge b-blue' }, CM.icon('network')), h('h2', null, '线路示意图'),
+    const nLines = chips.childNodes.length, nStations = Object.keys(net.stations).filter(function (sid) { return M.stationLines(net, sid).length; }).length;
+    const head = h('div', { class: 'stats-head' }, h('span', { class: 'badge b-blue' }, CM.icon('network')),
+      h('div', { class: 'nm-heading' }, h('h2', null, (CM.DATA.city || '') + '地铁线网'), h('div', { class: 'tiny muted' }, g.clock.y + ' 年 ' + g.clock.m + ' 月 · ' + nLines + ' 条线路 · ' + nStations + ' 座车站')),
       h('div', { class: 'seg-ctl sm nm-mode', 'aria-label': '线路图布局' }, [[true, '地理线网'], [false, '简洁示意']].map(function (o) { return h('button', { class: geographic === o[0] ? 'on' : '', 'aria-pressed': geographic === o[0] ? 'true' : 'false', 'data-silent': '1', onclick: function () { if (geographic !== o[0]) { geographic = o[0]; CM.Sound && CM.Sound.play('soft'); render(); } } }, o[1]); })),
       hasDraft ? h('div', { class: 'seg-ctl sm' }, [[false, '正式网络'], [true, '含草案']].map(function (o) { return h('button', { class: useDraft === o[0] ? 'on' : '', 'data-silent': '1', onclick: function () { if (useDraft !== o[0]) { useDraft = o[0]; focus = null; render(); } } }, o[1]); })) : null,
       h('div', { class: 'grow' }),
@@ -477,19 +698,20 @@
         h('button', { class: 'hbtn', 'data-tip': '放大', onclick: function () { zoomAt(0.7); } }, CM.icon('plus')),
         h('button', { class: 'hbtn', 'data-tip': '缩小', onclick: function () { zoomAt(1 / 0.7); } }, CM.icon('minus')),
         h('button', { class: 'hbtn', 'data-tip': '显示全部', onclick: fitView }, CM.icon('expand')),
-        h('button', { class: 'hbtn' + (geographic && showTerrain ? ' on' : ''), disabled: geographic ? null : true, 'data-tip': !geographic ? '地形在「地理线网」中显示' : (showTerrain ? '隐藏地形（江河、湖海与山林）' : '显示地形（江河、湖海与山林）'), 'data-silent': '1', onclick: function () { showTerrain = !showTerrain; CM.Sound && CM.Sound.play('toggle'); render(true); } }, CM.icon('mountain'))),
+        h('button', { class: 'hbtn' + (geographic && showTerrain ? ' on' : ''), disabled: !geographic, 'aria-label': '查看地形', 'data-tip': geographic ? (showTerrain ? '隐藏地形（江河、湖海与山林）' : '显示地形（江河、湖海与山林）') : '简洁示意不显示地形', 'data-silent': '1', onclick: function () { if (!geographic) return; showTerrain = !showTerrain; CM.Sound && CM.Sound.play('toggle'); render(true); } }, CM.icon('mountain'))),
       h('button', { class: 'btn sm', 'data-tip': '导出完整线路示意图（含标题与线路图例）', onclick: exportPNG }, CM.icon('export'), '导出 PNG'),
       h('button', { class: 'hbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { NetMap.close(); } }, CM.icon('close')));
     tgt = null;
     const canvas = build(g);
     if (!canvas.classList.contains('nm-canvas')) head.querySelectorAll('.nm-tools button, .btn').forEach(function (b) { b.disabled = true; });
-    const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend(), h('span', { class: 'tiny muted' }, geographic ? '实际位置与轨道 · 共线区间以同心色带区分' : '简洁示意 · 仅表达线路与换乘关系'));
+    const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend(), h('span', { class: 'tiny muted' }, geographic ? '站线与地形等比例 · 可拖动浏览，或显示全图' : '线路与换乘关系示意 · 非地理比例'));
     const body = h('div', { class: 'nm-body' }, bar, canvas);
     // 只有打开时播放入场动画；打开后切换正式 / 含草案或网络变化时就地重绘，不闪动
     const win = h('div', { class: 'stats-win nm-win' + (fresh ? '' : ' static'), onclick: function (e) { e.stopPropagation(); } }, head, body);
     fresh = false;
     root.appendChild(win);
     if (savedView && view && savedView.W === view.W && savedView.H === view.H) { Object.assign(view, savedView); setView(); }
+    else if (canvas.classList.contains('nm-canvas')) readableView(canvas);
     root.onclick = function () { NetMap.close(); };
     if (canvas.classList.contains('nm-canvas')) bindPanZoom(canvas);
     if (focus && !net.lines[focus]) focus = null;

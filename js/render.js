@@ -128,6 +128,63 @@
     const job = this.isoJob;
     if (job) { if (job.cv) job.cv.width = job.cv.height = 1; job.gen.return(); this.isoJob = null; }
   };
+  // Hold the displayed raster level until the replacement viewport is ready. Buildings at
+  // different levels use different chunk grids, so switching immediately would hide them.
+  Renderer.prototype.rasterLevel = function (eff, bounds, queue, buildings) {
+    const need = eff * 0.85;
+    let target = 0;
+    if (eff > 5) { target = 64; for (const level of LEVELS) if (level >= need) { target = level; break; } }
+    const previous = this.requestedLevel;
+    if (previous && target && this.requestedTier === this.detail.tier) {
+      if (target > previous && need <= previous * 1.12) target = previous;
+      else if (target < previous && need >= previous / 2 * 0.88) target = previous;
+    }
+    this.requestedTier = this.detail.tier;
+    this.requestedLevel = target;
+    if (this.displayedLevel == null || !target) this.displayedLevel = target;
+    this.stats.targetLevel = target;
+    this.stats.lodPreparing = false;
+    if (target === this.displayedLevel) { this.stats.rasterLevel = target; return target; }
+    let ready = true;
+    const C = CHUNK_PX / target;
+    const ci0 = Math.max(0, Math.floor(bounds.x0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(bounds.x1 / C));
+    const cj0 = Math.max(0, Math.floor(bounds.y0 / C)), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(bounds.y1 / C));
+    for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) {
+      if (!this.groundVisible(ci * C, cj * C, C)) continue;
+      const key = target + ':' + ci + ':' + cj, e = this.ground.get(key);
+      if (e) e.used = this.frame; // Protect completed staging tiles until the atomic handover.
+      if (!e || e.stale) {
+        ready = false;
+        queue.push({ kind: 'g', key: key, lvl: target, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - this.cam.cx) + Math.abs((cj + 0.5) * C - this.cam.cy) - 1 });
+      }
+    }
+    const staged = [];
+    if (buildings) {
+      const size = this.isoChunkGeom(target);
+      const x0 = Math.max(0, Math.floor(bounds.x0 / size) - 1), x1 = Math.min(Math.ceil(CFG.W / size) - 1, Math.floor(bounds.x1 / size) + 1);
+      const y0 = Math.max(0, Math.floor(bounds.y0 / size) - 1), y1 = Math.min(Math.ceil(CFG.H / size) - 1, Math.floor(bounds.y1 / size) + 1);
+      for (let cj = y0; cj <= y1; cj++) for (let ci = x0; ci <= x1; ci++) {
+        const key = 'i' + target + ':' + ci + ':' + cj, e = this.iso.get(key);
+        if (!this.isoVisible(e, target, ci, cj, size)) continue;
+        if (e) { e.used = this.frame; staged.push(e); }
+        if (!e || e.stale) {
+          ready = false;
+          queue.push({ kind: 'i', key: key, lvl: target, ci: ci, cj: cj, C: size, d: Math.abs((ci + 0.5) * size - this.cam.cx) + Math.abs((cj + 0.5) * size - this.cam.cy) - 1.5 });
+        }
+      }
+    }
+    if (ready) {
+      this.displayedLevel = target;
+      for (const e of staged) e.born = this.time - 1;
+    } else this.stats.lodPreparing = true;
+    this.stats.rasterLevel = this.displayedLevel;
+    return this.displayedLevel;
+  };
+  Renderer.prototype.isoVisible = function (e, level, ci, cj, size) {
+    const a = this.P(ci * size, cj * size, 0), sc = this.z / level, pad = 2.8 * this.z;
+    return e && !e.empty ? this.screenVisible(a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc, 2)
+      : this.screenVisible(a.x - size * ISO[0] * this.z - pad, a.y - MAX_H * HSF * this.z - pad, 2 * size * ISO[0] * this.z + 2 * pad, (2 * size * ISO[2] + MAX_H * HSF) * this.z + 2 * pad, 2);
+  };
   Renderer.prototype.screenVisible = function (x, y, w, h, pad) {
     pad = pad || 0;
     return x + w >= -pad && y + h >= -pad && x <= this.w + pad && y <= this.h + pad;
@@ -248,6 +305,7 @@
 
   Renderer.prototype.setGame = function (g) {
     this.game = g;
+    this.displayedLevel = this.requestedLevel = null;
     this.clearImages(); this.overview = null; this.overviewJob = null; this.overviewStale = true; this.heat = null; this.heatKey = '';
     this.heatLayers.clear(); this.segScreens = new WeakMap(); this.metroOrder = null;
     this.roadLabelGeom = new WeakMap(); this.textWidths.clear(); this._cgBmp = null;
@@ -263,6 +321,7 @@
   Renderer.prototype.setTheme = function (name) {
     TH = THEMES[name] || THEMES.light; GROUND = TH.ground; PAL = TH.pal;
     this.th = TH; this.themeName = name;
+    this.displayedLevel = this.requestedLevel = null;
     this.clearImages(); this.heatKey = ''; this._cgBmp = null;
     if (this.game) this.renderOverview(); else this.overviewStale = true;
   };
@@ -1520,10 +1579,10 @@
     const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
     const detailScale = z >= 28 ? 1 : (this.detail.tier === 2 ? 0.68 : this.detail.tier === 1 ? 0.85 : 1);
     const eff = z * Math.min(dpr, 1.5) * (1 - 0.28 * t) * detailScale;
-    let lvl = 0;
-    if (eff > 5) { lvl = 64; for (const L of LEVELS) if (L >= eff * 0.85) { lvl = L; break; } }
-    setWorld();
     const queue = [];
+    const lvl = this.rasterLevel(eff, { x0: wx0, y0: wy0, x1: wx1, y1: wy1 }, queue,
+      t >= 0.999 && cam.view === 1 && under < 0.99 && (this.layerFade || 0) < 0.99);
+    setWorld();
     if (this.overviewJob) queue.push({ kind: 'o', d: 1 });
     if (this.overview) {
       ctx.drawImage(this.overview, 0, 0, CFG.W, CFG.H);
@@ -1540,7 +1599,7 @@
           queue.push({ kind: 'g', key: key, lvl: lvl, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) });
           if (!e) {
             // 退而使用较低分辨率的块
-            for (const L2 of LEVELS) {
+            for (const L2 of LEVELS.slice().reverse()) {
               if (L2 >= lvl) continue;
               const C2 = CHUNK_PX / L2, k2 = L2 + ':' + Math.floor(ci * C / C2) + ':' + Math.floor(cj * C / C2);
               const e2 = this.ground.get(k2);
@@ -1553,7 +1612,13 @@
         const C2 = CHUNK_PX / e.lvl;
         const k = e.key.split(':');
         const x0 = +k[1] * C2, y0 = +k[2] * C2;
+        if (e.lvl !== lvl) {
+          // A coarse fallback covers several requested tiles. Clip it so a later fallback
+          // cannot paint over a neighbouring tile that already has sharper imagery.
+          ctx.save(); ctx.beginPath(); ctx.rect(ci * C - 1 / lvl, cj * C - 1 / lvl, C + 2 / lvl, C + 2 / lvl); ctx.clip();
+        }
         ctx.drawImage(e.cv, 0, 0, CHUNK_PX + 2, CHUNK_PX + 2, x0 - 1 / e.lvl, y0 - 1 / e.lvl, C2 + 2 / e.lvl, C2 + 2 / e.lvl);
+        if (e.lvl !== lvl) ctx.restore();
       }
     }
     ctx.globalAlpha = 1;
@@ -1600,8 +1665,8 @@
         if (buckets) { const bk = buckets.get(ci + ':' + cj); if (bk) agents.drawList(ctx, this, bk, agentAlpha); }
         const key = 'i' + ilvl + ':' + ci + ':' + cj;
         let e = this.iso.get(key);
-        const a = this.P(ci * C, cj * C, 0), pad = 2.8 * z;
-        const visible = e && !e.empty ? this.screenVisible(a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc, 2) : this.screenVisible(a.x - C * ISO[0] * z - pad, a.y - MAX_H * HSF * z - pad, 2 * C * ISO[0] * z + 2 * pad, (2 * C * ISO[2] + MAX_H * HSF) * z + 2 * pad, 2);
+        const a = this.P(ci * C, cj * C, 0);
+        const visible = this.isoVisible(e, ilvl, ci, cj, C);
         if (visible && (!e || e.stale)) queue.push({ kind: 'i', key: key, lvl: ilvl, ci: ci, cj: cj, C: C, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) - 0.5 });
         if (visible && e && !e.empty) {
           e.used = this.frame;

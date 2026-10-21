@@ -113,6 +113,19 @@
     arrowL: S('<path d="M19 12H5M11 6l-6 6 6 6"/>'),
     arrowR: S('<path d="M5 12h14M13 6l6 6-6 6"/>'),
     briefing: S('<rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/>'),
+    // 城市经济、任务与推进报告
+    trend: S('<path d="M3.5 17l5.5-5.5 4 4L20.5 8"/><path d="M15 8h5.5v5.5"/>'),
+    trendDown: S('<path d="M3.5 7l5.5 5.5 4-4L20.5 16"/><path d="M15 16h5.5v-5.5"/>'),
+    bank: S('<path d="M3.5 9.5L12 4l8.5 5.5z"/><path d="M5.5 9.5V17M10 9.5V17M14 9.5V17M18.5 9.5V17M3.5 20h17M4.5 17h15"/>'),
+    pulse: S('<path d="M2.5 12h4l2.5-6 4.5 12 2.5-6h5.5"/>'),
+    shield: S('<path d="M12 3l7.5 3v6c0 4.4-3.2 7.6-7.5 9-4.3-1.4-7.5-4.6-7.5-9V6z"/><path d="M8.7 12l2.3 2.3 4.3-4.3"/>'),
+    bolt: S('<path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/>'),
+    gift: S('<rect x="3.5" y="8.5" width="17" height="4" rx="1"/><path d="M5 12.5v8h14v-8M12 8.5v12"/><path d="M12 8.5C10.5 5 7.5 4.5 7 6.5s3 2 5 2c2 0 5.5 0 5-2s-3.5-1.5-5 2"/>'),
+    hourglass: S('<path d="M6.5 3h11M6.5 21h11"/><path d="M7.5 3c0 4.5 4.5 5.5 4.5 9s-4.5 4.5-4.5 9M16.5 3c0 4.5-4.5 5.5-4.5 9s4.5 4.5 4.5 9"/>'),
+    target: S('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.8"/>'),
+    factory: S('<path d="M3 20.5V11l5 3V11l5 3V7.5h3V4h3v16.5z"/><path d="M3 20.5h18"/><path d="M7 17.5h2M12 17.5h2"/>'),
+    percent: S('<path d="M18.5 5.5l-13 13"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/>'),
+    report: S('<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 16v-3M12 16V9M16 16v-5"/>'),
   };
   CM.ICON = I;
   CM.icon = function (name, size, cls) {
