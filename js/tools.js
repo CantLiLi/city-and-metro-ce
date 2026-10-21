@@ -318,11 +318,17 @@
     if (multiKey && (st || seg) && (this.tool === 'select' || this.tool === 'edit')) { ui.toggleMulti(st ? 'station' : 'seg', st || seg); this.updateHover(sx, sy, mod); return; }
     switch (this.tool) {
       case 'select': {
+        // 设施图层中优先选中设施圆点；其余情况下道路优先，其次是重要设施的场地（v1.9），再次是片区
+        const facLayer = this.ui.layer === 'fac' || this.ui.layer === 'gap';
+        const fid0 = !st && !seg && facLayer ? R.pickFacility(sx, sy, w.x, w.y) : null;
         if (st) ui.select({ kind: 'station', id: st });
         else if (seg) ui.select({ kind: 'seg', id: seg });
+        else if (fid0) ui.select({ kind: 'facility', id: fid0 });
         else {
           const L = R.tEase < 0.5 ? R.pickLink(w.x, w.y, 0.22) : null;
+          const fid = L && L.cls >= 2 ? null : R.pickFacility(sx, sy, w.x, w.y);
           if (L && L.cls >= 2) ui.select({ kind: 'road', id: L.id });
+          else if (fid) ui.select({ kind: 'facility', id: fid });
           else {
             const c = g.city.cellAt(w.x, w.y);
             if (c >= 0 && this.ui.layer !== 'none') ui.select({ kind: 'zone', id: g.city.zoneOf(c) });

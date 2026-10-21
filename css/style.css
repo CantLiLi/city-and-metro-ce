@@ -334,6 +334,7 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 .pausechip .ico { width: 15px; height: 15px; animation: blink 1.6s ease-in-out infinite; }
 .pausechip kbd { color: var(--text); }
 .pausechip .muted { font-weight: 500; }
+.pausechip.overlap { display: none; }
 .pausechip.hidden, #app:has(#stats:not(.hidden)) .pausechip { opacity: 0; transform: translateY(-8px) scale(.95); pointer-events: none; }
 .pausechip:hover { transform: translateY(1px); }
 #banner { display: flex; flex-direction: column; gap: 5px; align-items: center; }
@@ -1198,6 +1199,7 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
   #zoomCtl { left: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 3px; }
   #zoomCtl button { width: 36px; height: 34px; }
   #feed { top: calc(110px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
+  #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
   .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
   #coach { top: calc(104px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; }
   body.has-coach #feed { left: 50%; top: auto; bottom: 140px; }
@@ -1567,3 +1569,17 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
   .msel-acth { display: none; }
   .msel-actbar .map-actions { grid-template-columns: 1fr 1fr; gap: 6px; }
 }
+
+/* ======================== v1.9：设施、图层分组、统计口径 ======================== */
+.dock-sep.thin { width: 22px; margin: 3px 0 2px; opacity: .55; }
+.dot.ring { background: transparent; border: 3px solid currentColor; box-sizing: border-box; width: 12px; height: 12px; }
+.legend .seg-ctl { flex-wrap: wrap; row-gap: 4px; }
+.legend .seg-ctl button { flex: 1 1 auto; }
+.tk-basis { display: flex; gap: 5px; align-items: center; margin-top: 5px; line-height: 1.4; }
+.tk-basis .ico { width: 12px; height: 12px; flex: none; opacity: .8; }
+.tag .ico { width: 13px; height: 13px; vertical-align: -2px; }
+.chg .ico { width: 14px; height: 14px; vertical-align: -2px; color: var(--muted); }
+.tbl td .ico { width: 14px; height: 14px; vertical-align: -2px; color: var(--muted); }
+.tbl tr.clickable { cursor: pointer; }
+.tbl tr.clickable:hover td { background: var(--hover); }
+.tbl td small { font-size: 11px; }

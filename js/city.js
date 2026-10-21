@@ -457,7 +457,7 @@
     this.roadsBuilt = new Uint8Array(groups.length);
   };
   City.prototype.applyRoads = function (year) {
-    let changed = false;
+    let changed = this.updateRail(year);
     const groups = this.roadGroups, BW = this.BW, BH = this.BH, bm = this.bmask;
     const notWater = function (v) { return v < 3; };
     for (let k = 0; k < groups.length; k++) {
@@ -502,6 +502,146 @@
     }
     return ins;
   }
+  // ---------------- 地面铁路（v1.9） ----------------
+  // 普通铁路不参与乘客出行模拟，但地面铁路（非高架、非隧道）是城市空间的阻隔：在没有道口、地道或天桥的地方阻断步行与支路、次干道。
+  // 合法通道 = 真实道路（已通车）或街道（所在街区已开发）跨越铁路的位置；格网边在通道附近（RAIL_R 以内）越过铁路时绕行到通道通过，
+  // 否则阻断。主干道与快速路按真实道路处理（立交或道口），不受影响。高架铁路下方可以通行，隧道不构成阻隔。
+  // 几何按地图缓存（与年份无关）；铁路是否运营按开通年份（高铁按本地图的高铁年份）每月判断。
+  const RAIL_CACHE = new WeakMap(), RAIL_R = 0.7;
+  function segT(ax, ay, bx, by, cx, cy, dx, dy) {
+    const rx = bx - ax, ry = by - ay, sx = dx - cx, sy = dy - cy, den = rx * sy - ry * sx;
+    if (Math.abs(den) < 1e-12) return -1;
+    const qx = cx - ax, qy = cy - ay, t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+    return t < 0 || t > 1 || u < 0 || u > 1 ? -1 : t;
+  }
+  City.prototype.railGeom = function () {
+    const Geo = CM.Geo, W = this.W, H = this.H;
+    const hit = RAIL_CACHE.get(Geo.rail);
+    if (hit && hit.W === W && hit.H === H && hit.nWays === this.roadWays.length) return hit;
+    // 铁路线段：kind 0 地面（含路堤），1 高架；隧道不计
+    const ax = [], ay = [], bx = [], by = [], fk = [], kind = [];
+    Geo.rail.forEach(function (r, k) {
+      if (r.flags & 2) return;
+      const p = r.p, kd = (r.flags & 1) ? 1 : 0;
+      for (let q = 0; q + 3 < p.length; q += 2) { ax.push(p[q]); ay.push(p[q + 1]); bx.push(p[q + 2]); by.push(p[q + 3]); fk.push(k); kind.push(kd); }
+    });
+    const n = fk.length, bk = new Array(W * H);
+    for (let i = 0; i < n; i++) {
+      const i0 = U.clamp(Math.floor(Math.min(ax[i], bx[i])), 0, W - 1), i1 = U.clamp(Math.floor(Math.max(ax[i], bx[i])), 0, W - 1);
+      const j0 = U.clamp(Math.floor(Math.min(ay[i], by[i])), 0, H - 1), j1 = U.clamp(Math.floor(Math.max(ay[i], by[i])), 0, H - 1);
+      for (let j = j0; j <= j1; j++) for (let ii = i0; ii <= i1; ii++) { const t = j * W + ii; (bk[t] || (bk[t] = [])).push(i); }
+    }
+    const R = { W: W, H: H, nWays: this.roadWays.length, n: n, ax: Float32Array.from(ax), ay: Float32Array.from(ay), bx: Float32Array.from(bx), by: Float32Array.from(by), fk: Int32Array.from(fk), kind: Uint8Array.from(kind), bk: bk };
+    // 线段 (x0,y0)-(x1,y1) 与地面铁路的交点
+    const surfHits = function (x0, y0, x1, y1, cb) {
+      const i0 = U.clamp(Math.floor(Math.min(x0, x1)), 0, W - 1), i1 = U.clamp(Math.floor(Math.max(x0, x1)), 0, W - 1);
+      const j0 = U.clamp(Math.floor(Math.min(y0, y1)), 0, H - 1), j1 = U.clamp(Math.floor(Math.max(y0, y1)), 0, H - 1);
+      for (let j = j0; j <= j1; j++) for (let ii = i0; ii <= i1; ii++) {
+        const list = bk[j * W + ii]; if (!list) continue;
+        for (const s of list) {
+          if (R.kind[s]) continue;
+          const t = segT(x0, y0, x1, y1, R.ax[s], R.ay[s], R.bx[s], R.by[s]);
+          if (t >= 0) cb(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, s);
+        }
+      }
+    };
+    R.surfHits = surfHits;
+    // 合法通道：真实道路（g ≥ 0 为道路组）与街道（g = −1）跨越地面铁路的位置
+    const cx = [], cy = [], cg = [];
+    const scan = function (p, g) { for (let q = 0; q + 3 < p.length; q += 2) surfHits(p[q], p[q + 1], p[q + 2], p[q + 3], function (x, y) { cx.push(x); cy.push(y); cg.push(g); }); };
+    for (const w of this.roadWays) scan(w.p, w.g);
+    for (const s of Geo.streets) scan(s.p, -1);
+    const cbk = new Array(W * H);
+    for (let i = 0; i < cx.length; i++) { const t = U.clamp(Math.floor(cy[i]), 0, H - 1) * W + U.clamp(Math.floor(cx[i]), 0, W - 1); (cbk[t] || (cbk[t] = [])).push(i); }
+    R.cross = { x: Float32Array.from(cx), y: Float32Array.from(cy), g: Int32Array.from(cg), bk: cbk };
+    // 格网边越过地面铁路的位置（每条边每条铁路线最多记一次）
+    const ee = [], ex = [], ey = [], ek = [];
+    const nTot = this.eCls.length, VW = this.VW;
+    for (let e = 0; e < nTot; e++) {
+      const uv = this.edgeVerts(e), x0 = uv[0] % VW, y0 = (uv[0] / VW) | 0, x1 = uv[1] % VW, y1 = (uv[1] / VW) | 0;
+      let lastK = -1;
+      surfHits(x0, y0, x1, y1, function (x, y, s) { const k = R.fk[s]; if (k === lastK) return; lastK = k; ee.push(e); ex.push(x); ey.push(y); ek.push(k); });
+    }
+    R.edge = { e: Int32Array.from(ee), x: Float32Array.from(ex), y: Float32Array.from(ey), k: Int32Array.from(ek) };
+    RAIL_CACHE.set(Geo.rail, R);
+    return R;
+  };
+  City.railActiveAt = function (r, year) { return !((r.year && year < r.year) || ((r.flags & 16) && year < (D.hsrYear || 2009))); };
+  // 按年份更新运营中的铁路；返回是否有变化（新线开通时需要重建步行与道路网络）
+  City.prototype.updateRail = function (year) {
+    const rail = CM.Geo.rail || [];
+    const on = new Uint8Array(rail.length);
+    let changed = !this.railOn || this.railOn.length !== on.length;
+    for (let k = 0; k < rail.length; k++) { on[k] = City.railActiveAt(rail[k], year) ? 1 : 0; if (!changed && on[k] !== this.railOn[k]) changed = true; }
+    this.railOn = on; this.railYear = year;
+    return changed && this.version > 0;
+  };
+  // 每条格网边的铁路状态：eRail 0 无、1 绕行到附近通道（eRailDet 为附加米数）、2 阻断
+  City.prototype.computeRailBlock = function () {
+    const nTot = this.eCls.length;
+    if (!this.eRail || this.eRail.length !== nTot) { this.eRail = new Uint8Array(nTot); this.eRailDet = new Float32Array(nTot); }
+    const eR = this.eRail, eD = this.eRailDet;
+    eR.fill(0); eD.fill(0);
+    if (!this.railOn || !this.railOn.some(function (v) { return v; })) return;
+    const R = this.railGeom(), W = this.W, H = this.H, C = R.cross, E = R.edge, st = this.street, built = this.roadsBuilt;
+    const legal = (i) => {
+      const g = C.g[i];
+      if (g >= 0) return !!built[g];
+      const ci = Math.floor(C.x[i]), cj = Math.floor(C.y[i]);
+      for (let j = cj - 1; j <= cj + 1; j++) for (let ii = ci - 1; ii <= ci + 1; ii++) if (ii >= 0 && j >= 0 && ii < W && j < H && st[j * W + ii]) return true;
+      return false;
+    };
+    for (let q = 0; q < E.e.length; q++) {
+      const e = E.e[q];
+      if (!this.railOn[E.k[q]] || eR[e] === 2) continue;
+      const x = E.x[q], y = E.y[q];
+      let best = Infinity;
+      for (let j = Math.max(0, Math.floor(y - RAIL_R)); j <= Math.min(H - 1, Math.floor(y + RAIL_R)); j++) for (let i = Math.max(0, Math.floor(x - RAIL_R)); i <= Math.min(W - 1, Math.floor(x + RAIL_R)); i++) {
+        const list = C.bk[j * W + i]; if (!list) continue;
+        for (const c of list) { const d = U.dist(x, y, C.x[c], C.y[c]); if (d < best && d <= RAIL_R && legal(c)) best = d; }
+      }
+      if (best === Infinity) { eR[e] = 2; eD[e] = 0; }
+      else { eR[e] = 1; eD[e] = Math.max(eD[e], 2 * Math.max(0, best - 0.15) * CFG.CELL_M); }
+    }
+  };
+  // 折线与运营中铁路的交叉：surf 地面铁路、via 高架铁路；同一走廊的多股轨道（相距不足约 150 m）计为一处
+  City.prototype.railCross = function (pts) {
+    const out = { surf: [], via: [] };
+    if (!this.railOn || !CM.Geo.rail.length) return out;
+    const R = this.railGeom(), W = this.W, H = this.H, on = this.railOn;
+    for (let q = 0; q + 1 < pts.length; q++) {
+      const x0 = pts[q][0], y0 = pts[q][1], x1 = pts[q + 1][0], y1 = pts[q + 1][1];
+      const i0 = U.clamp(Math.floor(Math.min(x0, x1)), 0, W - 1), i1 = U.clamp(Math.floor(Math.max(x0, x1)), 0, W - 1);
+      const j0 = U.clamp(Math.floor(Math.min(y0, y1)), 0, H - 1), j1 = U.clamp(Math.floor(Math.max(y0, y1)), 0, H - 1);
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const list = R.bk[j * W + i]; if (!list) continue;
+        for (const s of list) {
+          if (!on[R.fk[s]]) continue;
+          const t = segT(x0, y0, x1, y1, R.ax[s], R.ay[s], R.bx[s], R.by[s]); if (t < 0) continue;
+          const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t, arr = R.kind[s] ? out.via : out.surf;
+          if (!arr.some(function (p) { return U.dist(p[0], p[1], x, y) < 0.6; })) arr.push([x, y, R.fk[s]]);
+        }
+      }
+    }
+    return out;
+  };
+  // 到最近的运营中地面铁路的距离（格，只查 1.5 格以内）
+  City.prototype.railDist = function (x, y) {
+    if (!this.railOn || !CM.Geo.rail.length) return Infinity;
+    const R = this.railGeom(), W = this.W, H = this.H;
+    let best = Infinity;
+    for (let j = Math.max(0, Math.floor(y - 1.5)); j <= Math.min(H - 1, Math.floor(y + 1.5)); j++) for (let i = Math.max(0, Math.floor(x - 1.5)); i <= Math.min(W - 1, Math.floor(x + 1.5)); i++) {
+      const list = R.bk[j * W + i]; if (!list) continue;
+      for (const s of list) { if (R.kind[s] || !this.railOn[R.fk[s]]) continue; const d = segDist(x, y, R.ax[s], R.ay[s], R.bx[s], R.by[s]); if (d < best) best = d; }
+    }
+    return best;
+  };
+  function segDist(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+    let t = L > 0 ? ((px - ax) * dx + (py - ay) * dy) / L : 0; t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    return Math.hypot(ax + dx * t - px, ay + dy * t - py);
+  }
+
   // 根据街区开发情况生成支路与次干道（系统建设）
   City.prototype.updateStreets = function () {
     const W = this.W, H = this.H, Z = CFG.ZONE, st = this.street;
@@ -535,6 +675,9 @@
   City.prototype.buildGraphs = function () {
     const V = this.V, VW = this.VW, nTot = this.eCls.length;
     const vx = this.vx, vy = this.vy, CM_ = CFG.CELL_M;
+    // 地面铁路：没有通道处阻断支路与次干道（含步行），有通道时绕行（v1.9）
+    this.computeRailBlock();
+    const eRail = this.eRail, eDet = this.eRailDet;
     // ---- 步行 ----
     const wDeg = new Int32Array(V + 1);
     const walkable = new Uint8Array(nTot);
@@ -542,6 +685,7 @@
       const c = this.eCls[e];
       if (c < 1 || c === 4) continue;
       if (this.eBlock[e] && c < 3) continue;
+      if (eRail[e] === 2 && c < 3) continue;
       walkable[e] = 1;
       const uv = this.edgeVerts(e); wDeg[uv[0]]++; wDeg[uv[1]]++;
     }
@@ -552,7 +696,7 @@
     for (let e = 0; e < nTot; e++) {
       if (!walkable[e]) continue;
       const uv = this.edgeVerts(e), a = uv[0], b = uv[1];
-      const L = U.dist(vx[a], vy[a], vx[b], vy[b]) * CM_;
+      const L = U.dist(vx[a], vy[a], vx[b], vy[b]) * CM_ + (this.eCls[e] < 3 ? eDet[e] : 0);
       wTo[wStart[a] + fill[a]] = b; wLen[wStart[a] + fill[a]] = L; fill[a]++;
       wTo[wStart[b] + fill[b]] = a; wLen[wStart[b] + fill[b]] = L; fill[b]++;
     }
@@ -565,17 +709,19 @@
     const rules = CFG.CELL_M + '|' + CFG.ZONE + '|' + CFG.road.speed.join(',') + '|' + CFG.road.cap.join(',');
     let same = !!(this.car && prior && prior.rules === rules && prior.ways === this.roadWays && prior.cls.length === nTot && prior.vx.length === V);
     if (same) for (let v = 0; v < V; v++) if (prior.vx[v] !== vx[v] || prior.vy[v] !== vy[v]) { same = false; break; }
+    const carOn = function (e, c) { return c >= 2 && !(c < 3 && (this.eBlock[e] || eRail[e] === 2)); }.bind(this);
+    const detOf = function (e, c) { return c < 3 ? eDet[e] : 0; };
+    if (same && !prior.det) same = false;
     if (same) for (let e = 0; e < nTot; e++) {
-      const c = this.eCls[e], active = c >= 2 && !(this.eBlock[e] && c < 3);
-      if (prior.cls[e] !== (active ? c : 0) || prior.name[e] !== (active ? this.eName[e] : 0) || prior.block[e] !== (active ? this.eBlock[e] : 0)) { same = false; break; }
+      const c = this.eCls[e], active = carOn(e, c);
+      if (prior.cls[e] !== (active ? c : 0) || prior.name[e] !== (active ? this.eName[e] : 0) || prior.block[e] !== (active ? this.eBlock[e] : 0) || prior.det[e] !== (active ? Math.fround(detOf(e, c)) : 0)) { same = false; break; }
     }
     if (same) { this.roadVersion++; return; }
     const cDeg = new Int32Array(V);
     const carE = [];
     for (let e = 0; e < nTot; e++) {
       const c = this.eCls[e];
-      if (c < 2) continue;
-      if (this.eBlock[e] && c < 3) continue;
+      if (!carOn(e, c)) continue;
       carE.push(e);
       const uv = this.edgeVerts(e); cDeg[uv[0]]++; cDeg[uv[1]]++;
     }
@@ -634,7 +780,7 @@
         visited[e] = 1;
         const uv = self.edgeVerts(e);
         const nxt = uv[0] === cur ? uv[1] : uv[0];
-        lenM += U.dist(vx[cur], vy[cur], vx[nxt], vy[nxt]) * CM_;
+        lenM += U.dist(vx[cur], vy[cur], vx[nxt], vy[nxt]) * CM_ + detOf(e, self.eCls[e]);
         if (self.eBlock[e]) bridge = 1;
         verts.push(nxt);
         if (forced[nxt] || guard++ > 5000) break;
@@ -707,11 +853,11 @@
         }
       }
     }
-    const inputs = { rules: rules, ways: this.roadWays, vx: Float64Array.from(vx), vy: Float64Array.from(vy), cls: new Uint8Array(nTot), name: new Int32Array(nTot), block: new Uint8Array(nTot) };
+    const inputs = { rules: rules, ways: this.roadWays, vx: Float64Array.from(vx), vy: Float64Array.from(vy), cls: new Uint8Array(nTot), name: new Int32Array(nTot), block: new Uint8Array(nTot), det: new Float32Array(nTot) };
     for (let e = 0; e < nTot; e++) {
       const c = this.eCls[e];
-      if (c < 2 || (this.eBlock[e] && c < 3)) continue;
-      inputs.cls[e] = c; inputs.name[e] = this.eName[e]; inputs.block[e] = this.eBlock[e];
+      if (!carOn(e, c)) continue;
+      inputs.cls[e] = c; inputs.name[e] = this.eName[e]; inputs.block[e] = this.eBlock[e]; inputs.det[e] = detOf(e, c);
     }
     this._carInputs = inputs;
     this.roadVersion++;

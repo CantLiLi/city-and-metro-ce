@@ -107,9 +107,10 @@
     }
     const cum = U.cumLen(pts);
     const n = pts.length, lenC = cum[n - 1];
-    let waterC = 0, hillC = 0, protC = 0, outside = false;
+    let waterC = 0, hillC = 0, protC = 0, airC = 0, outside = false;
     const protNames = new Set(), locked = [], cellLen = new Map();
-    let hillHit = null, protHit = null, waterHit = null;
+    let hillHit = null, protHit = null, waterHit = null, airHit = null;
+    const airOk = !!(D.airport && D.airport.buildable);   // 运营中的机场可以地下穿越（台北松山）
     for (let i = 0; i + 1 < n; i++) {
       const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2, ds = cum[i + 1] - cum[i];
       const c = city.cellAt(mx, my);
@@ -120,7 +121,8 @@
       else if (!city.regionOpen[city.region[c]]) {
         if (!locked.some(function (l) { return l.name === rg.name; })) locked.push({ x: mx, y: my, name: rg.name, open: rg.open, lockNote: rg.lockNote });
       } else if (city.lu[c] === LU.AIRPORT) {
-        if (!locked.some(function (l) { return l.open === D.airport.closeYear; })) locked.push({ x: mx, y: my, name: (D.airport.name || '机场') + '（运营中）', open: D.airport.closeYear });
+        if (airOk) { airC += ds; if (!airHit) airHit = [mx, my]; }
+        else if (!locked.some(function (l) { return l.open === D.airport.closeYear; })) locked.push({ x: mx, y: my, name: (D.airport.name || '机场') + '（运营中）', open: D.airport.closeYear });
       }
       if (city.protectedId[c] > 0 && D.landmarks[city.protectedId[c] - 1].kind !== 'campus') { protC += ds; protNames.add(D.landmarks[city.protectedId[c] - 1].name); if (!protHit) protHit = [mx, my]; }
       cellLen.set(c, (cellLen.get(c) || 0) + ds);
@@ -136,11 +138,14 @@
       const R = a * b * c / (2 * area2);
       if (R < minR) { minR = R; minRi = i; }
     }
+    // 与运营中铁路的交叉（v1.9）：地面铁路 surf、高架铁路 via（同一走廊的多股轨道计为一处）
+    const rx = city.railCross ? city.railCross(pts) : { surf: [], via: [] };
     const g = {
       pts: pts, cum: cum, lenC: lenC, lenM: lenC * CFG.CELL_M, waterM: waterC * CFG.CELL_M, hillM: hillC * CFG.CELL_M, protM: protC * CFG.CELL_M,
       protNames: Array.from(protNames), locked: locked, outside: outside, cellLen: cellLen, minRadiusM: minR * CFG.CELL_M,
       minRxy: minRi >= 0 ? pts[minRi] : null, minRi: minRi,
       spanStart: spanStart, hillHit: hillHit, protHit: protHit, waterHit: waterHit,
+      airM: airC * CFG.CELL_M, airHit: airHit, railSurf: rx.surf, railVia: rx.via, railS: rx.surf.length, railV: rx.via.length,
     };
     if (geomCache.size > 3000) geomCache.clear();
     geomCache.set(key, g);
@@ -434,7 +439,12 @@
     const rg = city.regions[city.region[c]];
     if (rg.scenic) return { ok: false, msg: rg.name + '：山地风景区不能设站', how: '把车站移出风景区，轨道可以地下穿越。' };
     if (!city.regionOpen[city.region[c]]) return { ok: false, msg: rg.name + ' 尚未开放（' + U.regionLock(rg) + '）', how: rg.open == null ? '该区域不开放建设，请把车站移到其他区域。' : '区域开放前不能建设。可推进时间等待开放，或把车站移到已开放区域。' };
-    if (city.lu[c] === LU.AIRPORT) return { ok: false, msg: (D.airport.name || '机场') + '仍在运营（' + D.airport.closeYear + ' 年关闭）', how: '机场关闭前不能建设，请把车站移到机场范围以外。' };
+    if (city.lu[c] === LU.AIRPORT) {
+      if (!D.airport.buildable) return { ok: false, msg: (D.airport.name || '机场') + '仍在运营（' + D.airport.closeYear + ' 年关闭）', how: '机场关闭前不能建设，请把车站移到机场范围以外。' };
+      if (type !== 'underground') return { ok: false, msg: (D.airport.name || '机场') + '照常运营：范围内只能建地下车站', how: '把车站改为地下站（建设方式选「地下」），或移到机场范围以外。' };
+    }
+    // 地面铁路（v1.9）：地面车站不能压在运营中的铁路上；地下与高架车站可以
+    if (type === 'surface' && city.railDist && city.railDist(x, y) < 0.3) return { ok: false, msg: '地面车站不能建在铁路上', how: '把车站移离铁路约 80 m 以上，或改为地下 / 高架车站。' };
     if (city.protectedId[c] > 0 && D.landmarks[city.protectedId[c] - 1].kind !== 'campus' && city.inLandmarkSite(city.protectedId[c] - 1, x, y)) return { ok: false, msg: '受保护建筑「' + D.landmarks[city.protectedId[c] - 1].name + '」，不能设站或拆除', how: '把车站移到相邻街区，保护建筑周边仍可通过车站出入口服务。' };
     return { ok: true };
   };
@@ -520,7 +530,14 @@
     const ci = costIndex(year), C = CFG.cost;
     let v = g.lenM / 1000 * C.trackPerKm[type] + g.waterM / 1000 * C.riverPerKm[type];
     if (type === 'underground') v += g.hillM / 1000 * C.hillPerKm + g.protM / 1000 * C.protectedPerKm;
+    v += M.railCrossCost(g, type);
     return v * ci;
+  };
+  // 跨越铁路的附加费用（基年价格）：地下线下穿地面铁路、高架线上跨地面或高架铁路，每处按等效长度计
+  M.railCrossN = function (g, type) { return type === 'underground' ? (g.railS || 0) : (type === 'elevated' ? (g.railS || 0) + (g.railV || 0) : 0); };
+  M.railCrossCost = function (g, type) {
+    const k = CFG.cost.railCrossKm || { underground: 0.25, elevated: 0.35 };
+    return M.railCrossN(g, type) * (k[type] || 0) * CFG.cost.trackPerKm[type];
   };
   M.trackDemolition = function (city, g, type, year, scale) {
     const f = CFG.cost.demolishFactor.track[type];
@@ -655,8 +672,8 @@
           const changed = !o || o.a !== s.a || o.b !== s.b || o.line !== s.line || JSON.stringify(o.pts) !== JSON.stringify(s.pts) || stMoved(s.a) || stMoved(s.b);
           if (changed) { res.affectedLines.add(s.line); touched.add(id); gr.changed = true; }
           if (diffT.length) {
-            const pg = { lenM: 0, waterM: 0, hillM: 0, protM: 0 }, from = new Set();
-            for (const b of diffT) { const og = offGeom[b]; pg.lenM += og.lenM; pg.waterM += og.waterM; pg.hillM += og.hillM; pg.protM += og.protM; from.add(CFG.metro.typeName[off.segments[b].type]); }
+            const pg = { lenM: 0, waterM: 0, hillM: 0, protM: 0, railS: 0, railV: 0 }, from = new Set();
+            for (const b of diffT) { const og = offGeom[b]; pg.lenM += og.lenM; pg.waterM += og.waterM; pg.hillM += og.hillM; pg.protM += og.protM; pg.railS += og.railS || 0; pg.railV += og.railV || 0; from.add(CFG.metro.typeName[off.segments[b].type]); }
             res.changes.mod.push('轨道 ' + lbl + ' 中原为' + Array.from(from).join('、') + '的 ' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '（按新建计费）');
             item('construction', '改建轨道 ' + lbl + '（' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '）', M.trackCost(pg, s.type, year), id);
             const dm = M.trackDemolition(city, g, s.type, year, U.clamp(pg.lenM / Math.max(1, g.lenM), 0, 1));
@@ -668,7 +685,8 @@
       }
       if (full) { touched.add(id); res.paidLen[id] = g.lenM; }
       if (full) {
-        item('construction', (base && base.length ? '改建轨道 ' : '新建轨道 ') + lbl + '（' + U.fmtKm(g.lenM) + (g.waterM > 1 ? '，' + (s.type === 'underground' ? '越江隧道 ' : '跨江桥梁 ') + U.fmtKm(g.waterM) : '') + '）', M.trackCost(g, s.type, year), id);
+        const rn = M.railCrossN(g, s.type);
+        item('construction', (base && base.length ? '改建轨道 ' : '新建轨道 ') + lbl + '（' + U.fmtKm(g.lenM) + (g.waterM > 1 ? '，' + (s.type === 'underground' ? '越江隧道 ' : '跨江桥梁 ') + U.fmtKm(g.waterM) : '') + (rn ? '，' + (s.type === 'underground' ? '下穿' : '上跨') + '铁路 ' + rn + ' 处' : '') + '）', M.trackCost(g, s.type, year), id);
         const dm = M.trackDemolition(city, g, s.type, year);
         item('demolition', '沿线拆迁 ' + lbl, dm.cost, id);
         res.demolitions.push.apply(res.demolitions, dm.cells);
@@ -680,6 +698,13 @@
       if (g.hillM > 1 && s.type !== 'underground') conflict({ type: 'hill', kind: 'seg', ref: id, x: g.hillHit[0], y: g.hillHit[1], msg: lbl + '：穿过' + g.hillHit[2] + '，风景区禁止地面/高架轨道', how: '风景区内只能以隧道穿越。把这段轨道改为地下即可（会增加山体隧道费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
       if (g.protM > 1 && s.type !== 'underground') conflict({ type: 'protected', kind: 'seg', ref: id, x: g.protHit[0], y: g.protHit[1], msg: lbl + '：地面/高架轨道将穿过受保护建筑「' + g.protNames.join('、') + '」', how: '历史建筑和重要地标不能拆除。改为地下从下方穿越（需加固费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
       for (const lk of g.locked) conflict({ type: 'locked', kind: 'seg', ref: id, x: lk.x, y: lk.y, msg: lbl + '：经过尚未开放的区域「' + lk.name + '」', how: lk.open == null ? '该区域' + U.regionLock(lk) + '，线路不能穿过。用「修改」工具拖动控制点绕开。' : '该区域' + U.regionLock(lk) + '，开放前不能建设。用「修改」工具拖动控制点绕开，或等区域开放后再建。', fixes: [editSeg, { label: '删除该区段', op: 'removeSeg', seg: id }] });
+      // 运营中的机场（台北松山）：跑道与航站区只能地下穿越
+      if (g.airM > 1 && s.type !== 'underground') conflict({ type: 'airport', kind: 'seg', ref: id, x: g.airHit[0], y: g.airHit[1], msg: lbl + '：' + (D.airport.name || '机场') + '照常运营，范围内不能建地面或高架轨道', how: '机场范围内只能以隧道穿越。把这段轨道改为地下，或调整线形绕开机场。', fixes: [toUnder, editSeg] });
+      // 地面铁路（v1.9）：新建或改动的地面轨道不能与运营中的地面铁路平交；既有的交叉保留
+      if (touched.has(id) && s.type === 'surface' && g.railS > 0) {
+        const p = g.railSurf[0];
+        conflict({ type: 'rail', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：地面轨道与铁路平面交叉（' + g.railS + ' 处）', how: '地铁不能与铁路平交。把这段轨道改为高架（上跨铁路）或地下（下穿铁路），每处交叉会增加相应的跨越费用；也可以调整线形，在铁路的高架段下方通过。', fixes: [{ label: '改为高架', op: 'segType', seg: id, value: 'elevated' }, toUnder, editSeg] });
+      }
       if (touched.has(id) && isFinite(g.minRadiusM)) {
         const R = Math.round(g.minRadiusM), p = g.minRxy || [A.x, A.y];
         if (R < CFG.metro.minRadiusM) {
@@ -747,16 +772,16 @@
     // 线形调整：与“已付费长度”比较（旧存档没有记录时按已建长度），免费的小幅调整会累计，
     // 多次小改累计超过免费额度时按累计增加的长度收费（与车站“自上次付费选址累计”的规则一致）
     groups.forEach(function (gr) {
-      let baseLen = 0, basePaid = 0, baseWater = 0, baseHill = 0, baseProt = 0, dLen = 0, dWater = 0, dHill = 0, dProt = 0;
-      for (const b of gr.base) { const g = offGeom[b], pl = off.segments[b].paidLen; baseLen += g.lenM; basePaid += pl != null ? pl : g.lenM; baseWater += g.waterM; baseHill += g.hillM; baseProt += g.protM; }
-      for (const x of gr.segs) { dLen += x.g.lenM; dWater += x.g.waterM; dHill += x.g.hillM; dProt += x.g.protM; }
+      let baseLen = 0, basePaid = 0, baseWater = 0, baseHill = 0, baseProt = 0, dLen = 0, dWater = 0, dHill = 0, dProt = 0, baseRS = 0, baseRV = 0, dRS = 0, dRV = 0;
+      for (const b of gr.base) { const g = offGeom[b], pl = off.segments[b].paidLen; baseLen += g.lenM; basePaid += pl != null ? pl : g.lenM; baseWater += g.waterM; baseHill += g.hillM; baseProt += g.protM; baseRS += g.railS || 0; baseRV += g.railV || 0; }
+      for (const x of gr.segs) { dLen += x.g.lenM; dWater += x.g.waterM; dHill += x.g.hillM; dProt += x.g.protM; dRS += x.g.railS || 0; dRV += x.g.railV || 0; }
       const step = dLen - baseLen, extra = dLen - basePaid;   // 本次变化；自上次付费以来的累计变化
       const shaped = gr.changed || gr.segs.length !== gr.base.length;
       let charged = false;
       if (shaped || Math.abs(step) > 1) {
         if (extra > C.freeLengthM && step > 1) {
           charged = true;
-          const pseudo = { lenM: extra, waterM: Math.max(0, dWater - baseWater), hillM: Math.max(0, dHill - baseHill), protM: Math.max(0, dProt - baseProt) };
+          const pseudo = { lenM: extra, waterM: Math.max(0, dWater - baseWater), hillM: Math.max(0, dHill - baseHill), protM: Math.max(0, dProt - baseProt), railS: Math.max(0, dRS - baseRS), railV: Math.max(0, dRV - baseRV) };
           const acc = Math.abs(extra - step) > 1 ? '（含此前免费调整累计 ' + U.fmtKm(extra - step) + '）' : '';
           res.changes.mod.push('调整线形 ' + gr.lbl + '：增加 ' + U.fmtKm(extra) + acc);
           item('construction', '延长/调整轨道 ' + gr.lbl + '（+' + U.fmtKm(extra) + acc + '）', M.trackCost(pseudo, gr.type, year), gr.segs[0].s.id);
@@ -770,6 +795,11 @@
         } else if (gr.changed && !gr.retyped) {
           res.changes.mod.push('调整线形 ' + gr.lbl + '（长度基本不变，免费）');
         }
+      }
+      // 免费的线形调整若新增了跨越铁路的位置，跨越费用照常收取
+      if (!charged && (dRS > baseRS || dRV > baseRV)) {
+        const pc = { railS: Math.max(0, dRS - baseRS), railV: Math.max(0, dRV - baseRV) }, n = M.railCrossN(pc, gr.type);
+        if (n > 0) item('construction', '新增跨越铁路 ' + gr.lbl + '（' + n + ' 处）', M.railCrossCost(pc, gr.type) * ci, gr.segs[0].s.id);
       }
       for (const x of gr.segs) res.paidLen[x.s.id] = charged ? x.g.lenM : basePaid * x.g.lenM / Math.max(1, dLen);
     });

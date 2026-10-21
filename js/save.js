@@ -187,8 +187,38 @@
     }
     return parsed;
   }
+  // 载入：旧交通模型的存档（v1.8 及更早）在升级前先把原始存档另存为「升级前备份」（只建一次，不计入手动存档上限），
+  // 备份失败时仍可载入，但不自动保存升级后的进度（见 main.js），原存档不受影响
   Save.load = function (slotId) {
-    return readSlotText(slotId).then(function (r) { return parseSlot(r).payload; });
+    return readSlotText(slotId).then(function (r) {
+      const p = parseSlot(r).payload;
+      const tv = (p.traffic && p.traffic.v) || 1;
+      if (tv >= (CFG.TRAFFIC_MODEL || 1) || r.meta.kind === 'backup') return p;
+      return Save.backupBeforeUpgrade(r, p).then(function (res) {
+        if (res.ok) p.__backupSlot = res.slotId; else p.__backupFailed = res.error || '未知错误';
+        return p;
+      });
+    });
+  };
+  Save.backupBeforeUpgrade = function (r, payload) {
+    let env = null; try { env = JSON.parse(r.text); } catch (e) { return Promise.resolve({ ok: false, error: '存档内容无法解析' }); }
+    const meta = r.meta, from = (payload.meta && payload.meta.gameVersion) || env.gameVersion || '1.8.0';
+    const slotId = meta.gameId + '.bk' + String(env.savedAt || meta.savedAt || 0);
+    return queueWrite(function () {
+      const idx = readIndex();
+      if (idx.slots[slotId]) return { ok: true, slotId: slotId, existed: true };
+      const key = P + 'slot.' + slotId + '.' + uniqueWriteId(), text = r.text;
+      return store.put(key, text).then(function (where) {
+        return store.get(key, where).then(function (back) {
+          if (back !== text) { store.del(key, where); return { ok: false, error: '备份写入后校验失败' }; }
+          const idx2 = readIndex();
+          idx2.slots[slotId] = Object.assign({}, meta, { slotId: slotId, key: key, store: where, kind: 'backup', label: '升级前备份（v' + from + '）', savedAt: meta.savedAt, size: text.length });
+          if (!idx2.games[meta.gameId]) idx2.games[meta.gameId] = { gameId: meta.gameId, name: meta.name, mode: meta.mode, map: meta.map, createdAt: payload.meta.createdAt, updatedAt: meta.savedAt };
+          try { writeIndex(idx2); } catch (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; }
+          return { ok: true, slotId: slotId };
+        });
+      });
+    }).catch(function (e) { return { ok: false, error: errMsg(e) }; });
   };
   Save.remove = function (slotId) {
     const idx = readIndex();

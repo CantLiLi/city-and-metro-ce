@@ -114,6 +114,13 @@
       ui.markSaved(g, Date.now());
       ui.toast('存档已载入（' + g.clock.y + '年' + g.clock.m + '月），按空格继续', 'good');
     }
+    // 旧存档升级（升级前的原存档已由 Save.load 另存为备份）：提示并保存升级后的进度
+    if (!isNew && g.upgradeNote) {
+      // 读入的旧快照与内存中的升级结果不同；备份失败时尤其不能把尚未落盘的升级标为「已保存」。
+      ui.markUnsaved();
+      ui.toast(g.upgradeNote, g.backupFailed ? 'warn' : 'info'); g.upgradeNote = null;
+      if (!g.backupFailed) ui.doAutosave();
+    }
     ui.renderToolbar();
   }
   // opts.map：地图（默认广州）；opts.tutorial：新手教程

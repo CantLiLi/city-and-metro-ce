@@ -33,6 +33,8 @@
     g.city.generate(g.seed, g.clock.y);
     g.model = new CM.Model(g.city);
     g.model.setYear(g.clock.y);
+    g.model.setDayType(CM.Model.dayType(g.clock.y, g.clock.m, g.clock.d));
+    g.traffic = { v: CFG.TRAFFIC_MODEL };
     g.net = M.empty();
     g.mapInit = buildInitialNetwork(g);   // 开局既有地铁（东京 1950 年等），只在新建时生成一次，随存档保存
     g.compiled = M.compile(g.net, g.city);
@@ -125,23 +127,29 @@
     }
     this.model.step(budget);
   };
-  // 日终：票款与运营费用结算，推进日期；返回是否跨月
+  // 日终：按当天的日类型（工作日 / 周末）结算票款与运营费用，推进日期；返回是否跨月
+  Game.prototype.dayType = function () { return CM.Model.dayType(this.clock.y, this.clock.m, this.clock.d); };
   Game.prototype.endDay = function () {
-    this.econ.day(this.model.daily, this.compiled, this.clock.y);
+    const dt = this.dayType();
+    this.econ.day(this.model.dailyFor(dt), this.compiled, this.clock.y, dt);
     this.clock.d++;
     this.rev++;
     if (this.clock.d > U.daysInMonth(this.clock.y, this.clock.m)) {
       this.clock.d = 1;
       this.econ.closeMonth();
-      const f = this.econ.checkFailure(this.clock.y);
+      const f = this.econ.checkFailure(this.clock.y, this.inTransition(U.ymIndex(this.clock.y, this.clock.m) + 1));
       this.clock.m++;
       if (this.clock.m > 12) { this.clock.m = 1; this.clock.y++; }
+      this.model.setDayType(this.dayType());
       if (f) this.onFailure(f);
       return true;
     }
+    this.model.setDayType(this.dayType());
     this.emit('day');
     return false;
   };
+  // 交通模型升级过渡期（旧存档升级当月，至该月月末结算）：满意度不因统计口径变化而下降，任务不判失败、连续进度不清零
+  Game.prototype.inTransition = function (ym) { const t = this.traffic; return !!(t && t.until != null && ym <= t.until); };
   Game.prototype.onFailure = function (f) {
     this.setSpeed(0);
     this.logEvent({ tag: '经营', title: '经营挑战失败', desc: f.reasons.join('；') });
@@ -151,6 +159,8 @@
   // 月度处理（分步执行，避免画面卡顿）
   Game.prototype.monthGen = function* () {
     const y = this.clock.y, m = this.clock.m, city = this.city, model = this.model;
+    // 城市更新前停止旧预测，避免分步刷新后恢复到旧需求或旧路网的计算中。
+    if (this.draft) this.invalidatePrediction('城市正在更新，请在结算完成后重新计算预测');
     const yr = y + (m - 1) / 12;
     model.setYear(yr);
     // 历史事件
@@ -190,7 +200,7 @@
     for (let k = 0; k < city.regions.length; k++) {
       const rg = city.regions[k];
       if (city.regionOpen[k] || rg.open == null) continue;
-      if (rg.id === 'airport' && yr < D.airport.closeYear + 7 / 12) continue;
+      if (rg.id === 'airport' && !D.airport.buildable && yr < D.airport.closeYear + 7 / 12) continue;
       const byYear = y >= rg.open;
       // 人口提前达到门槛时可提前开放；经济繁荣时提前窗口放宽一年，衰退时门槛略为提高
       const early = rg.pop && tot.pop >= rg.pop * (ef && ef.dev < -0.03 ? 1.03 : 1) && y >= rg.open - (ef && ef.dev > 0.02 ? 4 : 3);
@@ -216,14 +226,18 @@
     if (this.macro && CM.Macro) CM.Macro.sample(this);   // 本月的岗位与交通效率（年度 GDP 取全年平均）
     yield;
     // 经营与任务：上月已封账，先开新月账本，任务奖励记入新月，最后按本月任务结果发放拨款
-    this.econ.updateSatisfaction(model.daily, model, y, m);
+    // 满意度按周平均日（5 个工作日 + 2 个周末日）计算，通勤时间按工作日；升级过渡期内不因统计口径变化而下降
+    this.econ.updateSatisfaction(model.daily, model, y, m, { protect: this.inTransition(this.ym()) });
     this.econ.openMonth(y, m);
     this.tasks.monthly(this).forEach((o) => this.logTask(o));
     this.econ.payGrant(y, m);
     this.econ.serviceDebt(y, m);   // 债券：到期利息与本金、逾期处理（每月一次，不会重复结算）
     this.recordHistory();
     if (CM.Milestones) CM.Milestones.onMonth(this);
-    if (this.draft) { this.draft.evalVer = -1; this.invalidatePrediction('城市状态已更新（' + y + '年' + m + '月），请重新计算预测'); }
+    if (this.draft) {
+      this.draft.evalVer = -1; this.draft.compVer = -1;
+      this.invalidatePrediction('城市状态已更新（' + y + '年' + m + '月），请重新计算预测');
+    }
     this.emit('month', { y: y, m: m });
   };
 
@@ -238,16 +252,17 @@
     this.emit('finance');
     return r;
   };
+  // 月度历史：客流、分担率与拥堵为周平均日（v1.9 起，tm: 2）；此前的记录为典型工作日口径（不重算）
   Game.prototype.recordHistory = function () {
-    const d = this.model.daily || {};
+    const d = this.model.daily || {}, dw = this.model.dailyWk || {}, de = this.model.dailyWe || {};
     const tot = this.city.totals();
     const last = this.econ.ledger[this.econ.ledger.length - 1];
     this.history.push({
-      y: this.clock.y, m: this.clock.m, pop: tot.pop, jobs: tot.jobs, share: d.metroShare || 0, cong: d.cong || 1, commute: d.commute || 0,
+      y: this.clock.y, m: this.clock.m, pop: tot.pop, jobs: tot.jobs, share: d.metroShare || 0, cong: d.cong || 1, commute: dw.commute || d.commute || 0,
       riders: d.metro || 0, sat: this.econ.sat, funds: this.econ.isFree() ? null : this.econ.funds, coverage: d.coverage || 0,
       debt: this.econ.isFree() ? null : this.econ.debtTotal(), capex: this.econ.isFree() ? null : this.econ.capex,
       fare: last ? last.fare : 0, ops: last ? last.ops : 0, grant: last ? last.grant : 0, stations: this.compiled.stations.length,
-      trips: d.trips || 0, crowd: d.crowdShare || 0,
+      trips: d.trips || 0, crowd: d.crowdShare || 0, ridersWk: dw.metro || 0, ridersWe: de.metro || 0, tm: CFG.TRAFFIC_MODEL,
     });
     if (this.history.length > 1200) this.history.shift();
   };
@@ -277,7 +292,9 @@
       if (crossed) {
         yield* this.monthGen();
         const mi = this.ym();
-        if (months <= 3 || mi % 2 === 0 || U.ymIndex(this.clock.y, this.clock.m) * 32 + this.clock.d >= tgt) yield* this.model.solveGen(1);
+        // 短跳每月两类都求解；长跳每月轮流求解工作日与周末（每类每 2 个月更新一次，与单一日类型时的更新频率相同）
+        if (months <= 3 || U.ymIndex(this.clock.y, this.clock.m) * 32 + this.clock.d >= tgt) yield* this.model.solveGen(1);
+        else yield* this.model.solveGen(1, [mi % 2 === 0 ? 'wd' : 'we']);
       }
       if ((n & 7) === 0) yield;
     }
@@ -303,8 +320,9 @@
     const d = this.model.daily || {};
     const tot = this.city.totals();
     let open = 0; for (let k = 0; k < this.city.regions.length; k++) open += this.city.regionOpen[k];
-    return { pop: tot.pop, jobs: tot.jobs, funds: this.econ.funds, capex: this.econ.capex, debt: this.econ.debtTotal(), share: d.metroShare || 0, cong: d.cong || 1, commute: d.commute || 0, riders: d.metro || 0, sat: this.econ.sat, regions: open, events: this.events.length, tasksDone: this.tasks.done.length, tasksFailed: this.tasks.failed.length,
-      coverage: d.coverage || 0, stations: this.compiled.stations.length, fiscF: this.econ.fiscalFactor(), macroRecs: this.macro ? this.macro.rec.length : 0 };
+    const dw = this.model.dailyWk || {}, de = this.model.dailyWe || {};
+    return { pop: tot.pop, jobs: tot.jobs, funds: this.econ.funds, capex: this.econ.capex, debt: this.econ.debtTotal(), share: d.metroShare || 0, cong: d.cong || 1, commute: dw.commute || d.commute || 0, riders: d.metro || 0, sat: this.econ.sat, regions: open, events: this.events.length, tasksDone: this.tasks.done.length, tasksFailed: this.tasks.failed.length,
+      coverage: d.coverage || 0, stations: this.compiled.stations.length, fiscF: this.econ.fiscalFactor(), macroRecs: this.macro ? this.macro.rec.length : 0, ridersWk: dw.metro || 0, ridersWe: de.metro || 0 };
   };
 
   // ---------------- 建设草案 ----------------
@@ -421,12 +439,17 @@
   // 预测
   Game.prototype.invalidatePrediction = function (msg) {
     const d = this.draft; if (!d) return;
+    d.autoVer = null;   // 票价、月份等外部条件变化时，即使草案版本没变也要允许自动重算。
     if (d.pred.state === 'running') this.model.cancelPredict();
     if (d.pred.state !== 'idle') d.pred = { state: 'stale', msg: msg || '草案已修改，预测需要重新计算', last: d.pred.result || d.pred.last };
     this.emit('prediction');
   };
   Game.prototype.requestPrediction = function () {
     const d = this.draft; if (!d) return;
+    if (this.pending || this.jumping || this.model.refreshing) {
+      this.invalidatePrediction('正在进行城市结算，请稍后重新计算预测');
+      return;
+    }
     const ev = this.draftEval();
     const C = this.draftCompiled();
     const ver = d.ver;
@@ -452,8 +475,9 @@
     const rg = this.city.regionAt(x, y);
     return (bd < 5 ? best + '一带' : '片区') + (rg ? '（' + rg.name.replace(/（.*）/, '') + '）' : '');
   };
-  Game.prototype.zoneCong = function (z) {
-    const model = this.model, P = model.live.per[0], road = model.road;
+  // 片区早高峰拥堵：默认工作日（通勤口径）
+  Game.prototype.zoneCong = function (z, dt) {
+    const model = this.model, P = model.ctxs[dt === 'we' ? 'we' : 'wd'].per[0], road = model.road;
     let num = 0, den = 0;
     for (let a = 0; a < road.nA; a++) {
       if (model.arcZone[a] !== z) continue;
@@ -487,6 +511,7 @@
       milestones: this.milestones || null,
       mapInit: this.mapInit || null,
       macro: this.macro && CM.Macro ? CM.Macro.serialize(this.macro) : null,
+      traffic: this.traffic || { v: CFG.TRAFFIC_MODEL },
     };
   };
   Game.restore = function (s) {
@@ -499,8 +524,17 @@
     g.city = new CM.City();
     g.city.generate(g.seed, CFG.START.y);
     g.city.restore(s.city, g.clock.y);
+    // 交通模型版本：1.8 及更早的存档为 1（典型工作日、通勤与其他两类出行），载入时升级到当前模型
+    const tv = (s.traffic && s.traffic.v) || 1, upgrade = tv < CFG.TRAFFIC_MODEL;
+    // 台北松山机场（v1.9 起可地下建设）：旧存档中该区域仍为未开放，读档时开放（机场照常运营，用地不开发）
+    let airportOpened = null;
+    if (D.airport && D.airport.buildable) {
+      const k = g.city.regions.findIndex(function (r) { return r.id === 'airport'; });
+      if (k >= 0 && !g.city.regionOpen[k] && g.city.regions[k].open != null && g.city.regions[k].open <= g.clock.y) { g.city.openRegion(k, g.clock.y, g.clock.m); airportOpened = g.city.regions[k]; }
+    }
     g.model = new CM.Model(g.city);
     g.model.setYear(g.clock.y + (g.clock.m - 1) / 12);
+    g.model.setDayType(CM.Model.dayType(g.clock.y, g.clock.m, g.clock.d));
     g.model.buildZones(); g.model.buildDemand();
     g.net = s.net;
     g.compiled = M.compile(g.net, g.city);
@@ -526,6 +560,17 @@
       }
       if (g.macro && !s.macro) g.macroNote = '城市经济自 ' + g.clock.y + ' 年 ' + g.clock.m + ' 月起接入：此前的经济数据未记录，不作补造';
     }
+    // 交通模型升级：保留原有建设、资金、债务、历史结算与任务进度；已结算的历史不重算。升级当月设过渡保护（见 inTransition）
+    if (upgrade) {
+      g.traffic = { v: CFG.TRAFFIC_MODEL, from: m.gameVersion || '1.8.0', at: [g.clock.y, g.clock.m, g.clock.d], until: g.ym() + 1 };
+      for (const t of g.tasks.active) if (t.type === 'ridership' && !t.basis) t.basis = 'wd';   // 进行中的客流任务沿用发布时的口径（典型工作日）
+      if (g.macro && CM.Macro && CM.Macro.rebaseTE) { try { CM.Macro.rebaseTE(g); } catch (e) { console.error(e); } }
+      g.logEvent({ tag: '版本', title: '交通模型升级（v' + CFG.GAME_VERSION + '）', desc: '存档来自 v' + g.traffic.from + '。居民出行改为通勤、上学、购物、医疗、旅游休闲与枢纽接驳六类，重要设施单独参与计算，工作日与周末分别模拟；地面铁路影响步行与道路通行。原有建设、资金、债务、历史结算与任务进度全部保留，此前的月度记录按旧口径（典型工作日）保存、不重算；升级当月满意度不因统计口径变化而下降，任务不判失败。' });
+      g.backupFailed = s.__backupFailed || null;
+      g.upgradeNote = s.__backupFailed ? '存档已在内存中升级到 v' + CFG.GAME_VERSION + ' 交通模型；升级前备份未能建立（' + s.__backupFailed + '），不会自动保存，原存档保持不变' :
+        '存档已升级到 v' + CFG.GAME_VERSION + ' 交通模型（升级前的原存档已另存为「升级前备份」，可在存档列表中载入或导出）';
+    } else g.traffic = Object.assign({ v: CFG.TRAFFIC_MODEL }, s.traffic);
+    if (airportOpened) g.logEvent({ tag: '规则', title: '新区域开放：' + airportOpened.name, desc: (D.airport.name || '机场') + '照常运营，用地不开发；范围内可以地下设站与地下穿越（v1.9 起）。' });
     return g;
   };
 })(window.CM);

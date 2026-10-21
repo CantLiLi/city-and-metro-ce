@@ -72,7 +72,7 @@
     this.ground = new Map(); this.iso = new Map(); this.cachePx = 0;
     this.overview = null; this.overviewStale = true; this.overviewAt = 0;
     this.frame = 0; this.time = 0;
-    this.layer = 'none'; this.layerOpt = { flow: 'all', station: 'all' };
+    this.layer = 'none'; this.layerOpt = { flow: 'all', station: 'all', stView: 'flow', stDt: 'avg', cover: 'time', facP: 'all', facDt: 'wd', gapDt: 'wd' };
     this.heat = null; this.heatKey = '';
     this.bFade = 0; this.roadVer = -1;
     this.labelsOn = true;
@@ -1511,21 +1511,86 @@
     }
   };
   // ---------------- 分析图层（热力格） ----------------
+  // 片区吸引的出行分到各格（按与 sim.js 相同的用地权重），用于「设施出行需求」与「地铁服务缺口」图层
+  Renderer.prototype.cellWeights = function (q) {
+    const city = this.game.city, LU = CM.LU, N = city.N, w = new Float32Array(N);
+    const fn = this.game.model.fn, excl = fn ? fn.excl : null;
+    for (let c = 0; c < N; c++) {
+      const pc = city.pop[c], jc = city.jobs[c], L = city.lu[c], com = L === LU.COM || L === LU.MIX;
+      if (q === 'hw') w[c] = jc;
+      else if (q === 'all') w[c] = pc + jc;
+      else if (excl && excl[c]) w[c] = 0;
+      else if (q === 'sc') w[c] = pc * 0.25 + (L === LU.INST ? jc * 1.2 : 0);
+      else if (q === 'sh') w[c] = jc * (com ? 1 : (L === LU.RES ? 0.5 : (L === LU.IND ? 0.1 : 0.3))) + pc * 0.05;
+      else if (q === 'md') w[c] = (L === LU.INST ? jc * 0.5 : 0) + (com ? jc * 0.05 : 0) + pc * 0.03;
+      else if (q === 'lz') w[c] = (city.isPark[c] || L === LU.PARK ? 400 * city.landFrac[c] : 0) + (L === LU.HILL ? 60 * city.landFrac[c] : 0) + (com ? jc * 0.25 : 0) + pc * 0.12 + (L === LU.LANDMARK ? 200 : 0);
+    }
+    return w;
+  };
+  Renderer.prototype.zoneToCells = function (zv, w) {
+    const model = this.game.model, out = new Float32Array(this.game.city.N);
+    for (let z = 0; z < model.Z; z++) {
+      const cs = model.zoneCells[z]; let s = 0;
+      for (const c of cs) s += w[c];
+      if (!(s > 0) || !(zv[z] > 0)) continue;
+      for (const c of cs) out[c] = zv[z] * w[c] / s;
+    }
+    return out;
+  };
   Renderer.prototype.buildHeat = function () {
-    const g = this.game, city = g.city, model = g.model, W = city.W, H = city.H;
-    const access = this.layer === 'cover' ? model.net : null;
-    const key = this.layer + ':' + city.version + ':' + g.clock.y + ':' + g.clock.m + ':' + (this.layer === 'cover' ? g.netVersion : '');
-    const old = this.heatLayers.get(this.layer);
+    const g = this.game, city = g.city, model = g.model, W = city.W, H = city.H, LO = this.layerOpt, lay = this.layer;
+    const access = lay === 'cover' || lay === 'gap' ? model.net : null;
+    const dyn = lay === 'fac' || lay === 'gap';
+    const key = lay + ':' + city.version + ':' + g.clock.y + ':' + g.clock.m + ':' + (lay === 'cover' ? g.netVersion + ':' + LO.cover : '') + (lay === 'fac' ? LO.facP + ':' + LO.facDt : '') + (lay === 'gap' ? LO.gapDt + ':' + g.netVersion : '') + (dyn ? ':' + model.cycles + ':' + (model.settled ? 's' : '') : '');
+    const old = this.heatLayers.get(lay);
     if (old && old.key === key && old.access === access) { this.heat = old.cv; this.heatKey = key; return; }
     this.heatKey = key;
     this.heat = old && old.cv.width === W && old.cv.height === H ? old.cv : makeCanvas(W, H);
     const ctx = this.heat.getContext('2d');
     const img = ctx.createImageData(W, H), d = img.data;
     const acc = model.net ? model.net.acc : null;
+    // 设施出行需求：片区吸引（按目的）分到各格；全部目的时按主要目的着色
+    let facCell = null, facDom = null, gapCell = null;
+    const TR = CFG.trips, PK = TR.keys;
+    const fd = dyn ? model.facData(lay === 'gap' ? LO.gapDt : LO.facDt) : null;
+    if (lay === 'fac' && fd) {
+      const Z = model.Z;
+      const list = LO.facP === 'all' ? ['sc', 'sh', 'md', 'lz'] : [LO.facP];   // 全部 = 设施类出行（上学、购物、医疗、休闲）；通勤按岗位，单独查看
+      facCell = new Float32Array(city.N); facDom = new Int8Array(city.N).fill(-1);
+      const best = new Float32Array(city.N);
+      for (const q of list) {
+        const qi = PK.indexOf(q);
+        let zv;
+        if (q === 'hb') {   // 枢纽接驳：城市一端（出发与到达的片区），按需求表中的接驳出行
+          zv = new Float32Array(Z); const od = model.od, t5 = od.t[5];
+          const mult = LO.facDt === 'we' ? model.weekendMult(model.year)[5] : 1;
+          for (let i = 0; i < Z; i++) for (let k = od.start[i]; k < od.start[i + 1]; k++) zv[i] += 2 * t5[k] * mult;
+        } else zv = fd.dest.subarray(qi * Z, qi * Z + Z);
+        const cv = this.zoneToCells(zv, this.cellWeights(q));
+        for (let c = 0; c < city.N; c++) { facCell[c] += cv[c]; if (cv[c] > best[c]) { best[c] = cv[c]; facDom[c] = qi; } }
+      }
+    }
+    if (lay === 'gap' && fd) {
+      const Z = model.Z, zv = new Float32Array(Z);
+      for (let z = 0; z < Z; z++) {
+        let dst = 0; for (let q = 0; q < 6; q++) dst += fd.dest[q * Z + z];
+        zv[z] = (fd.trips[z] + dst) * (1 - (acc ? acc.zCov[z] : 0));
+      }
+      gapCell = this.zoneToCells(zv, this.cellWeights('all'));
+    }
+    const stCol = function (k) { const hsh = (k * 2654435761) >>> 0; return [40 + (hsh & 127), 110 + ((hsh >> 7) & 100), 60 + ((hsh >> 14) & 140)]; };
     for (let c = 0; c < W * H; c++) {
       let col = null, a = 0;
       const p = city.pop[c] / 0.0625, jb = city.jobs[c] / 0.0625;
-      if (this.layer === 'pop') {
+      if (lay === 'fac') {
+        if (facCell) { const v = facCell[c] / 0.0625; if (v > 150) { const t = U.clamp(Math.sqrt(v / 40000), 0, 1); col = U.hex2rgb(TR.color[PK[facDom[c]]] || '#888888'); a = 0.1 + 0.42 * t; } }
+      } else if (lay === 'gap') {
+        if (gapCell) { const v = gapCell[c] / 0.0625; if (v > 400) { const t = U.clamp(Math.sqrt(v / 60000), 0, 1); col = U.ramp([[0, [255, 214, 170]], [0.5, [236, 112, 72]], [1, [180, 24, 34]]], t); a = 0.12 + 0.45 * t; } }
+      } else if (lay === 'cover' && LO.cover === 'station') {
+        const w = acc ? acc.cellWalk[c] : Infinity, k = acc ? acc.cellStation[c] : -1;
+        if (k >= 0 && w <= CFG.walk.maxAccessM) { col = stCol(k); a = 0.42 - 0.18 * U.clamp(w / CFG.walk.maxAccessM, 0, 1); }
+        else if (p > 4000) { col = [215, 48, 39]; a = U.clamp(0.1 + p / 120000, 0, 0.38); }
+      } else if (lay === 'pop') {
         // 浅色单色渐变、半透明（最高约 0.5），道路与地名仍清楚可见
         if (p > 200) { const t = U.clamp(Math.sqrt(p / 60000), 0, 1); col = U.ramp([[0, [255, 226, 150]], [0.5, [249, 158, 76]], [1, [222, 84, 52]]], t); a = 0.12 + 0.4 * t; }
       } else if (this.layer === 'jobs') {
@@ -1624,7 +1689,7 @@
     ctx.globalAlpha = 1;
     // ---- 图层（地面） ----
     const layerOn = this.layer !== 'none';
-    if (layerOn && ['pop', 'jobs', 'cover', 'region'].indexOf(this.layer) >= 0) {
+    if (layerOn && ['pop', 'jobs', 'cover', 'region', 'fac', 'gap'].indexOf(this.layer) >= 0) {
       this.buildHeat();
       setWorld();
       ctx.imageSmoothingEnabled = true;
@@ -1692,10 +1757,13 @@
     // ---- 图层（线状） ----
     if (this.layer === 'cong') this.drawCongestion(ctx);
     if (this.layer === 'flow') this.drawDesire(ctx);
+    if (this.layer === 'cover') this.drawCoverExtras(ctx, ui);
     // ---- 地铁 ----
     this.drawMetro(ctx, ui);
     if (agents) agents.drawTrains(ctx, this, ui);
     if (this.layer === 'station') this.drawStationFlows(ctx);
+    if (this.layer === 'gap') this.drawGapOverload(ctx);
+    if (this.layer === 'fac' || this.layer === 'gap') this.drawFacilities(ctx);
     if (this.fx.length) this.drawFx(ctx, dt);
     if (under < 0.5) this.drawAtmosphere(ctx);
     // ---- 标注 ----
@@ -2118,7 +2186,7 @@
   Renderer.prototype.flowList = function () {
     const g = this.game, model = g.model, fa = this.flowAreas();
     const p = model.weights(g.clock.minute).p0, mode = this.layerOpt.flow;
-    const key = model.cycles + ':' + p + ':' + mode + ':' + fa.ver + ':' + g.netVersion;
+    const key = model.cycles + ':' + model.dayType + ':' + p + ':' + mode + ':' + fa.ver + ':' + g.netVersion;
     if (this._fl && this._flKey === key) return this._fl;
     const P = model.live.per[p], B = model.B, n = fa.names.length;
     const tot = new Float64Array(n * n), met = new Float64Array(n * n), node = new Float64Array(n);
@@ -2313,10 +2381,12 @@
   };
   // 车站客流图层：用典型工作日的全天数据（夜间停运时同样可看）。圆的大小 = 车站日客流，颜色 = 高峰小时负荷；
   // 线路下方的半透明色带 = 区间日断面客流（双向合计）；客流较大的车站标出数值
+  // 统计口径（layerOpt.stDt）：周平均（5 个工作日 + 2 个周末日）、工作日或周末；高峰负荷为所选日类型中最大的高峰小时值
   Renderer.prototype.stationFlowData = function () {
-    const model = this.game.model, net = model.net, sd = model.dailyStale ? null : model.stDaily;
+    const model = this.game.model, net = model.net, dt = this.layerOpt.stDt || 'avg';
+    const sd = model.dailyStale ? null : (dt === 'wd' ? model.stDailyWk : (dt === 'we' ? model.stDailyWe : model.stDaily));
     if (!net || !sd || !net.N) return null;
-    const kind = this.layerOpt.station, key = model.cycles + ':' + net.N + ':' + net.R + ':' + kind;
+    const kind = this.layerOpt.station, key = model.cycles + ':' + model.version + ':' + net.N + ':' + net.R + ':' + kind + ':' + dt;
     if (this._sf && this._sfKey === key) return this._sf;
     const C = net.C, N = net.N, val = new Float32Array(N), ratio = new Float32Array(N);
     for (let i = 0; i < N; i++) {
@@ -2324,18 +2394,25 @@
       val[i] = kind === 'in' ? a : (kind === 'out' ? b : (kind === 'xfer' ? x : a + b + x));
       ratio[i] = (sd.peak[i] || 0) / CFG.metro.stationCap[C.stations[i].size];
     }
-    const segLoad = new Map();
+    const W = CFG.trips.weekWeights, dts = dt === 'avg' ? [['wd', W.wd], ['we', W.we]] : [[dt, 1]];
+    const segLoad = new Map(), segLF = new Map();
     for (let r = 0; r < net.R; r++) {
       const rt = C.routes[r], re = net.rideEdge[r];
       for (let k = 0; k < rt.segRefs.length; k++) {
-        let d = 0;
-        for (let p = 0; p < 4; p++) { const P = model.live.per[p]; d += ((P.load[re[2 * k]] || 0) + (P.load[re[2 * k + 1]] || 0)) * model.pHours[p] * (p === 3 ? 0.9 : 1); }
-        const id = rt.segRefs[k].id; segLoad.set(id, Math.max(segLoad.get(id) || 0, d));
+        let d = 0, lf = 0;
+        for (const x of dts) for (let p = 0; p < 4; p++) {
+          const P = model.ctxs[x[0]].per[p];
+          if (!P.load || P.load.length !== net.nE) continue;
+          d += ((P.load[re[2 * k]] || 0) + (P.load[re[2 * k + 1]] || 0)) * model.pHours[p] * (p === 3 ? 0.9 : 1) * x[1];
+          const capH = Math.max(1, (P.freq[r] || 0) * rt.cap);
+          lf = Math.max(lf, (P.load[re[2 * k]] || 0) / capH, (P.load[re[2 * k + 1]] || 0) / capH);
+        }
+        const id = rt.segRefs[k].id; segLoad.set(id, Math.max(segLoad.get(id) || 0, d)); segLF.set(id, Math.max(segLF.get(id) || 0, lf));
       }
     }
     let vmax = 1; for (let i = 0; i < N; i++) vmax = Math.max(vmax, val[i]);
     let smax = 1; segLoad.forEach(function (v) { smax = Math.max(smax, v); });
-    this._sf = { val: val, ratio: ratio, segLoad: segLoad, vmax: vmax, smax: smax }; this._sfKey = key;
+    this._sf = { val: val, ratio: ratio, segLoad: segLoad, segLF: segLF, vmax: vmax, smax: smax }; this._sfKey = key;
     return this._sf;
   };
   Renderer.prototype.drawStationFlows = function (ctx) {
@@ -2343,12 +2420,16 @@
     if (!net || !this.stPx || !this.drawnC) return;
     const sf = this.stationFlowData(); if (!sf) return;
     const C = net.C, DC = this.drawnC, zk = U.clamp(this.z / 26, 0.45, 1.15);   // 圆的大小随缩放变化，缩小时不互相压住
-    // 区间断面客流色带
+    const loadView = this.layerOpt.stView === 'load';
+    // 区间断面客流色带（高峰负荷视图：按高峰小时满载率着色）
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     sf.segLoad.forEach((v, id) => {
       const arr = this.segPx && this.segPx.get(id); if (!arr || v <= 0) return;
       const cs = C.segs.get(id), L = cs && C.net.lines[cs.seg.line]; if (!L) return;
-      ctx.strokeStyle = U.rgb(U.hex2rgb(L.color), 0.32); ctx.lineWidth = this.lineWidthPx() + (3 + 22 * Math.sqrt(v / sf.smax)) * zk;
+      if (loadView) {
+        const lf = sf.segLF.get(id) || 0, col = lf > 1 ? [217, 58, 58] : (lf > 0.6 ? [232, 163, 58] : [47, 163, 107]);
+        ctx.strokeStyle = U.rgb(col, 0.55); ctx.lineWidth = this.lineWidthPx() + (4 + 10 * Math.min(1.5, lf)) * zk;
+      } else { ctx.strokeStyle = U.rgb(U.hex2rgb(L.color), 0.32); ctx.lineWidth = this.lineWidthPx() + (3 + 22 * Math.sqrt(v / sf.smax)) * zk; }
       this.strokeArr(ctx, arr);
     });
     // 车站：按客流从小到大画，大站在上
@@ -2369,7 +2450,7 @@
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     let shown = 0;
     for (let q = list.length - 1; q >= 0 && shown < 30; q--) {
-      const it = list[q], name = C.stations[it.i].name, val = U.fmtPeople(it.v) + ' 人次';
+      const it = list[q], name = C.stations[it.i].name, val = loadView ? '高峰负荷 ' + U.fmtPct(sf.ratio[it.i], 0) : U.fmtPeople(it.v) + ' 人次';
       ctx.font = '600 12px ' + FONT; const w1 = ctx.measureText(name).width;
       ctx.font = '11px ' + FONT; const w2 = ctx.measureText(val).width;
       const w = Math.max(w1, w2) + 6, x = it.sp.x, y = it.sp.y + it.r + 4;
@@ -2381,6 +2462,155 @@
       ctx.font = '11px ' + FONT; ctx.strokeText(val, x, y + 21); ctx.fillStyle = TH.roadInk; ctx.fillText(val, x, y + 21);
     }
   };
+  // ---------------- 重要设施（v1.9）：设施出行需求与地铁服务缺口图层中的设施圆点 ----------------
+  // 圆的大小 = 所选日类型的日到访量（枢纽为到达与离开合计），外环颜色 = 乘地铁比例（红 → 绿）；服务缺口图层只突出无地铁接驳的设施
+  Renderer.prototype.facMarkers = function () {
+    const g = this.game, model = g.model, fn = model.fn;
+    if (!fn || !model.facDaily) return null;
+    const dt = this.layer === 'gap' ? (this.layerOpt.gapDt === 'we' ? 'we' : 'wd') : (this.layerOpt.facDt === 'we' ? 'we' : 'wd');
+    const fd = model.facData(dt); if (!fd || fd.F !== fn.F) return null;
+    const acc = model.net ? model.net.acc : null, facP = this.layerOpt.facP, PK = CFG.trips.keys;
+    const out = [];
+    let vmax = 1;
+    fn.list.forEach(function (f, k) {
+      let v = f.T.hub ? fd.inn[k] + fd.out[k] : fd.inn[k];
+      const m = f.T.hub ? fd.innM[k] + fd.outM[k] : fd.innM[k];
+      if (this.layer === 'fac' && facP !== 'all') { const qi = PK.indexOf(facP); v = qi >= 0 ? fd.purp[k * 6 + qi] * (f.T.hub && facP === 'hb' ? 2 : 1) : 0; if (!(v > 0)) return; }
+      const cov = acc && acc.NZ === fn.NZ ? acc.zCov[model.Z + k] : 0;
+      out.push({ f: f, k: k, v: v, share: v > 0 ? m / Math.max(v, 1) : 0, cov: cov });
+      if (v > vmax) vmax = v;
+    }, this);
+    return { list: out, vmax: vmax };
+  };
+  Renderer.prototype.drawFacilities = function (ctx) {
+    this._facPx = [];
+    const fm = this.facMarkers(); if (!fm) return;
+    const gap = this.layer === 'gap', zk = U.clamp(this.z / 26, 0.5, 1.15), tmp = {};
+    const list = fm.list.slice().sort(function (a, b) { return a.v - b.v; });
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const it of list) {
+      if (gap && (it.cov >= 0.3 || it.v < 1500)) continue;
+      const p = this.P(it.f.x, it.f.y, 0, tmp);
+      if (p.x < -40 || p.y < -40 || p.x > this.w + 40 || p.y > this.h + 40) continue;
+      const r = (4 + 16 * Math.sqrt(it.v / fm.vmax)) * zk;
+      const ring = gap ? [122, 31, 31] : U.ramp([[0, [214, 52, 52]], [0.25, [236, 160, 50]], [0.6, [40, 160, 90]]], U.clamp(it.share, 0, 0.6) / 0.6);
+      ctx.fillStyle = gap ? 'rgba(122,31,31,0.18)' : U.rgb(U.hex2rgb(CFG.trips.color[Object.keys(it.f.p)[0]] || '#888888'), 0.55);
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = U.rgb(ring, 0.95); ctx.stroke();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = TH.halo; ctx.beginPath(); ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2); ctx.stroke();
+      this._facPx.push({ id: it.f.id, x: p.x, y: p.y, r: Math.max(8, r + 2) });
+    }
+    // 标注：到访量较大的设施（不互相重叠）
+    const placed = [];
+    let shown = 0;
+    for (let q = list.length - 1; q >= 0 && shown < 24; q--) {
+      const it = list[q];
+      if (gap && (it.cov >= 0.3 || it.v < 1500)) continue;
+      const p = this.P(it.f.x, it.f.y, 0, tmp), r = (4 + 16 * Math.sqrt(it.v / fm.vmax)) * zk;
+      const name = it.f.name.replace(/（.*）/, ''), val = gap ? '无地铁接驳 · ' + U.fmtPeople(it.v) + ' 人次' : U.fmtPeople(it.v) + ' 人次 · 地铁 ' + U.fmtPct(it.share, 0);
+      ctx.font = '600 12px ' + FONT; const w = Math.max(ctx.measureText(name).width, ctx.measureText(val).width * 0.92) + 8;
+      const b = [p.x - w / 2, p.y + r + 2, p.x + w / 2, p.y + r + 30];
+      if (b[2] < 0 || b[0] > this.w || b[3] < 0 || b[1] > this.h) continue;
+      if (placed.some(function (o) { return b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]; })) continue;
+      placed.push(b); shown++;
+      ctx.lineJoin = 'round'; ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo;
+      ctx.strokeText(name, p.x, p.y + r + 9); ctx.fillStyle = TH.ink; ctx.fillText(name, p.x, p.y + r + 9);
+      ctx.font = '11px ' + FONT; ctx.strokeText(val, p.x, p.y + r + 23); ctx.fillStyle = TH.roadInk; ctx.fillText(val, p.x, p.y + r + 23);
+    }
+  };
+  // 点击选中设施：设施图层中的圆点；其他情况下点在设施场地（地标）或其中心附近
+  Renderer.prototype.pickFacility = function (sx, sy, wx, wy) {
+    const g = this.game, model = g && g.model;
+    if (!model || !model.fn) return null;
+    if ((this.layer === 'fac' || this.layer === 'gap') && this._facPx) {
+      let best = null, bd = 1e9;
+      for (const it of this._facPx) { const d = Math.hypot(sx - it.x, sy - it.y); if (d <= it.r && d < bd) { bd = d; best = it.id; } }
+      if (best) return best;
+    }
+    let best = null, bd = 1e9;
+    for (const f of model.fn.list) {
+      let hit = false, d = U.dist(wx, wy, f.x, f.y);
+      if (f.lmK >= 0) hit = g.city.inLandmarkSite(f.lmK, wx, wy) || d < 0.35;
+      else hit = d < Math.min(0.6, Math.max(0.3, f.r * 0.5));
+      if (hit && d < bd) { bd = d; best = f.id; }
+    }
+    return best;
+  };
+  // 地铁服务缺口：已有地铁但高峰超载的车站与区间（按所选日类型）
+  Renderer.prototype.drawGapOverload = function (ctx) {
+    const model = this.game.model, net = model.net;
+    if (!net || !net.R || !this.stPx || !this.drawnC) return;
+    const dt = this.layerOpt.gapDt === 'we' ? 'we' : 'wd', sd = dt === 'we' ? model.stDailyWe : model.stDailyWk;
+    const C = net.C, DC = this.drawnC, zk = U.clamp(this.z / 26, 0.5, 1.15);
+    ctx.lineCap = 'round';
+    for (let r = 0; r < net.R; r++) {
+      const rt = C.routes[r], re = net.rideEdge[r];
+      for (let k = 0; k < rt.segRefs.length; k++) {
+        let lf = 0;
+        for (let p = 0; p < 4; p++) { const P = model.ctxs[dt].per[p]; if (!P.load || P.load.length !== net.nE) continue; const cap = Math.max(1, P.freq[r] * rt.cap); lf = Math.max(lf, P.load[re[2 * k]] / cap, P.load[re[2 * k + 1]] / cap); }
+        if (lf <= 1) continue;
+        const arr = this.segPx && this.segPx.get(rt.segRefs[k].id); if (!arr) continue;
+        ctx.strokeStyle = 'rgba(239,138,58,0.75)'; ctx.lineWidth = this.lineWidthPx() + 8 * zk; this.strokeArr(ctx, arr);
+      }
+    }
+    if (!sd || model.dailyStale) return;
+    for (let i = 0; i < C.stations.length; i++) {
+      const ratio = (sd.peak[i] || 0) / CFG.metro.stationCap[C.stations[i].size]; if (ratio <= 1) continue;
+      const k = DC.sIndex.get(C.stations[i].id); if (k === undefined) continue;
+      const sp = this.stPx[k]; if (!sp) continue;
+      ctx.fillStyle = 'rgba(239,138,58,0.55)'; ctx.strokeStyle = 'rgba(190,90,20,0.95)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, (9 + 6 * Math.min(1, ratio - 1)) * zk, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  };
+  // 地铁覆盖图层附加：地面铁路的阻隔（无通道处）、按车站划分时的分界线、选中车站的步行范围
+  Renderer.prototype.coverGeom = function () {
+    const g = this.game, city = g.city, model = g.model, acc = model.net ? model.net.acc : null;
+    const key = city.roadVersion + ':' + city.version + ':' + g.netVersion + ':' + (acc ? 1 : 0) + ':' + this.layerOpt.cover;
+    if (this._cg2 && this._cg2.key === key && this._cg2.acc === acc) return this._cg2;
+    const W = city.W, H = city.H, VW = city.VW, rail = [], bound = [];
+    if (city.eRail) for (let e = 0; e < city.eRail.length; e++) {
+      if (city.eRail[e] !== 2 || city.eCls[e] >= 3 || city.eCls[e] < 1) continue;
+      const uv = city.edgeVerts(e); rail.push([uv[0] % VW, (uv[0] / VW) | 0, uv[1] % VW, (uv[1] / VW) | 0]);
+    }
+    if (acc && this.layerOpt.cover === 'station') {
+      const cs = acc.cellStation, cw = acc.cellWalk, mx = CFG.walk.maxAccessM;
+      const st = function (c) { return cw[c] <= mx ? cs[c] : -1; };
+      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+        const c = j * W + i, a = st(c); if (a < 0) continue;
+        if (i + 1 < W) { const b = st(c + 1); if (b >= 0 && b !== a) bound.push([i + 1, j, i + 1, j + 1]); }
+        if (j + 1 < H) { const b = st(c + W); if (b >= 0 && b !== a) bound.push([i, j + 1, i + 1, j + 1]); }
+      }
+    }
+    this._cg2 = { key: key, acc: acc, rail: rail, bound: bound };
+    return this._cg2;
+  };
+  Renderer.prototype.drawCoverExtras = function (ctx, ui) {
+    const cg = this.coverGeom(), tmp = {}, tmp2 = {};
+    const seg = (list) => { ctx.beginPath(); for (const s of list) { this.P(s[0], s[1], 0, tmp); this.P(s[2], s[3], 0, tmp2); ctx.moveTo(tmp.x, tmp.y); ctx.lineTo(tmp2.x, tmp2.y); } };
+    if (cg.bound.length) { seg(cg.bound); ctx.strokeStyle = TH.night ? 'rgba(220,230,240,0.45)' : 'rgba(40,60,50,0.45)'; ctx.lineWidth = 1; ctx.stroke(); }
+    if (cg.rail.length && this.z >= 10) { seg(cg.rail); ctx.strokeStyle = 'rgba(192,57,43,0.85)'; ctx.lineWidth = 2.2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]); }
+    // 选中车站：步行 15 分钟范围的外轮廓
+    const sel = ui && ui.selection, model = this.game.model, acc = model.net ? model.net.acc : null;
+    if (!sel || sel.kind !== 'station' || !acc) return;
+    const k = model.net.C.sIndex.get(sel.id); if (k === undefined) return;
+    const tr = acc.trees[k]; if (!tr) return;
+    const city = this.game.city, W = city.W, H = city.H, VW = city.VW, mx = CFG.walk.maxAccessM, extra = CFG.walk.cellExtraM;
+    const dv = new Map(); for (let q = 0; q < tr.verts.length; q++) dv.set(tr.verts[q], tr.dist[q]);
+    const inR = function (i, j) {
+      if (i < 0 || j < 0 || i >= W || j >= H) return false;
+      const v0 = j * VW + i; let m = Infinity;
+      for (const v of [v0, v0 + 1, v0 + VW, v0 + VW + 1]) { const d = dv.get(v); if (d !== undefined && d < m) m = d; }
+      return m + extra <= mx;
+    };
+    const st = model.net.C.stations[k], ci = Math.floor(st.x), cj = Math.floor(st.y), edges = [];
+    for (let j = cj - 7; j <= cj + 7; j++) for (let i = ci - 7; i <= ci + 7; i++) {
+      if (!inR(i, j)) continue;
+      if (!inR(i - 1, j)) edges.push([i, j, i, j + 1]); if (!inR(i + 1, j)) edges.push([i + 1, j, i + 1, j + 1]);
+      if (!inR(i, j - 1)) edges.push([i, j, i + 1, j]); if (!inR(i, j + 1)) edges.push([i, j + 1, i + 1, j + 1]);
+    }
+    seg(edges); ctx.strokeStyle = TH.halo; ctx.lineWidth = 5; ctx.stroke(); ctx.strokeStyle = '#14a252'; ctx.lineWidth = 2.5; ctx.stroke();
+  };
+
   // ---------------- 地图定位高亮：片区（矩形）、区域（范围与边界）、道路（线形）、地点（圆），脉动显示数秒 ----------------
   Renderer.prototype.setHighlight = function (hl) {
     this.hl = hl ? Object.assign({ t0: this.time, dur: 7 }, hl) : null;
@@ -2488,7 +2718,7 @@
     };
     // 车站名
     const C = this.drawnC;
-    const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
+    const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station' || this.layer === 'fac' || this.layer === 'gap';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
     if (C && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
       ctx.globalAlpha = this.labA;
       const fs = z >= 22 ? 12.5 : 11.5;

@@ -180,8 +180,9 @@
 
   // ======================== 交通效率 ========================
   // 采样：覆盖与分担率（可达性）、平均通勤、拥堵；相对接入时的基准换算为生产率系数（约 0.94–1.08）
+  // 交通效率按工作日计算（通勤与工作出行的效率，v1.9 起显式取工作日结果，与此前的典型工作日口径一致）
   function teSample(g) {
-    const d = g.model && g.model.daily;
+    const d = g.model && (g.model.dailyWk || g.model.daily);
     if (!d || !d.ready || !(d.trips > 0)) return null;
     const acc = 0.55 * clamp((d.coverage || 0) / 0.6, 0, 1) + 0.45 * clamp((d.metroShare || 0) / 0.45, 0, 1);
     return { acc: acc, comm: d.commute || 0, cong: d.cong || 1, share: d.metroShare || 0 };
@@ -209,7 +210,7 @@
     const st = {
       v: 1, map: g.mapId, origin: origin, since: [g.clock.y, g.clock.m],
       gaps: {}, gv: 0, fired: {}, sim: [], simYears: {}, rec: [], cur: blankCur(g.clock.y), last: g.clock.y - 1,
-      teEff: 1, jf: 1, jfR: 1, fisc: null,
+      teEff: 1, jf: 1, jfR: 1, fisc: null, teV: 2,
     };
     // 每岗位实际产出（按价格基年价格；开局年与价格基年不同时折算）
     st.K = c.gdp0 / (base < y0 ? priceIdx(st, c, y0) : 1) / Math.max(1, jobsCurve(y0));
@@ -251,6 +252,18 @@
     sample(g, st);
     syncEcon(g);
     return st;
+  };
+  // 交通模型升级（旧存档）：新模型的工作日指标与旧模型不完全相同。按升级前最后一次采样（旧口径）与升级后的采样之差平移基准，
+  // 使交通效率系数在升级前后连续，之后的改善或恶化照常计入；没有旧采样时保持原基准
+  Macro.rebaseTE = function (g) {
+    const st = g.macro; if (!st || st.teV === 2) return false;
+    const old = st.cur && st.cur.last, s = teSample(g);
+    st.teV = 2;
+    if (!old || !s || !st.te0) return false;
+    const b = st.te0;
+    st.te0 = { acc: b.acc + (s.acc - old.acc), comm: old.comm > 0 ? b.comm * s.comm / old.comm : b.comm, cong: old.cong > 0 ? b.cong * s.cong / old.cong : b.cong, share: b.share + (s.share - old.share) };
+    st.cur.last = s;
+    return true;
   };
   Macro.serialize = function (st) {
     if (!st) return null;

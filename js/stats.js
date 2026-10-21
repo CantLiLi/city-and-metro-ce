@@ -364,8 +364,8 @@
     el.appendChild(grid);
     const cg = h('div', { class: 'chart-grid' });
     cg.append(
-      ts(H, '地铁日客运量', '典型工作日乘车人次', [{ name: '地铁日客运量', color: P[0], vals: pick(H, 'riders') }], { fmt: peopleFmt, axisFmt: axisPeople, area: true, int: true, icon: 'train' }),
-      hbarChart({ title: '各线路日客运量', sub: '典型工作日上车人次', icon: 'route', items: lineItems(g), fmt: function (v) { return U.fmtPeople(v); }, empty: '还没有运营中的线路。' }));
+      ts(H, '地铁日客运量', '日均乘车人次（周平均；v1.9 之前的记录为典型工作日）', [{ name: '地铁日客运量', color: P[0], vals: pick(H, 'riders') }], { fmt: peopleFmt, axisFmt: axisPeople, area: true, int: true, icon: 'train' }),
+      hbarChart({ title: '各线路日客运量', sub: '日均上车人次（周平均）', icon: 'route', items: lineItems(g), fmt: function (v) { return U.fmtPeople(v); }, empty: '还没有运营中的线路。' }));
     el.appendChild(cg);
   }
 
@@ -594,7 +594,7 @@
   const NOTES = {
     milestones: '只记录关键节点：地铁建设的「第一次」与里程关口、客流与分担率关口、人口关口、本地图的重大历史事件、地标落成与填海成陆。',
     econ: '按年记录：每年 1 月结算上一年。游戏结果为本局地图范围的模拟值；预测只包含已经发生的事件；参考数据为全国或地区口径的近似值，与地图范围数据分开显示。',
-    _: '按月记录，最后一点为当前值；客流为典型工作日模拟结果。悬停图表查看数值。',
+    _: '按月记录，最后一点为当前值；客流为周平均日（5 个工作日 + 2 个周末日）的模拟结果，v1.9 之前的记录为典型工作日口径（不重算）。悬停图表查看数值。',
   };
 
   // ---------- 外框：窗口与标签只建一次；切换标签或刷新数据只替换内容区（不重播入场动画，图表同步绘制，不闪动） ----------

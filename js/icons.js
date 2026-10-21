@@ -126,6 +126,18 @@
     factory: S('<path d="M3 20.5V11l5 3V11l5 3V7.5h3V4h3v16.5z"/><path d="M3 20.5h18"/><path d="M7 17.5h2M12 17.5h2"/>'),
     percent: S('<path d="M18.5 5.5l-13 13"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/>'),
     report: S('<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 16v-3M12 16V9M16 16v-5"/>'),
+    // v1.9：设施与新图层
+    lyFac: S('<g stroke-width="2.1"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="7" r="2.2"/><circle cx="14" cy="17" r="3.8"/><path d="M9.6 9.6l2.4 4M15 9l-.6 4.2"/></g>'),
+    lyGap: S('<g stroke-width="2.1"><path d="M12 3a7 7 0 0 1 7 7c0 5-7 11-7 11S5 15 5 10a7 7 0 0 1 7-7z"/><path d="M9.5 8l5 5M14.5 8l-5 5"/></g>'),
+    plane: S('<path d="M10.5 21l1.5-1.2 1.5 1.2v-2l-1-1V13l7 2v-2l-7-4V4.5a1 1 0 0 0-2 0V9l-7 4v2l7-2v4.9l-1 1z"/>'),
+    school: S('<path d="M2.5 9.5L12 5l9.5 4.5L12 14z"/><path d="M6.5 11.5V16c1.5 1.4 3.5 2 5.5 2s4-.6 5.5-2v-4.5M21.5 9.5V15"/>'),
+    hospital: S('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>'),
+    bag: S('<path d="M5.5 8h13l-1 12.5h-11z"/><path d="M9 10V6.5a3 3 0 0 1 6 0V10"/>'),
+    camera: S('<path d="M4 8h3.2l1.6-2.5h6.4L16.8 8H20v11H4z"/><circle cx="12" cy="13" r="3.4"/>'),
+    tree: S('<path d="M12 3l5 6.5h-2.6L18 14h-4v6h-4v-6H6l3.6-4.5H7z"/>'),
+    stadium: S('<ellipse cx="12" cy="9" rx="8.5" ry="3.5"/><path d="M3.5 9v6c0 1.9 3.8 3.5 8.5 3.5s8.5-1.6 8.5-3.5V9"/><path d="M8 12.2V18M16 12.2V18"/>'),
+    expo: S('<path d="M3 20h18M4.5 20V11l7.5-6 7.5 6v9"/><path d="M9 20v-5h6v5"/>'),
+    pin: S('<path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/>'),
   };
   CM.ICON = I;
   CM.icon = function (name, size, cls) {

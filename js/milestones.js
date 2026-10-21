@@ -80,7 +80,7 @@
       for (const k of SHARE) if (k <= st.share0 * 1.1) st.done['share-' + k] = 1;
     }
     if (g.compiled.stations.length) {
-      for (const k of RIDE) if ((d.metro || 0) >= k) add(g, 'ride-' + k, { cat: 'ride', icon: 'people', big: k >= 1e6, title: '地铁日客运量突破 ' + fmtN(k) + ' 人次', desc: '典型工作日 ' + U.fmtPeople(d.metro) + ' 人次，分担率 ' + U.fmtPct(d.metroShare || 0, 1) });
+      for (const k of RIDE) if ((d.metro || 0) >= k) add(g, 'ride-' + k, { cat: 'ride', icon: 'people', big: k >= 1e6, title: '地铁日客运量突破 ' + fmtN(k) + ' 人次', desc: '日均（周平均）' + U.fmtPeople(d.metro) + ' 人次，分担率 ' + U.fmtPct(d.metroShare || 0, 1) });
       for (const k of SHARE) if ((d.metroShare || 0) >= k) add(g, 'share-' + k, { cat: 'ride', icon: 'metro', title: '地铁分担率达到 ' + Math.round(k * 100) + '%', desc: '每 ' + Math.round(1 / k) + ' 次出行就有 1 次乘地铁' });
       if ((d.coverage || 0) >= 0.5) add(g, 'cover-50', { cat: 'ride', icon: 'station', title: '地铁覆盖过半人口', desc: U.fmtPct(d.coverage, 0) + ' 的居民步行 15 分钟可到达地铁站' });
     }
