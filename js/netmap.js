@@ -49,33 +49,6 @@
   }
 
   const cross = function (ax, ay, bx, by) { return ax * by - ay * bx; };
-  function diagramAxis(size, values, L, stations, axis) {
-    const sorted = Array.from(new Set(values)).sort(function (a, b) { return a - b; }), groups = [];
-    for (const v of sorted) { const g = groups[groups.length - 1]; if (g && v - g[g.length - 1] < L * 0.26 && v - g[0] < L * 0.5 && !stations.some(function (a) { return a[axis] === v && stations.some(function (b) { const other = axis === 'x' ? 'y' : 'x'; return b[axis] >= g[0] && b[axis] <= g[g.length - 1] && Math.abs(a[other] - b[other]) < L * 0.55; }); })) g.push(v); else groups.push([v]); }
-    const knots = []; let last = null, dest = 0;
-    for (const g of groups) {
-      const a = g[0], b = g[g.length - 1], c = (a + b) / 2;
-      dest = last == null ? c : dest + Math.max(L * 0.8, c - last);
-      if (a === b) knots.push([a, dest]); else knots.push([a, dest - (b - a) * 0.05], [b, dest + (b - a) * 0.05]);
-      last = c;
-    }
-    if (knots[0][0] > 0) knots.unshift([0, knots[0][1] - knots[0][0]]);
-    if (knots.at(-1)[0] < size) { const p = knots.at(-1); knots.push([size, p[1] + size - p[0]]); }
-    if (knots.length === 1) knots.push([knots[0][0] + 1, knots[0][1] + 1]);
-    const map = function (x, inverse) { const k = inverse ? 1 : 0, v = 1 - k; let lo = 0, hi = knots.length - 1; while (hi - lo > 1) { const mid = (hi + lo) >> 1; if (knots[mid][k] <= x) lo = mid; else hi = mid; } return knots[lo][v] + (x - knots[lo][k]) / (knots[hi][k] - knots[lo][k]) * (knots[hi][v] - knots[lo][v]); };
-    return { knots: knots, map: function (x) { return map(x, false); }, inverse: function (x) { return map(x, true); } };
-  }
-  function schematicProjection(net, lay, spacing) {
-    const scale = UNIT * spacing / lay.L;
-    const ax = diagramAxis(CM.CFG.W, lay.st.map(function (sid) { return net.stations[sid].x; }), lay.L, Object.values(net.stations), 'x'), ay = diagramAxis(CM.CFG.H, lay.st.map(function (sid) { return net.stations[sid].y; }), lay.L, Object.values(net.stations), 'y');
-    const base = function (x, y) { return [ax.map(x) * scale + base.ox, ay.map(y) * scale + base.oy]; };
-    base.ox = 0; base.oy = 0; base.scale = scale; base.ax = ax; base.ay = ay;
-    base.inverse = function (x, y) { return [ax.inverse((x - base.ox) / scale), ay.inverse((y - base.oy) / scale)]; };
-    base.sourcePath = function (pts) { return pts.map(function (p) { return base.inverse(p[0], p[1]); }); };
-    base.path = function (pts, closed) { if (!pts.length) return []; const out = [base(pts[0][0], pts[0][1])]; for (let i = 1; i < pts.length + (closed ? 1 : 0); i++) { const a = pts[i - 1], b = pts[i % pts.length], cuts = [1]; for (const pair of [[ax, 0], [ay, 1]]) { const k = pair[1], d = b[k] - a[k]; if (d) for (const knot of pair[0].knots) { const t = (knot[0] - a[k]) / d; if (t > 0 && t < 1) cuts.push(t); } } cuts.sort(function (a, b) { return a - b; }); for (const t of cuts) out.push(base(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)); } return out; };
-    return base;
-  }
-
   function cleanPoints(points) {
     const out = [];
     for (const p of points) {
@@ -190,14 +163,13 @@
   }
 
   function projection(net, lay, spacing) {
-    if (!geographic) return schematicProjection(net, lay, spacing);
     const unit = UNIT * spacing;
     const identity = function (size) { return { knots: [[0, 0], [size, size]], map: function (x) { return x; } }; };
     const ax = identity(CM.CFG.W);
     const ay = identity(CM.CFG.H);
     const base = function (x, y) { return [ax.map(x) * unit / lay.L + base.ox, ay.map(y) * unit / lay.L + base.oy]; };
     base.ox = 0; base.oy = 0; base.scale = unit / lay.L; base.ax = ax; base.ay = ay;
-    // 地理模式的轨道、水岸与岛屿使用同一等比例投影。
+    // 两种模式的站点使用同一比例，不能逐轴或局部拉伸站距；简洁图只简化线路走向。
     base.path = function (pts, closed) {
       if (!pts.length) return [];
       const out = [base(pts[0][0], pts[0][1])];
@@ -284,11 +256,17 @@
   }
   // 车站标志与地图一致：普通站为白底圆、线路色描边；换乘站（站内换乘或站外步行换乘）为更大的白底圆 +
   // 深色外环 + 按各线路颜色分段的内环 + ⇄ 换乘箭头（上箭头向右、下箭头向左）
-  function stationMark(s, x, y, lines, net, inter, tip) {
+  function stationMark(s, x, y, lines, net, inter, tip, anchors) {
     const attrs = 'data-st="' + s.id + '" data-lines="' + lines.join(' ') + '"', f = function (v) { return v.toFixed(1); };
     if (!inter) return '<circle ' + attrs + ' cx="' + f(x) + '" cy="' + f(y) + '" r="6.5" class="nm-st" stroke="' + net.lines[lines[0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
     const r = 11, ow = 3.3, rr = r - ow / 2 - 1.5, n = lines.length, gap = n > 1 ? 0.22 : 0;
-    let out = '<g ' + attrs + ' class="nm-x"><title>' + U.esc(tip) + '</title><circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
+    let out = '<g ' + attrs + ' class="nm-x"><title>' + U.esc(tip) + '</title>';
+    // 并排线路的站台由同一个换乘标连接，站点基准仍在等比例投影的位置。
+    if (anchors && anchors.some(function (p) { return U.dist(x, y, p[0], p[1]) > 0.5; })) {
+      const d = anchors.map(function (p) { return 'M' + f(x) + ' ' + f(y) + 'L' + f(p[0]) + ' ' + f(p[1]); }).join('');
+      out += '<path d="' + d + '" fill="none" stroke="#25334a" stroke-width="25.3" stroke-linecap="round"/><path d="' + d + '" fill="none" stroke="#fff" stroke-width="22" stroke-linecap="round"/>';
+    }
+    out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
     if (n === 1) out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + f(rr) + '" class="nm-xa" stroke="' + net.lines[lines[0]].color + '"/>';
     else for (let k = 0; k < n; k++) {
       const a0 = -Math.PI / 2 + k * Math.PI * 2 / n + gap / 2, a1 = -Math.PI / 2 + (k + 1) * Math.PI * 2 / n - gap / 2;
@@ -333,6 +311,126 @@
     if (row) rows.push(row);
     return rows;
   }
+  // 以简洁图的直线走廊分配行道，包含不同区间之间的局部重合，而非只比较整段真实几何。
+  function parallelRoutes(tracks, net, base) {
+    const channels = new Map(), bundles = [], ends = new Map(), stationLines = new Map(), stationAnchors = new Map();
+    const EPS = 1e-6, GAP = 14;
+    const addEnd = function (sid, track, start) {
+      let lines = ends.get(sid); if (!lines) { lines = new Map(); ends.set(sid, lines); }
+      let list = lines.get(track.seg.line); if (!list) { list = []; lines.set(track.seg.line, list); }
+      list.push({ track: track, start: start });
+    };
+    for (const track of tracks) {
+      const raw = track.route.raw, legs = [];
+      for (let i = 1; i < raw.length; i++) {
+        const a = raw[i - 1], b = raw[i], length = U.dist(a[0], a[1], b[0], b[1]);
+        if (length < EPS) continue;
+        const dx = (b[0] - a[0]) / length, dy = (b[1] - a[1]) / length;
+        const reverse = dx < -EPS || Math.abs(dx) < EPS && dy < 0, ux = reverse ? -dx : dx, uy = reverse ? -dy : dy;
+        const nx = -uy, ny = ux, at = nx * a[0] + ny * a[1];
+        const key = Math.round(ux * 1e6) + ':' + Math.round(uy * 1e6) + ':' + Math.round(at * 1e5);
+        const t0 = ux * a[0] + uy * a[1], t1 = ux * b[0] + uy * b[1];
+        const leg = { a: a, b: b, dx: dx, dy: dy, nx: nx, ny: ny, lo: Math.min(t0, t1), hi: Math.max(t0, t1), line: track.seg.line, offset: 0 };
+        if (!channels.has(key)) channels.set(key, []); channels.get(key).push(leg); legs.push(leg);
+      }
+      track.legs = legs;
+      addEnd(track.seg.a, track, true); addEnd(track.seg.b, track, false);
+    }
+    for (const legs of channels.values()) {
+      legs.sort(function (a, b) { return a.lo - b.lo || a.hi - b.hi; });
+      let group = [], hi = -Infinity;
+      const assign = function () {
+        const lines = M.sortIds(Array.from(new Set(group.map(function (leg) { return leg.line; }))));
+        if (lines.length < 2) return;
+        const bundle = { lines: lines, legs: group, links: [], sign: 0 }; bundles.push(bundle);
+        for (const leg of group) leg.bundle = bundle;
+      };
+      for (const leg of legs) {
+        // 仅在一个点相交或接触不能视作共用走廊。
+        if (leg.lo >= hi - EPS && group.length) { assign(); group = []; hi = -Infinity; }
+        group.push(leg); hi = Math.max(hi, leg.hi);
+      }
+      if (group.length) assign();
+    }
+    // 共用走廊转弯时保持内外顺序；不能在上行 / 下行切换后把并排线路编成交叉。
+    const connect = function (a, b, relation) {
+      const x = a && a.bundle, y = b && b.bundle;
+      if (!x || !y || x === y || x.lines.filter(function (lid) { return y.lines.indexOf(lid) >= 0; }).length < 2) return;
+      x.links.push({ bundle: y, relation: relation }); y.links.push({ bundle: x, relation: relation });
+    };
+    const side = function (leg) { return Math.sign(cross(leg.dx, leg.dy, leg.nx, leg.ny)); };
+    for (const track of tracks) for (let i = 1; i < track.legs.length; i++) connect(track.legs[i - 1], track.legs[i], side(track.legs[i - 1]) * side(track.legs[i]));
+    for (const lines of ends.values()) for (const list of lines.values()) for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j], al = a.track.legs[a.start ? 0 : a.track.legs.length - 1], bl = b.track.legs[b.start ? 0 : b.track.legs.length - 1];
+      if (al && bl) connect(al, bl, -side(al) * (a.start ? 1 : -1) * side(bl) * (b.start ? 1 : -1));
+    }
+    for (const first of bundles) {
+      if (first.sign) continue;
+      first.sign = first.legs[0].nx < -EPS ? -1 : 1;
+      const queue = [first];
+      for (let i = 0; i < queue.length; i++) for (const link of queue[i].links) if (!link.bundle.sign) { link.bundle.sign = queue[i].sign * link.relation; queue.push(link.bundle); }
+    }
+    for (const bundle of bundles) {
+      const offsets = new Map(bundle.lines.map(function (lid, i) { return [lid, (i - (bundle.lines.length - 1) / 2) * GAP * bundle.sign]; }));
+      for (const leg of bundle.legs) leg.offset = offsets.get(leg.line);
+    }
+    const intersection = function (p, u, q, v) {
+      const det = cross(u[0], u[1], v[0], v[1]); if (Math.abs(det) < EPS) return null;
+      const t = cross(q[0] - p[0], q[1] - p[1], v[0], v[1]) / det;
+      return [p[0] + u[0] * t, p[1] + u[1] * t];
+    };
+    const shifted = function (p, leg) { return [p[0] + leg.nx * leg.offset, p[1] + leg.ny * leg.offset]; };
+    for (const track of tracks) {
+      const legs = track.legs, raw = [];
+      if (!legs.length) continue;
+      raw.push(shifted(legs[0].a, legs[0]));
+      for (let i = 1; i < legs.length; i++) {
+        const a = legs[i - 1], b = legs[i], p = shifted(a.b, a), q = shifted(b.a, b);
+        const join = intersection(p, [a.dx, a.dy], q, [b.dx, b.dy]);
+        const cap = Math.max(GAP * 2, Math.max(Math.abs(a.offset), Math.abs(b.offset)) * 3);
+        if (join && U.dist(join[0], join[1], a.b[0], a.b[1]) <= cap) raw.push(join);
+        else { raw.push(p); if (U.dist(p[0], p[1], q[0], q[1]) > EPS) raw.push(q); }
+      }
+      raw.push(shifted(legs[legs.length - 1].b, legs[legs.length - 1]));
+      track.route.raw = cleanPoints(raw);
+    }
+    for (const [sid, lines] of ends) {
+      const s = net.stations[sid], center = base(s.x, s.y), anchors = [];
+      const byLine = new Map(); stationLines.set(sid, byLine);
+      for (const [lid, list] of lines) {
+        const points = list.map(function (e) { const p = e.track.route.raw; return e.start ? p[0] : p[p.length - 1]; });
+        let anchor = center.slice();
+        if (lines.size > 1) {
+          anchor = [points.reduce(function (v, p) { return v + p[0]; }, 0) / points.length, points.reduce(function (v, p) { return v + p[1]; }, 0) / points.length];
+          if (list.length === 2) {
+            const dirs = list.map(function (e) { const p = e.track.route.raw, a = e.start ? p[0] : p[p.length - 1], b = e.start ? p[1] : p[p.length - 2]; return [b[0] - a[0], b[1] - a[1]]; });
+            const join = intersection(points[0], dirs[0], points[1], dirs[1]);
+            if (join && U.dist(join[0], join[1], center[0], center[1]) <= GAP * (lines.size + 1)) anchor = join;
+          }
+        }
+        byLine.set(lid, anchor); anchors.push(anchor);
+      }
+      stationAnchors.set(sid, anchors);
+    }
+    const attach = function (points, anchor) {
+      const p = points[0], q = points[1], length = U.dist(p[0], p[1], q[0], q[1]);
+      if (U.dist(p[0], p[1], anchor[0], anchor[1]) < EPS) { points[0] = anchor.slice(); return points; }
+      const ux = (q[0] - p[0]) / (length || 1), uy = (q[1] - p[1]) / (length || 1);
+      const along = (anchor[0] - p[0]) * ux + (anchor[1] - p[1]) * uy;
+      const side = Math.abs(cross(ux, uy, anchor[0] - p[0], anchor[1] - p[1]));
+      const t = Math.max(0, along) + side;
+      const join = t < length * 0.8 ? [p[0] + ux * t, p[1] + uy * t] : p;
+      return cleanPoints([anchor.slice(), join].concat(points.slice(1)));
+    };
+    for (const track of tracks) {
+      let raw = track.route.raw;
+      if (raw.length < 2) continue;
+      raw = attach(raw, stationLines.get(track.seg.a).get(track.seg.line));
+      raw = attach(raw.slice().reverse(), stationLines.get(track.seg.b).get(track.seg.line)).reverse();
+      track.route.raw = raw; track.route.samples = roundRoute(raw, track.route.radius, false).samples; track.screen = track.route.samples;
+    }
+    return stationAnchors;
+  }
   function build(g, spacing, attempt) {
     spacing = spacing || 1; attempt = attempt || 0;
     const net = useDraft && g.draft ? g.draft.net : g.net;
@@ -360,14 +458,18 @@
         } else { track.route = diagramRoute(track, net, base); sharedRoutes.set(key, { forward: forward, route: track.route }); }
         track.screen = track.route.samples;
       }
-      tracks.push(track); track.screen.forEach(bound);
+      tracks.push(track);
     }
+    const stationAnchors = !geographic ? parallelRoutes(tracks, net, base) : new Map();
+    for (const track of tracks) track.screen.forEach(bound);
+    for (const anchors of stationAnchors.values()) anchors.forEach(bound);
     const pad = 64, W = x1 - x0 + 2 * pad, H = y1 - y0 + 2 * pad;
     base.ox = pad - x0; base.oy = pad - y0;
     for (const track of tracks) {
       for (const p of track.screen) { p[0] += base.ox; p[1] += base.oy; }
       if (track.route) for (const p of track.route.raw) { p[0] += base.ox; p[1] += base.oy; }
     }
+    for (const anchors of stationAnchors.values()) for (const p of anchors) { p[0] += base.ox; p[1] += base.oy; }
     const positions = lay.st.map(function (sid) { const s = net.stations[sid]; return base(s.x, s.y); });
     const px = function (i) { return positions[i][0]; }, py = function (i) { return positions[i][1]; };
     const linesOf = lay.st.map(function () { return []; });
@@ -378,7 +480,12 @@
     const overlap = index.overlap;
     const extent = [0, 0, W, H];
     const expand = function (b) { extent[0] = Math.min(extent[0], b[0] - 20); extent[1] = Math.min(extent[1], b[1] - 20); extent[2] = Math.max(extent[2], b[2] + 20); extent[3] = Math.max(extent[3], b[3] + 20); };
-    for (let i = 0; i < N; i++) { const r = linesOf[i].length > 1 || walkSet.has(i) ? 14 : 10; index.add([px(i) - r, py(i) - r, px(i) + r, py(i) + r], 8); }
+    for (let i = 0; i < N; i++) {
+      const r = linesOf[i].length > 1 || walkSet.has(i) ? 14 : 10, anchors = stationAnchors.get(lay.st[i]) || [];
+      const xs = [px(i)].concat(anchors.map(function (p) { return p[0]; })), ys = [py(i)].concat(anchors.map(function (p) { return p[1]; }));
+      const box = [Math.min.apply(null, xs) - r, Math.min.apply(null, ys) - r, Math.max.apply(null, xs) + r, Math.max.apply(null, ys) + r];
+      index.add(box, 8); expand(box);
+    }
     const occupy = function (pts) {
       let length = 0, next = 9;
       for (let k = 1; k < pts.length; k++) {
@@ -396,9 +503,15 @@
     svg += '<g class="nm-walk">';
     for (const e of lay.xEdges) svg += '<path data-lines="' + Array.from(new Set(linesOf[e.a].concat(linesOf[e.b]))).join(' ') + '" d="M' + px(e.a).toFixed(1) + ' ' + py(e.a).toFixed(1) + 'L' + px(e.b).toFixed(1) + ' ' + py(e.b).toFixed(1) + '"/>';
     svg += '</g>';
-    // 地理图沿实际轨道，简洁图沿八方向骨架；完全共线区间复用路径并以同心色带区分。
+    // 简洁图共用走廊并排，地理图沿用真实中心线及同心色带，不平移实际位置。
     let casing = '', routes = '';
-    {
+    if (!geographic) {
+      for (const track of tracks) {
+        const width = track.seg.type === 'elevated' ? 9.5 : 8, d = roundRoute(track.route.raw, track.route.radius, false).d;
+        casing += '<path data-lines="' + track.seg.line + '" d="' + d + '" stroke-width="' + (width + 3) + '"/>';
+        routes += geoSeg(track, base, net, width);
+      }
+    } else {
       const groups = new Map();
       for (const track of tracks) {
         const pts = track.geom.pts.map(function (p) { return p[0].toFixed(6) + ',' + p[1].toFixed(6); });
@@ -472,7 +585,7 @@
       const tx = (best.b[0] + 6).toFixed(1), ty = best.b[1] + LABEL_SIZE + 2;
       lab += '<text data-st="' + s.id + '" x="' + tx + '" y="' + ty.toFixed(1) + '" class="nm-label' + (xfer || walk ? ' x' : '') + '" data-lines="' + linesOf[i].join(' ') + '">' + rows.map(function (text, k) { return '<tspan x="' + tx + '" y="' + (ty + k * lineHeight).toFixed(1) + '">' + U.esc(text) + '</tspan>'; }).join('') + '</text>';
       const tip = s.name + (xfer ? '（站内换乘：' + linesOf[i].map(function (l) { return net.lines[l].name; }).join('、') + '）' : '') + (walk ? '（可步行换乘）' : '') + ' · ' + TYPE_NAME[s.type] + '站 · 点击在地图上定位';
-      dots += stationMark(s, x, y, linesOf[i], net, xfer || walk, tip);
+      dots += stationMark(s, x, y, linesOf[i], net, xfer || walk, tip, stationAnchors.get(s.id));
     }
     if (needsRoom && attempt < 3) return build(g, spacing * 1.3, attempt + 1);
     svg += '<g class="nm-dots">' + dots + '</g><g class="nm-labels">' + lab + '</g></svg>';
@@ -657,7 +770,7 @@
       });
       c.fillStyle = '#9aa5b5'; c.font = (12 * sc) + 'px ' + font; c.textAlign = 'right';
       c.fillText('线型：实线为地下，带白色中线为高架，带白色枕木纹为地面；⇄ 圆环为换乘站，虚线相连为站外步行换乘', cw - M0, ch - 38 * sc);
-      c.fillText(isGeo ? '按游戏地图中的实际站点、轨道与地形等比例绘制；共线区间以同心色带区分，站外虚线只表示换乘联系。' : '仅示意线路、站序与换乘关系，不显示地形；站距及线形不代表实际距离或轨道走向。', cw - M0, ch - 20 * sc);
+      c.fillText(isGeo ? '按游戏地图中的实际站点、轨道与地形等比例绘制；共线区间以同心色带区分，站外虚线只表示换乘联系。' : '站点按实际位置统一等比例缩放；同向线路并排，线形为简化示意，不显示地形。', cw - M0, ch - 20 * sc);
       c.textAlign = 'left';
       cv.toBlob(function (blob) {
         if (!blob) { ui.toast('导出失败：浏览器无法生成图片', 'bad'); return; }
@@ -704,7 +817,7 @@
     tgt = null;
     const canvas = build(g);
     if (!canvas.classList.contains('nm-canvas')) head.querySelectorAll('.nm-tools button, .btn').forEach(function (b) { b.disabled = true; });
-    const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend(), h('span', { class: 'tiny muted' }, geographic ? '站线与地形等比例 · 可拖动浏览，或显示全图' : '线路与换乘关系示意 · 非地理比例'));
+    const bar = h('div', { class: 'nm-bar' }, chips.childNodes.length ? chips : null, legend(), h('span', { class: 'tiny muted' }, geographic ? '站线与地形等比例 · 可拖动浏览，或显示全图' : '站点位置等比例 · 线路走向示意 · 无地形'));
     const body = h('div', { class: 'nm-body' }, bar, canvas);
     // 只有打开时播放入场动画；打开后切换正式 / 含草案或网络变化时就地重绘，不闪动
     const win = h('div', { class: 'stats-win nm-win' + (fresh ? '' : ' static'), onclick: function (e) { e.stopPropagation(); } }, head, body);
