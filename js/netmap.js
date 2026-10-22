@@ -254,19 +254,45 @@
     else if (s.type === 'surface') out += '<path d="' + d + '" class="nm-surf"/>';
     return out + '</g>';
   }
-  // 车站标志与地图一致：普通站为白底圆、线路色描边；换乘站（站内换乘或站外步行换乘）为更大的白底圆 +
+  // 将并排行道的站台包在一个圆角外框内，避免连接底形与圆形站标叠出双重轮廓。
+  function stationOutline(x, y, radius, anchors) {
+    const f = function (p) { return p[0].toFixed(3) + ' ' + p[1].toFixed(3); };
+    if (!anchors || !anchors.some(function (p) { return U.dist(x, y, p[0], p[1]) > 0.5; })) return '';
+    const points = [[x, y]].concat(anchors).slice().sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    const turn = function (a, b, c) { return cross(b[0] - a[0], b[1] - a[1], c[0] - a[0], c[1] - a[1]); };
+    const half = function (src) {
+      const out = [];
+      for (const p of src) {
+        while (out.length > 1 && turn(out[out.length - 2], out[out.length - 1], p) <= 1e-6) out.pop();
+        out.push(p);
+      }
+      return out.slice(0, -1);
+    };
+    const hull = half(points).concat(half(points.slice().reverse()));
+    const normal = hull.map(function (p, i) { const q = hull[(i + 1) % hull.length], len = U.dist(p[0], p[1], q[0], q[1]); return [(q[1] - p[1]) / len, (p[0] - q[0]) / len]; });
+    const edge = function (i, n) { return [hull[i][0] + n[0] * radius, hull[i][1] + n[1] * radius]; };
+    let d = 'M' + f(edge(0, normal[normal.length - 1]));
+    for (let i = 0; i < hull.length; i++) {
+      const prev = normal[(i + hull.length - 1) % hull.length], next = normal[i];
+      let angle = Math.atan2(cross(prev[0], prev[1], next[0], next[1]), prev[0] * next[0] + prev[1] * next[1]);
+      if (angle < 0) angle += Math.PI * 2;
+      // 半圆分成四分之一圆，避免端点舍入让 SVG 自动调整半径、造成外框轻微变形。
+      const steps = Math.max(1, Math.ceil(angle / (Math.PI / 2))), start = Math.atan2(prev[1], prev[0]);
+      for (let k = 1; k <= steps; k++) { const a = start + angle * k / steps; d += 'A' + radius + ' ' + radius + ' 0 0 1 ' + f(edge(i, k === steps ? next : [Math.cos(a), Math.sin(a)])); }
+      d += 'L' + f(edge((i + 1) % hull.length, next));
+    }
+    return d + 'Z';
+  }
+  // 车站标志与地图一致：普通站为白底圆、线路色描边；换乘站为白底圆或连接并排行道的单一圆角外框 +
   // 深色外环 + 按各线路颜色分段的内环 + ⇄ 换乘箭头（上箭头向右、下箭头向左）
   function stationMark(s, x, y, lines, net, inter, tip, anchors) {
     const attrs = 'data-st="' + s.id + '" data-lines="' + lines.join(' ') + '"', f = function (v) { return v.toFixed(1); };
     if (!inter) return '<circle ' + attrs + ' cx="' + f(x) + '" cy="' + f(y) + '" r="6.5" class="nm-st" stroke="' + net.lines[lines[0]].color + '"><title>' + U.esc(tip) + '</title></circle>';
     const r = 11, ow = 3.3, rr = r - ow / 2 - 1.5, n = lines.length, gap = n > 1 ? 0.22 : 0;
     let out = '<g ' + attrs + ' class="nm-x"><title>' + U.esc(tip) + '</title>';
-    // 并排线路的站台由同一个换乘标连接，站点基准仍在等比例投影的位置。
-    if (anchors && anchors.some(function (p) { return U.dist(x, y, p[0], p[1]) > 0.5; })) {
-      const d = anchors.map(function (p) { return 'M' + f(x) + ' ' + f(y) + 'L' + f(p[0]) + ' ' + f(p[1]); }).join('');
-      out += '<path d="' + d + '" fill="none" stroke="#25334a" stroke-width="25.3" stroke-linecap="round"/><path d="' + d + '" fill="none" stroke="#fff" stroke-width="22" stroke-linecap="round"/>';
-    }
-    out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
+    // 一个外框连接所有行道；内部色环和箭头仍以真实站点的等比例投影为中心。
+    const outline = stationOutline(x, y, r, anchors);
+    out += outline ? '<path d="' + outline + '" class="nm-xo"/>' : '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + r + '" class="nm-xo"/>';
     if (n === 1) out += '<circle cx="' + f(x) + '" cy="' + f(y) + '" r="' + f(rr) + '" class="nm-xa" stroke="' + net.lines[lines[0]].color + '"/>';
     else for (let k = 0; k < n; k++) {
       const a0 = -Math.PI / 2 + k * Math.PI * 2 / n + gap / 2, a1 = -Math.PI / 2 + (k + 1) * Math.PI * 2 / n - gap / 2;
