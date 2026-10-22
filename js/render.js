@@ -37,6 +37,9 @@
       tree: [[134, 188, 128], [112, 170, 112]], trunk: '#8f9c85', elevCase: 'rgba(90,112,145,0.45)', lineCase: 'rgba(255,255,255,0.96)', pier: '#a9b5c6',
       lm2d: { fill: '#e5ebf2', stroke: '#9fb1c8' }, edgeLine: 'rgba(90,120,160,0.12)',
       peak: { top: [78, 128, 140], base: [210, 228, 232], ridge: 'rgba(50,92,104,0.3)' },
+      // 轨道建设方式（v2.0）：越江隧道、道床与枕木、桥面与栏杆、引桥挡墙
+      trk: { tunnelWater: 'rgba(36,92,160,0.55)', ballast: '#cfc8ba', sleeper: '#8d8473', deck: '#b3bfcd', parapet: 'rgba(255,255,255,0.95)',
+        wall: '#a7afba', pierFoot: 'rgba(255,255,255,0.7)', shadow: '#2a3a52' },
     },
     dark: {
       night: true, bg: [17, 25, 37], bgUnder: [9, 14, 22],
@@ -62,6 +65,8 @@
       tree: [[52, 108, 82], [42, 92, 70]], trunk: '#3e4a44', elevCase: 'rgba(0,0,0,0.6)', lineCase: 'rgba(10,16,26,0.92)', pier: '#4a566a',
       lm2d: { fill: '#2c3646', stroke: '#7d93b4' }, edgeLine: 'rgba(160,185,220,0.10)',
       peak: { top: [44, 78, 84], base: [24, 36, 48], ridge: 'rgba(150,200,210,0.18)' },
+      trk: { tunnelWater: 'rgba(80,150,225,0.5)', ballast: '#4a4740', sleeper: '#24221e', deck: '#3b4658', parapet: 'rgba(190,210,235,0.7)',
+        wall: '#5a6474', pierFoot: 'rgba(150,195,240,0.4)', shadow: '#000000' },
     },
   };  let TH = THEMES.light, GROUND = TH.ground, PAL = TH.pal;
 
@@ -86,6 +91,7 @@
     this.textWidths = new Map();
     this.roadLabelGeom = new WeakMap();
     this.segScreens = new WeakMap();
+    this.segDecos = new WeakMap();
     this.heatLayers = new Map();
     this.geoPaths = new WeakMap();
   }
@@ -307,7 +313,7 @@
     this.game = g;
     this.displayedLevel = this.requestedLevel = null;
     this.clearImages(); this.overview = null; this.overviewJob = null; this.overviewStale = true; this.heat = null; this.heatKey = '';
-    this.heatLayers.clear(); this.segScreens = new WeakMap(); this.metroOrder = null;
+    this.heatLayers.clear(); this.segScreens = new WeakMap(); this.segDecos = new WeakMap(); this.metroOrder = null;
     this.roadLabelGeom = new WeakMap(); this.textWidths.clear(); this._cgBmp = null;
     this.geoPaths = new WeakMap(); this.labelImage = null;
     this._hd = null; this._hdCity = null; this._lmc = null; this._lmcCity = null;
@@ -316,6 +322,7 @@
     // 换城市（含换地图）时清掉按城市版本号缓存的数据，避免不同城市的版本号恰好相同
     this.linkGrid = null; this.linkGridVer = -1; this._cgIdx = null; this._cgRuns = null; this._fa = null; this._fl = null; this._flKey = null;
     this._flLay = null; this._flLayKey = null; this._flShow = null; this._sf = null; this._sfKey = null; this._rm = {}; this.hl = null; this.follow = null;
+    this._rk = null; this.styleEpoch = g ? Math.floor(g.clock.y / 5) : null; this.styleYear = g ? this.styleEpoch * 5 : null;
   };
   // 切换主题：重建地面与建筑缓存（总览图立即重绘，避免空白）
   Renderer.prototype.setTheme = function (name) {
@@ -410,6 +417,13 @@
 
   Renderer.prototype.markDirty = function () {
     const city = this.game.city;
+    // 城市风貌按 5 年一档：跨档时把地面与建筑分块标为过期（旧图块继续显示，后台逐块重绘，不出现空白）
+    const ep = Math.floor(this.game.clock.y / 5);
+    if (this.styleEpoch !== ep) {
+      this.styleEpoch = ep; this.styleYear = ep * 5;
+      this.ground.forEach(function (e) { e.stale = true; });
+      this.iso.forEach(function (e, k) { if (k.charAt(0) !== 'L') e.stale = true; });
+    }
     if (city.roadVersion !== this.roadVer) {
       this.roadVer = city.roadVersion;
       this.ground.forEach(function (e) { e.stale = true; });
@@ -552,6 +566,18 @@
       }
     }
     paths.forEach(function (p, col) { ctx.fillStyle = col; ctx.fill(p); });
+    // 夜间：商业中心与混合街区的暖色灯光（按岗位密度分三档）
+    if (TH.night && lvl >= 16) {
+      const glow = [new Path2D(), new Path2D(), new Path2D()], any = [false, false, false];
+      for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+        const c = j * W + i, L = city.lu[c];
+        if ((L !== LU.COM && L !== LU.MIX) || !city.street[c]) continue;
+        const d = city.jobs[c] / (L === LU.COM ? 2500 : 4000), q = d > 1.2 ? 2 : (d > 0.5 ? 1 : (d > 0.15 ? 0 : -1));
+        if (q < 0) continue;
+        glow[q].rect(i, j, 1, 1); any[q] = true;
+      }
+      for (let q = 0; q < 3; q++) if (any[q]) { ctx.fillStyle = 'rgba(255,190,110,' + [0.05, 0.09, 0.14][q] + ')'; ctx.fill(glow[q]); }
+    }
     // 林地（真实范围）
     ctx.fillStyle = GROUND.wood;
     const wp = new Path2D();
@@ -624,8 +650,7 @@
           const x0 = i + b[0], y0 = j + b[1], x1 = i + b[2], y1 = j + b[3];
           const off = Math.min(0.08, 0.008 + b[4] * 0.0005);
           shadow.rect(x0 + off, y0 + off, x1 - x0, y1 - y0);
-          const pal = PAL[b[5]] || PAL[0];
-          const col = U.rgb(pal[Math.floor(U.hash2(c, k, 4) * pal.length)]);
+          const col = U.rgb(this.bldTopColor(c, k, b));
           let fp = fills.get(col); if (!fp) { fp = new Path2D(); fills.set(col, fp); }
           fp.rect(x0, y0, x1 - x0, y1 - y0);
         }
@@ -936,21 +961,87 @@
     for (const fc of faces) fillPts(ctx, [pj(fc.a[0], fc.a[1], h0), pj(fc.b[0], fc.b[1], h0), tip], U.rgb(U.shade(col, fc.f)));
   }
 
-  // 简洁玻璃体量：两个立面 + 顶面；高楼带一道高光，夜间少量暖色窗光（不画窗格，保证性能）
+  // ---------------- 城市风貌（v2.0）：建筑年代与地区风格 ----------------
+  // 普通建筑程序生成：按「建成年代」（只用于外观，见 bldVintage）分为传统低层、战前砖石、混凝土板楼、面砖塔楼与玻璃幕墙；
+  // 传统低层按地区区分（内地灰砖坡顶、香港唐楼、台北街屋、东京木造坡顶）。商业区按年代出现招牌与霓虹。外观按 5 年一档更新。
+  // 配色保持原有浅色、克制的「云雾淡彩」风格：年代与地区只体现在形体（坡顶、窗带、竖条）和极轻的色调差异上
+  const STYLE_PAL = {
+    old: { cn: [[226, 229, 233], [219, 223, 229], [231, 232, 234]], hk: [[236, 234, 228], [228, 235, 233], [236, 231, 230], [229, 231, 238]], jp: [[234, 231, 225], [227, 226, 222], [237, 234, 228]], tw: [[229, 232, 236], [222, 227, 233], [232, 232, 231]] },
+    roof: { cn: [184, 194, 208], hk: null, jp: [176, 187, 202], tw: null },
+    masonry: [[233, 229, 220], [227, 224, 216], [236, 233, 226]],
+    slab: [[232, 235, 239], [226, 231, 237], [236, 238, 240], [222, 228, 236]],
+    tile: [[236, 240, 245], [228, 235, 243], [240, 242, 245]],
+  };
+  const NEON_YEAR = { cn: 1992, hk: 1960, jp: 1955, tw: 1975 };
+  const NEON_COL = ['#ff4fa3', '#36e0ff', '#ffd23f', '#7cff6b', '#ff6a3d', '#b98cff'];
+  const REGION_KEY = { '中国内地': 'cn', '中国香港': 'hk', '中国台湾': 'tw', '日本': 'jp' };
+  function nightCol(c) { return [c[0] * 0.24 + 8, c[1] * 0.26 + 12, c[2] * 0.28 + 24]; }   // 与原夜景楼宇同一深度
+  Renderer.prototype.regionKey = function () { const m = CM.curMap ? CM.curMap() : null; return (m && REGION_KEY[m.region]) || 'cn'; };
+  // 建筑年代（只用于外观，不影响模拟）：开局前已是城区的街区分散在开局前约 6–50 年；之后城市化的街区按城市化年份；
+  // 较高的建筑只会出现在允许该高度的年代之后；建成 30 年以上的建筑逐步翻新（外观换新、高度不变）。
+  Renderer.prototype.bldVintage = function (c, k, h) {
+    const city = this.game.city, y0 = CFG.START.y, Y = this.styleYear || y0, uy = city.urbanYear[c];
+    let v = uy > y0 ? uy + 3 * U.hash2(c, k, 17) : y0 - 6 - 44 * U.hash2(c, k, 17);
+    const minY = h > 100 ? 2003 : h > 60 ? 1992 : h > 32 ? 1972 : -1e9;
+    if (v < minY) v = minY + 8 * U.hash2(c, k, 18);
+    const age = Y - v;
+    if (age > 30 && U.hash2(c, k, 19) < (age - 30) / 50) v = Y - 25 * U.hash2(c, k, 20);
+    return Math.min(v, Y);
+  };
+  Renderer.prototype.bldStyle = function (c, k, h) {
+    const v = this.bldVintage(c, k, h);
+    if (v < 1960) return h <= 24 ? 'old' : 'masonry';
+    if (v < 1990) return 'slab';
+    if (v < 2005) return 'tile';
+    return 'glass';
+  };
+  // 平面图（2D）中的建筑颜色：与 2.5D 同一风格，坡屋顶建筑显示屋面颜色
+  Renderer.prototype.bldTopColor = function (c, k, b) {
+    const st = this.bldStyle(c, k, b[4]), rk = this._rk || (this._rk = this.regionKey());
+    if (st === 'glass') { const pal = PAL[b[5]] || PAL[0]; return pal[Math.floor(U.hash2(c, k, 4) * pal.length)]; }
+    let col;
+    if (st === 'old' && b[4] <= 20 && STYLE_PAL.roof[rk]) col = U.mixc(STYLE_PAL.roof[rk], [226, 231, 237], 0.35);
+    else { const P = st === 'old' ? (STYLE_PAL.old[rk] || STYLE_PAL.old.cn) : STYLE_PAL[st]; col = P[Math.floor(U.hash2(c, k, 4) * P.length)]; }
+    return TH.night ? nightCol(col) : col;
+  };
+  // 坡屋顶：屋脊沿较长的一边；先画背坡，再画山墙与前坡
+  function pitchedRoof(ctx, pj, A, B, C, D, h, wall, col) {
+    const w = B[0] - A[0], d = D[1] - A[1], rh = Math.min(h * 0.55, Math.min(w, d) * 0.5);
+    const At = pj(A[0], A[1], h), Bt = pj(B[0], B[1], h), Ct = pj(C[0], C[1], h), Dt = pj(D[0], D[1], h);
+    if (w >= d) {
+      const ym = (A[1] + D[1]) / 2, R0 = pj(A[0], ym, h + rh), R1 = pj(B[0], ym, h + rh);
+      fillPts(ctx, [At, Bt, R1, R0], U.rgb(U.shade(col, 0.78)));
+      fillPts(ctx, [Bt, Ct, R1], U.rgb(U.shade(wall, 0.95)));
+      fillPts(ctx, [Dt, Ct, R1, R0], U.rgb(col));
+    } else {
+      const xm = (A[0] + B[0]) / 2, R0 = pj(xm, A[1], h + rh), R1 = pj(xm, D[1], h + rh);
+      fillPts(ctx, [At, Dt, R1, R0], U.rgb(U.shade(col, 0.78)));
+      fillPts(ctx, [Dt, Ct, R1], U.rgb(U.shade(wall, 0.84)));
+      fillPts(ctx, [Bt, Ct, R1, R0], U.rgb(U.shade(col, 1.08)));
+    }
+  }
+  // 立面上的一条水平线（两个可见立面）
+  function faceBand(ctx, pj, B, C, D, hh) {
+    const p0 = pj(D[0], D[1], hh), p1 = pj(C[0], C[1], hh), p2 = pj(B[0], B[1], hh);
+    ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]);
+  }
+  // 建筑体量：两个立面 + 顶面（或坡屋顶）；按年代风格加窗带、玻璃竖条、檐口；高楼带高光；夜间少量暖色窗光与商业霓虹
   Renderer.prototype.isoBox = function (ctx, pj, i, j, b, c, k, s) {
-    const h = b[4] * EX;
+    const h = b[4] * EX, mh = b[4];
     const A = [i + b[0], j + b[1]], B = [i + b[2], j + b[1]], C = [i + b[2], j + b[3]], Dd = [i + b[0], j + b[3]];
     const Bb = pj(B[0], B[1], 0), Cb = pj(C[0], C[1], 0), Db = pj(Dd[0], Dd[1], 0);
     const At = pj(A[0], A[1], h), Bt = pj(B[0], B[1], h), Ct = pj(C[0], C[1], h), Dt = pj(Dd[0], Dd[1], h);
-    const pal = PAL[b[5]] || PAL[0];
-    const base = pal[Math.floor(U.hash2(c, k, 4) * pal.length)];
+    const st = this.bldStyle(c, k, mh), rk = this._rk || (this._rk = this.regionKey());
+    let base;
+    if (st === 'glass') { const pal = PAL[b[5]] || PAL[0]; base = pal[Math.floor(U.hash2(c, k, 4) * pal.length)]; }
+    else { const P = st === 'old' ? (STYLE_PAL.old[rk] || STYLE_PAL.old.cn) : STYLE_PAL[st]; base = P[Math.floor(U.hash2(c, k, 4) * P.length)]; if (TH.night) base = nightCol(base); }
     const tall = b[4] > 40;
     if (s >= 16) {
       const so = Math.min(1.0, h * 0.45);
       const Cs = pj(C[0] + so, C[1] - so * 0.2, 0), Bs = pj(B[0] + so, B[1] - so * 0.2, 0);
       fillPts(ctx, [Bb, Bs, Cs, Cb], TH.isoShadow);
     }
-    if (tall && s >= 16) {
+    if (st === 'glass' && tall && s >= 16) {
       const gS = ctx.createLinearGradient(0, Dt[1], 0, Db[1]);
       gS.addColorStop(0, U.rgb(U.shade(base, TH.night ? 0.9 : 0.97))); gS.addColorStop(1, U.rgb(U.shade(base, TH.night ? 0.62 : 0.8)));
       const gE = ctx.createLinearGradient(0, Bt[1], 0, Bb[1]);
@@ -962,13 +1053,51 @@
       fillPts(ctx, [Db, Cb, Ct, Dt], U.rgb(U.shade(base, 0.82)));
       fillPts(ctx, [Bb, Cb, Ct, Bt], U.rgb(U.shade(base, 0.93)));
     }
-    fillPts(ctx, [At, Bt, Ct, Dt], U.rgb(U.shade(base, TH.night ? 1.12 : 1.07)));
-    // 夜景：少量亮窗
+    const roof = st === 'old' && mh <= 20 && STYLE_PAL.roof[rk];
+    if (roof) pitchedRoof(ctx, pj, A, B, C, Dd, h, base, TH.night ? nightCol(roof) : roof);
+    else fillPts(ctx, [At, Bt, Ct, Dt], U.rgb(U.shade(base, TH.night ? 1.12 : 1.07)));
+    // 立面细节（近景）：板楼与砖石楼的水平窗带、面砖塔楼的玻璃竖条、砖石楼檐口、街屋屋顶加建
+    if (s >= 32 && mh >= 9) {
+      if (st === 'slab' || st === 'masonry') {
+        const rows = Math.min(6, Math.floor(mh / 9));
+        ctx.strokeStyle = TH.night ? 'rgba(255,214,140,0.22)' : 'rgba(110,132,165,0.16)'; ctx.lineWidth = 1;
+        ctx.beginPath(); for (let r = 1; r <= rows; r++) faceBand(ctx, pj, B, C, Dd, h * r / (rows + 1)); ctx.stroke();
+        if (st === 'masonry') { ctx.strokeStyle = U.rgb(U.shade(base, 0.86)); ctx.lineWidth = 1.5; ctx.beginPath(); faceBand(ctx, pj, B, C, Dd, h * 0.94); ctx.stroke(); }
+      } else if (st === 'tile') {
+        const glass = TH.night ? [52, 82, 120] : [184, 206, 230];
+        for (const f of [[Dd, C], [B, C]]) {
+          const a = f[0], e = f[1], p = function (t, hh) { return pj(a[0] + (e[0] - a[0]) * t, a[1] + (e[1] - a[1]) * t, hh); };
+          fillPts(ctx, [p(0.4, h * 0.06), p(0.6, h * 0.06), p(0.6, h * 0.96), p(0.4, h * 0.96)], U.rgb(glass));
+        }
+      } else if (st === 'old' && !roof && rk === 'tw' && U.hash2(c, k, 31) < 0.6) {
+        // 台北街屋顶楼的铁皮加盖
+        const sh = h * 0.18, m = function (u, v) { return [A[0] + (B[0] - A[0]) * u, A[1] + (Dd[1] - A[1]) * v]; };
+        const q0 = m(0.2, 0.2), q1 = m(0.8, 0.2), q2 = m(0.8, 0.8), q3 = m(0.2, 0.8);
+        fillPts(ctx, [pj(q3[0], q3[1], h), pj(q2[0], q2[1], h), pj(q2[0], q2[1], h + sh), pj(q3[0], q3[1], h + sh)], TH.night ? '#24344a' : '#c9d5e3');
+        fillPts(ctx, [pj(q1[0], q1[1], h), pj(q2[0], q2[1], h), pj(q2[0], q2[1], h + sh), pj(q1[0], q1[1], h + sh)], TH.night ? '#1d2b3d' : '#bccadb');
+        fillPts(ctx, [pj(q0[0], q0[1], h + sh), pj(q1[0], q1[1], h + sh), pj(q2[0], q2[1], h + sh), pj(q3[0], q3[1], h + sh)], TH.night ? '#2c3e56' : '#d6dfea');
+      }
+    }
+    // 商业招牌：按地区年代出现。夜间为霓虹（老式楼宇为竖向招牌），白天高楼屋顶有广告牌
+    if (b[5] === LU.COM && mh >= 15 && s >= 16 && (this.styleYear || 0) >= NEON_YEAR[rk] && U.hash2(c, k, 33) < 0.7) {
+      const col = NEON_COL[Math.floor(U.hash2(c, k, 34) * NEON_COL.length)];
+      const p = function (t, hh) { return pj(Dd[0] + (C[0] - Dd[0]) * t, Dd[1] + (C[1] - Dd[1]) * t, hh); };
+      if (TH.night) {
+        ctx.globalAlpha = 0.92;
+        if (st === 'old' || st === 'masonry' || st === 'slab') fillPts(ctx, [p(0.12, h * 0.3), p(0.2, h * 0.3), p(0.2, h * 0.9), p(0.12, h * 0.9)], col);
+        else fillPts(ctx, [p(0.2, h * 0.86), p(0.8, h * 0.86), p(0.8, h * 0.92), p(0.2, h * 0.92)], col);
+        ctx.globalAlpha = 1;
+      } else if (s >= 32 && mh >= 30 && st !== 'old') {
+        const bh = Math.min(0.12, h * 0.12);
+        ctx.globalAlpha = 0.35; fillPts(ctx, [p(0.25, h), p(0.75, h), p(0.75, h + bh), p(0.25, h + bh)], col); ctx.globalAlpha = 1;
+      }
+    }
+    // 夜景：少量亮窗（传统低层更少）
     if (TH.night && s >= 16 && b[4] >= 10) {
-      const rows = Math.min(7, Math.floor(b[4] / 14) + 1);
+      const rows = Math.min(7, Math.floor(b[4] / 14) + 1), lit = st === 'old' ? 0.3 : 0.45;
       ctx.fillStyle = 'rgba(255,214,140,0.85)';
       for (let r = 0; r < rows; r++) for (let q = 0; q < 2; q++) {
-        if (U.hash2(c * 7 + k, r * 3 + q, 13) > 0.45) continue;
+        if (U.hash2(c * 7 + k, r * 3 + q, 13) > lit) continue;
         const t = 0.3 + q * 0.4, hh = (r + 0.6) / rows * h;
         const fx = Dd[0] + (C[0] - Dd[0]) * t, fy = Dd[1] + (C[1] - Dd[1]) * t, p = pj(fx, fy, hh);
         ctx.fillRect(p[0] - 1, p[1] - 0.8, 2, 1.6);
@@ -1754,6 +1883,7 @@
     } else if (agents && agentAlpha > 0) {
       agents.drawAll(ctx, this, agentAlpha);
     }
+    if (z >= 16 && agentAlpha > 0.3 && !g.preview && this.agentsOn) this.drawCranes(ctx, agentAlpha);
     // ---- 图层（线状） ----
     if (this.layer === 'cong') this.drawCongestion(ctx);
     if (this.layer === 'flow') this.drawDesire(ctx);
@@ -1812,11 +1942,41 @@
     this.lastRenderMs = performance.now() - frameStart;
   };
 
+  // 塔吊（城市成长）：近 18 个月新开发或明显加高的街区立起塔吊，吊臂随游戏时间缓慢转动（暂停时静止）；
+  // 视野内最多 40 台，远景不画，不缓存也不进入存档
+  Renderer.prototype.drawCranes = function (ctx, alpha) {
+    const g = this.game, sites = g.city.sites;
+    if (!sites || !sites.size || !g.ym) return;
+    const now = g.ym(), v = this.view, W = g.city.W, vt = CM.agents ? CM.agents.vt : 0, a0 = {}, a1 = {}, a2 = {}, a3 = {};
+    let n = 0;
+    ctx.lineCap = 'round';
+    for (const [c, m0] of sites) {
+      const age = now - m0; if (age < 0 || age > 18 || U.hash2(c, 9, 41) > 0.4) continue;   // 约四成工地立塔吊，避免快速发展期满城塔吊
+      const i = c % W, j = (c / W) | 0, x = i + 0.3 + 0.4 * U.hash2(c, 1, 41), y = j + 0.3 + 0.4 * U.hash2(c, 2, 41);
+      if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
+      if (++n > 40) break;
+      const hTop = Math.max(0.12, g.city.bh[c] * EX * 1.15 + 0.05);
+      const base = this.P(x, y, 0, a0), tp = this.P(x, y, hTop, a1);
+      const a = vt * 0.0035 + U.hash2(c, 3, 41) * 6.28, jl = 0.2, cl = 0.07;
+      const hookAt = 0.45 + 0.4 * (0.5 + 0.5 * Math.sin(vt * 0.002 + c));
+      const j1 = this.P(x + Math.cos(a) * jl, y + Math.sin(a) * jl, hTop, a2), j2 = this.P(x - Math.cos(a) * cl, y - Math.sin(a) * cl, hTop, a3);
+      ctx.globalAlpha = Math.min(1, (18 - age) / 3) * alpha;
+      ctx.strokeStyle = TH.night ? '#a07a2a' : '#e2a72e'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.lineTo(tp.x, tp.y); ctx.moveTo(j2.x, j2.y); ctx.lineTo(j1.x, j1.y); ctx.stroke();
+      const hx = tp.x + (j1.x - tp.x) * hookAt, hy = tp.y + (j1.y - tp.y) * hookAt, drop = Math.max(2, (base.y - tp.y) * 0.5);
+      ctx.strokeStyle = TH.night ? 'rgba(200,200,200,0.5)' : 'rgba(60,60,60,0.55)'; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx, hy + drop); ctx.stroke();
+      if (TH.night) { ctx.fillStyle = '#ff3b30'; ctx.beginPath(); ctx.arc(tp.x, tp.y, 1.3, 0, Math.PI * 2); ctx.arc(j1.x, j1.y, 1.1, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.globalAlpha = 1;
+  };
   // ---------------- 地铁绘制 ----------------
   Renderer.prototype.lineWidthPx = function () { return U.clamp(this.z * 0.1, 2.8, 9); };
   Renderer.prototype.segScreen = function (cs, under, out) {
     const pts = cs.g.pts, hs = cs.h, n = pts.length;
-    const key = this.M.join(',') + ':' + this.z + ':' + this.ox + ':' + this.oy + ':' + under + ':' + this.hs;
+    // 缓存键每帧（及地下视图进度变化时）只拼一次
+    if (this._ssFrame !== this.frame || this._ssUnder !== under) { this._ssFrame = this.frame; this._ssUnder = under; this._ssKey = this.M.join(',') + ':' + this.z + ':' + this.ox + ':' + this.oy + ':' + under + ':' + this.hs; }
+    const key = this._ssKey;
     let cached = !out && this.segScreens.get(cs);
     if (cached && cached.key === key) return cached.arr;
     const arr = out || (cached ? cached.arr : new Float32Array(n * 2));
@@ -1867,11 +2027,29 @@
       this.metroOrder = { C: C, order: order, grid: CM.Geo.buckets(order, 8, g.city.W, g.city.H) };
     }
     const indexed = this.metroOrder, visible = new Set(CM.Geo.query(indexed.grid, v.x0 - 6, v.y0 - 6, v.x1 + 6, v.y1 + 6));
+    // 越江隧道：所有可见区段合成一条路径、每帧只描一次（大型线网不随区段数增加描边次数）；
+    // 被高亮线路淡化的区段仍在各自绘制时单独描边
+    this._tunBatch = false;
+    if (this.z >= 12 && under < 0.5) {
+      const wp = new Path2D(), add = function (p, arr, r) { p.moveTo(arr[r[0] * 2], arr[r[0] * 2 + 1]); for (let i = r[0] + 1; i <= r[1]; i++) p.lineTo(arr[i * 2], arr[i * 2 + 1]); };
+      let anyW = false;
+      for (let q = 0; q < indexed.order.length; q++) {
+        if (!visible.has(q)) continue;
+        const cs = indexed.order[q].cs, s = cs.seg, bb = indexed.order[q].bbox;
+        if (!C.net.lines[s.line] || (hlLine && hlLine !== s.line)) continue;
+        if (bb[2] < v.x0 - 6 || bb[0] > v.x1 + 6 || bb[3] < v.y0 - 6 || bb[1] > v.y1 + 6) continue;
+        const d = this.segDeco(cs);
+        if (!d.water.length) continue;
+        const arr = this.segScreen(cs, under);
+        for (const r of d.water) if (cs.h[(r[0] + r[1]) >> 1] < -DECO_FLAT) { add(wp, arr, r); anyW = true; }
+      }
+      if (anyW) { ctx.lineCap = 'butt'; ctx.globalAlpha = (1 - 2 * under) * lyrDim; ctx.strokeStyle = TH.trk.tunnelWater; ctx.lineWidth = lw + 4.5; ctx.stroke(wp); ctx.lineCap = 'round'; ctx.globalAlpha = 1; }
+      this._tunBatch = true;
+    }
     for (let q = 0; q < indexed.order.length; q++) {
       if (!visible.has(q)) continue;
       const cs = indexed.order[q].cs;
       const s = cs.seg;
-      const b = cs.g;
       const line = C.net.lines[s.line];
       if (!line) continue;
       // 粗略裁剪
@@ -1886,30 +2064,7 @@
       else if (under > 0) alpha = U.lerp(1, 0.35, under);
       if (hlLine && hlLine !== s.line) alpha *= 0.3;
       alpha *= lyrDim;
-      // 高架：阴影与桥墩
-      if (s.type === 'elevated' && t > 0.05) {
-        ctx.globalAlpha = (TH.night ? 0.4 : 0.18) * alpha * t; ctx.strokeStyle = TH.night ? '#000' : '#3a3a3a'; ctx.lineWidth = width;
-        ctx.beginPath();
-        for (let i = 0; i < b.pts.length; i++) { const p = this.P(b.pts[i][0], b.pts[i][1], 0); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); }
-        ctx.stroke();
-        ctx.globalAlpha = 0.55 * alpha * t; ctx.strokeStyle = TH.pier; ctx.lineWidth = Math.max(1, width * 0.35);
-        ctx.beginPath();
-        const step = Math.max(2, Math.round(0.45 / 0.12));
-        for (let i = step; i < b.pts.length - 1; i += step) { const p = this.P(b.pts[i][0], b.pts[i][1], 0); ctx.moveTo(p.x, p.y); ctx.lineTo(arr[i * 2], arr[i * 2 + 1]); }
-        ctx.stroke();
-      }
-      // 地下视图中的竖井
-      ctx.globalAlpha = alpha;
-      // 白色衬边
-      if (s.type !== 'underground' || under > 0.5) {
-        ctx.strokeStyle = s.type === 'elevated' ? TH.elevCase : TH.lineCase;
-        ctx.lineWidth = width + 2.5;
-        this.strokeArr(ctx, arr);
-      }
-      ctx.strokeStyle = col; ctx.lineWidth = width;
-      this.strokeArr(ctx, arr);
-      if (s.type === 'surface') { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
-      if (s.type === 'underground' && under < 0.5 && !g.preview) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
+      this.drawTrack(ctx, cs, arr, col, alpha, width, under, t, this._tunBatch && !(hlLine && hlLine !== s.line));
       // 草案标记
       if (draft) {
         const o = g.net.segments[s.id];
@@ -2011,6 +2166,183 @@
       ctx.globalAlpha = 1;
     }
     this.drawnC = C;
+  };
+  // ---------------- 轨道建设方式（v2.0） ----------------
+  // 每个编译后的区段只计算一次装饰数据（采样下标）：越水区间、地下 / 地面 / 高出地面各段、桥墩与铁路交叉。
+  // 远景（缩放 < 12）与地下视图沿用原有画法；中近景按轨面高度分段绘制，每帧只做描边，不重算几何。
+  const DECO_BURIED = -0.035, DECO_FLAT = 0.004;   // 轨面低于约 1/3 埋深视为地下段
+  function decoRuns(n, test) {
+    const out = []; let s = -1;
+    for (let i = 0; i < n; i++) {
+      if (test(i)) { if (s < 0) s = i; } else if (s >= 0) { out.push([Math.max(0, s - 1), i]); s = -1; }
+    }
+    if (s >= 0) out.push([Math.max(0, s - 1), n - 1]);
+    return out;
+  }
+  Renderer.prototype.segDeco = function (cs) {
+    const city = this.game.city, tv = (city.uid || 0) * 4096 + (city.terrainVer || 0);
+    let d = this.segDecos.get(cs);
+    if (d && d.tv === tv) return d;
+    const pts = cs.g.pts, cum = cs.g.cum, hs = cs.h, n = pts.length;
+    const wet = new Uint8Array(n);
+    for (let i = 0; i < n; i++) wet[i] = city.waterDistAt(pts[i][0], pts[i][1]) < 0 ? 1 : 0;
+    const elevH = CFG.metro.height.elevated;
+    // 桥墩：高出地面的部分约每 50 m 一座，水中约每 100 m
+    const piers = []; let next = -1, raised = false;
+    for (let i = 0; i < n; i++) if (hs[i] > DECO_FLAT * 3) { raised = true; if (cum[i] >= next) { piers.push(i); next = cum[i] + (wet[i] ? 0.4 : 0.2); } }
+    // 与运营中铁路的交叉：取铁路在交叉点的走向
+    const rails = [];
+    for (const kind of ['railSurf', 'railVia']) for (const p of cs.g[kind] || []) {
+      const f = CM.Geo.rail[p[2]]; let ang = 0, best = Infinity;
+      if (f && f.p) for (let q = 0; q + 3 < f.p.length; q += 2) { const dd = U.distToSeg(p[0], p[1], f.p[q], f.p[q + 1], f.p[q + 2], f.p[q + 3]); if (dd < best) { best = dd; ang = Math.atan2(f.p[q + 3] - f.p[q + 1], f.p[q + 2] - f.p[q]); } }
+      let bi = 0, bd = Infinity;
+      for (let i = 0; i < n; i++) { const dx = pts[i][0] - p[0], dy = pts[i][1] - p[1], dd = dx * dx + dy * dy; if (dd < bd) { bd = dd; bi = i; } }
+      rails.push({ i: bi, x: p[0], y: p[1], ang: ang, via: kind === 'railVia' });
+    }
+    d = {
+      tv: tv, wet: wet, piers: piers, raised: raised, rails: rails,
+      water: decoRuns(n, function (i) { return wet[i] === 1; }),
+      buried: decoRuns(n, function (i) { return hs[i] < DECO_BURIED; }),
+      ground: decoRuns(n, function (i) { return Math.abs(hs[i]) <= DECO_FLAT; }),
+      high: decoRuns(n, function (i) { return hs[i] > DECO_FLAT; }),
+      ramp: decoRuns(n, function (i) { return hs[i] > DECO_FLAT && hs[i] < elevH - DECO_FLAT; }),
+    };
+    this.segDecos.set(cs, d);
+    return d;
+  };
+  function strokeRange(ctx, arr, r) {
+    ctx.beginPath(); ctx.moveTo(arr[r[0] * 2], arr[r[0] * 2 + 1]);
+    for (let i = r[0] + 1; i <= r[1]; i++) ctx.lineTo(arr[i * 2], arr[i * 2 + 1]);
+    ctx.stroke();
+  }
+  // 屏幕折线的平行线（像素偏移，正值在前进方向左侧）：栏杆、挡墙
+  function strokeOffset(ctx, arr, r, off) {
+    const n = arr.length / 2;
+    ctx.beginPath();
+    for (let i = r[0]; i <= r[1]; i++) {
+      const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+      const dx = arr[b * 2] - arr[a * 2], dy = arr[b * 2 + 1] - arr[a * 2 + 1], l = Math.hypot(dx, dy) || 1;
+      const x = arr[i * 2] + dy / l * off, y = arr[i * 2 + 1] - dx / l * off;
+      if (i === r[0]) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  function arrAngle(arr, i) {
+    const n = arr.length / 2, a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+    return Math.atan2(arr[b * 2 + 1] - arr[a * 2 + 1], arr[b * 2] - arr[a * 2]);
+  }
+  // batched：隧道外廓与越江隧道已在 drawMetro 中合并描边
+  Renderer.prototype.drawTrack = function (ctx, cs, arr, col, alpha, width, under, t, batched) {
+    const s = cs.seg, z = this.z;
+    if (z < 12 || under >= 0.5) {
+      // 远景与地下视图：原有画法（衬边 + 线路色 + 地面虚线 / 地下点线）
+      if (s.type === 'elevated' && t > 0.05) this.drawRaisedBase(ctx, cs, arr, alpha, width, t, null);
+      ctx.globalAlpha = alpha;
+      if (s.type !== 'underground' || under > 0.5) { ctx.strokeStyle = s.type === 'elevated' ? TH.elevCase : TH.lineCase; ctx.lineWidth = width + 2.5; this.strokeArr(ctx, arr); }
+      ctx.strokeStyle = col; ctx.lineWidth = width; this.strokeArr(ctx, arr);
+      if (s.type === 'surface') { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
+      if (s.type === 'underground' && under < 0.5 && !this.game.preview) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); this.strokeArr(ctx, arr); ctx.setLineDash([]); }
+      ctx.globalAlpha = 1;
+      return;
+    }
+    // 近景细节（枕木、栏杆、挡墙）只在缩放 ≥ 24 且自动细节未降档时绘制；负载升高时与其他中远景细节一起省略
+    const d = this.segDeco(cs), K = TH.trk, hs = cs.h, near = z >= 24 && this.detail.tier < 2;
+    const fade = 1 - 2 * under;
+    // 高出地面部分：2.5D 投影阴影与桥墩，2D 向右下偏移的阴影（偏移量随轨面高度变化，引桥逐渐抬升）
+    if (d.raised) this.drawRaisedBase(ctx, cs, arr, alpha, width, t, d);
+    // 越水：桥面（地面 / 高架）或越江隧道（地下）
+    for (const r of d.water) {
+      const mid = (r[0] + r[1]) >> 1;
+      if (hs[mid] < -DECO_FLAT) { if (!batched) { ctx.globalAlpha = alpha * fade; ctx.strokeStyle = K.tunnelWater; ctx.lineWidth = width + 4.5; strokeRange(ctx, arr, r); } }
+      else { ctx.globalAlpha = alpha; ctx.strokeStyle = K.deck; ctx.lineWidth = width + 6; strokeRange(ctx, arr, r); }
+    }
+    ctx.lineCap = 'butt';
+    // 地面：道床与枕木
+    if (d.ground.length) {
+      ctx.globalAlpha = alpha; ctx.strokeStyle = K.ballast; ctx.lineWidth = width + 3.5;
+      for (const r of d.ground) strokeRange(ctx, arr, r);
+      if (near) { ctx.strokeStyle = K.sleeper; ctx.setLineDash([1.3, Math.max(2.4, width * 0.55)]); for (const r of d.ground) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
+    }
+    // 高出地面：留出与下方线路交叉的间隙，再画桥面衬边
+    if (d.high.length) {
+      ctx.globalAlpha = alpha; ctx.strokeStyle = TH.lineCase; ctx.lineWidth = width + 5;
+      for (const r of d.high) strokeRange(ctx, arr, r);
+      ctx.strokeStyle = TH.elevCase; ctx.lineWidth = width + 2.5;
+      for (const r of d.high) strokeRange(ctx, arr, r);
+    }
+    ctx.lineCap = 'round';
+    // 线路本色：地下段略透明
+    ctx.strokeStyle = col; ctx.lineWidth = width;
+    if (d.buried.length === 1 && d.buried[0][0] === 0 && d.buried[0][1] === arr.length / 2 - 1) { ctx.globalAlpha = alpha * U.lerp(0.82, 1, under); this.strokeArr(ctx, arr); }
+    else {
+      ctx.globalAlpha = alpha; this.strokeArr(ctx, arr);
+      if (d.buried.length) { ctx.globalAlpha = alpha * 0.25 * fade; ctx.strokeStyle = TH.lineCase; ctx.lineWidth = width * 0.5; for (const r of d.buried) strokeRange(ctx, arr, r); }
+    }
+    ctx.globalAlpha = alpha;
+    // 中线标记：地面段白色短线，地下段白色点线
+    if (s.type === 'surface') { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); for (const r of d.ground) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
+    if (d.buried.length && !this.game.preview) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); for (const r of d.buried) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
+    if (near) {
+      // 桥面栏杆（高架与越水桥梁）与引桥挡墙
+      ctx.strokeStyle = K.parapet; ctx.lineWidth = 1;
+      for (const r of d.high) { strokeOffset(ctx, arr, r, width / 2 + 1.25); strokeOffset(ctx, arr, r, -width / 2 - 1.25); }
+      for (const r of d.water) { const mid = (r[0] + r[1]) >> 1; if (hs[mid] >= -DECO_FLAT && hs[mid] <= DECO_FLAT) { strokeOffset(ctx, arr, r, width / 2 + 2.6); strokeOffset(ctx, arr, r, -width / 2 - 2.6); } }
+      if (d.ramp.length) { ctx.strokeStyle = K.wall; ctx.lineWidth = 1.2; ctx.setLineDash([2, 1.5]); for (const r of d.ramp) { strokeOffset(ctx, arr, r, width / 2 + 2.6); strokeOffset(ctx, arr, r, -width / 2 - 2.6); } ctx.setLineDash([]); }
+    }
+    // 与铁路交叉：地下线——铁路从隧道上方经过；高架 / 地面线——跨越铁路的桥台
+    if (z >= 16) for (const rc of d.rails) {
+      const p = this.P(rc.x, rc.y, 0), q = {};
+      if (p.x < -30 || p.y < -30 || p.x > this.w + 30 || p.y > this.h + 30) continue;
+      const len = width * 2.4 + 3, c = Math.cos(rc.ang), sn = Math.sin(rc.ang);
+      this.P(rc.x + c * 0.1, rc.y + sn * 0.1, 0, q);
+      const ra = Math.atan2(q.y - p.y, q.x - p.x);
+      ctx.save(); ctx.globalAlpha = alpha;
+      if (hs[rc.i] < -DECO_FLAT) {
+        ctx.translate(p.x, p.y); ctx.rotate(ra); ctx.lineCap = 'butt';
+        ctx.strokeStyle = TH.road.railCase; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(-len, 0); ctx.lineTo(len, 0); ctx.stroke();
+        ctx.strokeStyle = TH.road.rail; ctx.lineWidth = 1.5; ctx.setLineDash([2, 2]); ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        const ta = arrAngle(arr, rc.i), off = width / 2 + 3;
+        ctx.translate(arr[rc.i * 2], arr[rc.i * 2 + 1]); ctx.rotate(ta);
+        ctx.strokeStyle = K.wall; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.beginPath();
+        for (const sx of [-1, 1]) { ctx.moveTo(sx * (width + 4), -off); ctx.lineTo(sx * (width + 4), off); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  };
+  // 高出地面部分的阴影与桥墩：2.5D 阴影落在地面、桥墩连到桥面；2D 阴影向右下偏移；水中桥墩画出水纹
+  Renderer.prototype.drawRaisedBase = function (ctx, cs, arr, alpha, width, t, d) {
+    const pts = cs.g.pts, hs = cs.h, n = pts.length, tmp = {};
+    const K = TH.trk;
+    if (t > 0.05) {
+      ctx.globalAlpha = (TH.night ? 0.4 : 0.18) * alpha * t; ctx.strokeStyle = TH.night ? '#000' : '#3a3a3a'; ctx.lineWidth = width;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < n; i++) { if (hs[i] <= DECO_FLAT) { pen = false; continue; } const p = this.P(pts[i][0], pts[i][1], 0, tmp); if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); pen = true; }
+      ctx.stroke();
+      ctx.globalAlpha = 0.55 * alpha * t; ctx.strokeStyle = TH.pier; ctx.lineWidth = Math.max(1, width * 0.35);
+      ctx.beginPath();
+      if (d) for (const i of d.piers) { const p = this.P(pts[i][0], pts[i][1], 0, tmp); ctx.moveTo(p.x, p.y); ctx.lineTo(arr[i * 2], arr[i * 2 + 1]); }
+      else { const step = 4; for (let i = step; i < n - 1; i += step) { const p = this.P(pts[i][0], pts[i][1], 0, tmp); ctx.moveTo(p.x, p.y); ctx.lineTo(arr[i * 2], arr[i * 2 + 1]); } }
+      ctx.stroke();
+    }
+    if (!d) return;
+    if (t < 0.95) {
+      const k = (1 - t) * this.z * 2.0;
+      ctx.globalAlpha = (TH.night ? 0.35 : 0.16) * alpha * (1 - t); ctx.strokeStyle = K.shadow; ctx.lineWidth = width + 1;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < n; i++) { if (hs[i] <= DECO_FLAT) { pen = false; continue; } const hh = hs[i] * k; if (pen) ctx.lineTo(arr[i * 2] + hh * 0.55, arr[i * 2 + 1] + hh); else ctx.moveTo(arr[i * 2] + hh * 0.55, arr[i * 2 + 1] + hh); pen = true; }
+      ctx.stroke();
+    }
+    if (this.z >= 20) {
+      ctx.globalAlpha = alpha; ctx.strokeStyle = K.pierFoot; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const i of d.piers) { if (!d.wet[i]) continue; const p = this.P(pts[i][0], pts[i][1], 0, tmp); ctx.moveTo(p.x + width * 0.9 + 1, p.y); ctx.ellipse(p.x, p.y, width * 0.9 + 1, (width * 0.9 + 1) * (1 - 0.5 * t), 0, 0, Math.PI * 2); }
+      ctx.stroke();
+    }
   };
   // 换乘箭头（⇄）：上箭头向右、下箭头向左
   function xferGlyph(ctx, x, y, s, col) {

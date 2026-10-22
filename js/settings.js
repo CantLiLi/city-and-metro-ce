@@ -1,5 +1,5 @@
 'use strict';
-// 设置：只保留常用项（主题、界面大小、地图标注、交通动画、声音、自动保存），保存在本地；变化时立即生效并通知各模块
+// 设置：只保留常用项（主题、界面大小、地图标注、交通动画、声音与三路音量、自动保存），保存在本地；变化时立即生效并通知各模块
 (function (CM) {
   const KEY = 'cm1.settings';
   const DEF = {
@@ -7,7 +7,8 @@
     uiScale: 1,           // 界面大小
     labels: 'all',        // 地图标注：all 全部 | stations 仅车站 | none 关闭
     agents: true,         // 车辆、行人与列车动画
-    sound: true, volume: 0.6,
+    sound: true, volume: 0.6,   // 总开关与总音量
+    trainVol: 0.7, ambVol: 0.6, // 列车音效、城市环境音（v2.0）
     autosave: true,
   };
   let cur = Object.assign({}, DEF);
@@ -51,6 +52,8 @@
       if (!k || k === 'theme') { if (CM.setTheme) CM.setTheme(Settings.resolvedTheme()); else root.dataset.theme = Settings.resolvedTheme(); }
       if (!k || k === 'uiScale') root.style.setProperty('--uiz', String(cur.uiScale));
       if (!k || k === 'sound' || k === 'volume') { if (CM.Sound) { CM.Sound.setEnabled(cur.sound); CM.Sound.setVolume(cur.volume); } }
+      if (CM.Sound && (!k || k === 'trainVol')) CM.Sound.setTrainVolume(cur.trainVol);
+      if (CM.Sound && (!k || k === 'ambVol')) CM.Sound.setAmbVolume(cur.ambVol);
       if (CM.R && (!k || k === 'labels' || k === 'agents')) { CM.R.labelsOn = cur.labels !== 'none'; CM.R.mapLabelsOn = cur.labels === 'all'; CM.R.agentsOn = cur.agents; }
     },
   };

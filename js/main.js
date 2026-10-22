@@ -91,6 +91,7 @@
       CM.U.h('div', { class: 'modal-actions' }, CM.U.h('button', { class: 'btn primary', onclick: function () { if (CM.game) ui.closeScreen(); else ui.showStart(); } }, '确定'))));
   }
   function start(g, isNew) {
+    if (CM.Soundscape) CM.Soundscape.reset();
     if (CM.Follow) CM.Follow.stop(true);
     if (CM.Tutorial) CM.Tutorial.detach();
     CM.game = g;
@@ -125,6 +126,7 @@
   }
   // opts.map：地图（默认广州）；opts.tutorial：新手教程
   CM.newGame = function (opts) {
+    if (CM.Soundscape) CM.Soundscape.reset();
     const mp = CM.MAPS[opts.map] || CM.MAPS.gz;
     ui.showLoading('正在生成 ' + mp.cfg.START.y + ' 年的' + mp.data.city + '，并计算居民出行…');
     setTimeout(function () {
@@ -132,12 +134,14 @@
     }, 60);
   };
   CM.loadGame = function (data) {
+    if (CM.Soundscape) CM.Soundscape.reset();
     ui.showLoading('正在载入存档并恢复城市与交通状态…');
     setTimeout(function () {
       try { CM.useMap((data.meta && data.meta.map) || 'gz'); start(CM.Game.restore(data), false); } catch (e) { CM.useMap(CM.game ? CM.game.mapId : 'gz'); fail(e, '载入存档'); }
     }, 60);
   };
   CM.endGame = function () {
+    if (CM.Soundscape) CM.Soundscape.reset();
     ui.clearCelebrations();
     CM.game = null;
     if (CM.Follow) CM.Follow.stop(true);
@@ -180,6 +184,7 @@
       try { CM.agents.updatePreview(dt, preview, R); } catch (e) { console.error(e); }
     }
     try { R.render(dt, ui); } catch (e) { console.error(e); }
+    try { CM.Soundscape.tick(dt); } catch (e) { console.error(e); }
     ui.tick(dt);
     R.noteFrameTime(performance.now() - workStarted);
     fpsAcc += dt; fpsN++;

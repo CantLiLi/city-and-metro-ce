@@ -267,6 +267,12 @@
       timer = setTimeout(function () { if (cur === el && document.body.contains(el)) show(el); }, 380);
     });
     document.addEventListener('pointerdown', hide, true);
+    document.addEventListener('pointerout', function (e) {
+      if (cur && (!e.relatedTarget || !cur.contains(e.relatedTarget))) hide();
+    });
+    document.addEventListener('keydown', hide, true);
+    document.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
     window.addEventListener('blur', hide);
   };
   // 按压反馈：所有可点击元素统一的涟漪（放在按钮自身圆角内的裁切层里，不影响角标等溢出内容）
@@ -1521,16 +1527,24 @@
       btns.forEach(function (b) { c.appendChild(b); });
       return c;
     };
-    const volVal = h('span', { class: 'set-val' }, Math.round(S.get('volume') * 100) + '%');
-    const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: S.get('volume'), 'aria-label': '音量', oninput: function (e) { S.set('volume', +e.target.value); volVal.textContent = Math.round(e.target.value * 100) + '%'; }, onchange: function () { snd('good'); } });
-    const volWrap = row('sound', '音量', h('div', { class: 'set-slider' }, vol, volVal));
-    volWrap.classList.add('vol-row'); if (!S.get('sound')) volWrap.classList.add('off');
+    // 三路音量：总音量（含界面音效）、列车音效、城市环境音；关闭音效时一并变灰
+    const volRows = [];
+    const volRow = function (key, icon, title, desc) {
+      const val = h('span', { class: 'set-val' }, Math.round(S.get(key) * 100) + '%');
+      const input = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: S.get(key), 'aria-label': title, oninput: function (e) { S.set(key, +e.target.value); val.textContent = Math.round(e.target.value * 100) + '%'; }, onchange: function () { snd('good'); } });
+      const r = row(icon, title, h('div', { class: 'set-slider' }, input, val), desc);
+      r.classList.add('vol-row'); if (!S.get('sound')) r.classList.add('off');
+      volRows.push(r);
+      return r;
+    };
     const body = h('div', { class: 'set-body single' },
       row('expand', '界面大小', seg('uiScale', [[0.9, '小'], [1, '标准'], [1.15, '大']])),
       row('label', '地图标注', seg('labels', [['all', '全部'], ['stations', '仅车站'], ['none', '关闭']])),
       row('car', '车辆与行人', toggle('agents'), '关闭后交通模拟照常进行，只是不显示运动的车辆和行人'),
-      row('sound', '音效', toggle('sound', function () { volWrap.classList.toggle('off', !S.get('sound')); })),
-      volWrap,
+      row('sound', '声音', toggle('sound', function () { volRows.forEach(function (r) { r.classList.toggle('off', !S.get('sound')); }); })),
+      volRow('volume', 'sound', '总音量'),
+      volRow('trainVol', 'train', '列车音效', '列车行驶、进出站与车门提示；跟随列车时更突出'),
+      volRow('ambVol', 'building', '城市环境音', '车流、人声、水面与鸟鸣，随镜头位置、城区和时段变化'),
       row('save', '自动保存', toggle('autosave'), '暂停、每月结算与每次建设后自动保存'));
     const card = h('div', { class: 'card settings' },
       h('div', { class: 'card-head' }, h('span', { class: 'badge b-slate' }, ic('gear')), h('h2', null, '设置'), h('span', { class: 'grow' }), h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: back }, ic('close'))),

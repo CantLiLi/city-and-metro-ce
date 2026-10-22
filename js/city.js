@@ -1016,15 +1016,18 @@
     add(this.jobs, capJ, wJ, sJ, dJ);
     let newUrban = 0, streetsChanged = false;
     const seen = new Set();
+    // 工地（只用于画面上的塔吊，不参与模拟、不存档）：新城市化或明显加高的街区，记录开工月份
+    const sites = this.sites || (this.sites = new Map());
+    for (const [c, m0] of sites) if (mi - m0 > 24) sites.delete(c);
     for (const c of changed) {
       if (seen.has(c)) continue; seen.add(c);
       if (!this.street[c] && this.pop[c] + this.jobs[c] > 160) {
         this.street[c] = 1; this.urbanYear[c] = Math.floor(year);
         if (this.lu[c] === LU.RURAL) this.lu[c] = this.plan[c] === LU.PARK ? LU.RES : this.plan[c];
-        newUrban++; streetsChanged = true; this.dirty.add(c);
+        newUrban++; streetsChanged = true; this.dirty.add(c); sites.set(c, mi);
       }
       const nh = this.heightFor(c, year);
-      if (nh > this.bh[c] * 1.12 + 1) { this.bh[c] = nh; this.dirty.add(c); }
+      if (nh > this.bh[c] * 1.12 + 1) { if (nh - this.bh[c] >= 6) sites.set(c, mi); this.bh[c] = nh; this.dirty.add(c); }
     }
     if (streetsChanged) { this.updateStreets(); }
     if (changed.length) this.version++;
