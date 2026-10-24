@@ -109,8 +109,10 @@
       if (CM.R && CM.R.setShadows && (!k || k === 'shadow')) CM.R.setShadows(cur.shadow !== false);
       if (CM.R && CM.R.setBldDensity && (!k || k === 'bldDensity')) CM.R.setBldDensity(cur.bldDensity);
       if (CM.R && CM.R.setLodLive && (!k || k === 'lodLive')) CM.R.setLodLive(cur.lodLive === true);
-      // 窗口方式交给桌面外壳；网页版没有这个能力。启动时只在不是普通窗口时才动窗口，免得干预正常启动
-      if (CM.desktop && CM.desktop.setWindowMode && (!k || k === 'winMode')) {
+      // 窗口方式交给桌面外壳；网页版没有这个能力。启动时（k 为空）只在不是普通窗口时才动窗口，
+      // 普通窗口本来就是默认状态，再去设一次既没意义，又可能因窗口尚未就绪而白弹一个失败提示
+      const wantWin = !k || k === 'winMode';
+      if (wantWin && CM.desktop && CM.desktop.setWindowMode && (k || cur.winMode !== 'window')) {
         CM.desktop.setWindowMode(cur.winMode).then(function (ok) {
           if (!ok && CM.ui && CM.ui.toast) CM.ui.toast('切换全屏方式失败', 'warn');
         }, function () { /* 外壳不可用时保持原样 */ });

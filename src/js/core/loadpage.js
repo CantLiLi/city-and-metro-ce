@@ -59,14 +59,17 @@
   let root = null, finished = false, onKey = null, pctRaf = 0;
 
   function mount(title) {
-    if (root || !document.body) return null;
+    if (root) return null;
+    dropFading();
+    if (!document.body) return null;
     const tipEl = h('div', { class: 'lp-tip' });
     const barFill = h('i');
     const pctEl = h('b', { class: 'lp-pct' }, '0%');
     // 进场即完全不透明：早于本脚本的页面内容一律被挡住，不做淡入，避免主界面从下面透出来
+    const logo = h('img', { class: 'lp-logo', alt: '城市与地铁社区版', src: LOGO[platform()] });
     root = h('div', { class: 'loadpage', id: 'loadpage', role: 'status', 'aria-live': 'polite' },
       h('div', { class: 'lp-stage' },
-        h('img', { class: 'lp-logo', src: LOGO[platform()], alt: '城市与地铁社区版' }),
+        logo,
         h('div', { class: 'lp-title' }, title || '城市与地铁社区版'),
         h('div', { class: 'lp-prog' }, h('div', { class: 'lp-bar' }, barFill), pctEl),
         tipEl));
@@ -74,20 +77,44 @@
     return { tipEl: tipEl, barFill: barFill, pctEl: pctEl };
   }
 
-  // 数字进度跟着条子的实际宽度走，缓动曲线换了也不用改这里（pct 给出目标值，减少动效时按它显示）
-  function watchPct(barEl, barFill, pctEl, pct) {
-    const step = function () {
-      pctRaf = requestAnimationFrame(step);
-      const total = barEl.getBoundingClientRect().width;
-      if (!total) { pctEl.textContent = '0%'; return; }
-      const got = barFill.getBoundingClientRect().width;
-      pctEl.textContent = Math.round(animating() ? got / total * 100 : pct()) + '%';
-    };
-    pctRaf = requestAnimationFrame(step);
+  // CSS 里的三次贝塞尔缓动：给一组时间点，直接算出同一曲线下的取值
+  function cubic(x1, y1, x2, y2, t) {
+    const bz = function (a, b, k) { return 3 * a * (1 - k) * (1 - k) * k + 3 * b * (1 - k) * k * k + k * k * k; };
+    let lo = 0, hi = 1, k = t;
+    for (let i = 0; i < 18; i++) {
+      if (bz(x1, x2, k) < t) lo = k; else hi = k;
+      k = (lo + hi) / 2;
+    }
+    return bz(y1, y2, k);
   }
 
-  function animating() {
-    return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const easeWarm = function (t) { return cubic(.3, .05, .55, .95, t); };
+  const easeFin = function (t) { return cubic(.55, .05, .25, 1, t); };
+  const linear = function (t) { return t; };
+
+  // 按时间算条子宽度与数字，不再跟 CSS 过渡走。过渡的宽度只在样式提交时才生效，
+  // 加载页刚挂上页面那几帧还没跑起来，回读永远是 0；断点调试、窗口尺寸一变过渡也会丢，
+  // 回读出来就是 100% 掉回 72%。数值只由时间决定，两段（慢爬、快跑满）接得上，不会回退。
+  function grow(barFill, pctEl, sc) {
+    let from = 0, to = 0, t0 = 0, dur = 0, ease = easeWarm;
+    const still = !!(CM.Settings && CM.Settings.reducedMotion && CM.Settings.reducedMotion());
+    const draw = function (v) {
+      barFill.style.width = v + '%';
+      pctEl.textContent = Math.round(v) + '%';
+    };
+    draw(0);
+    const step = function () {
+      pctRaf = requestAnimationFrame(step);
+      const k = dur > 0 ? (performance.now() - t0) / dur : 1;
+      draw(k >= 1 ? to : from + (to - from) * ease(k));
+    };
+    const run = function (next, arc, ms) {
+      from = to; to = Math.max(to, next); t0 = performance.now(); dur = ms; ease = arc;
+    };
+    // 减少动效时不要缓动：条子直接停在等待位置，只在收尾时补满
+    run(sc.warmPct, still ? linear : easeWarm, still ? 1 : sc.warm);
+    pctRaf = requestAnimationFrame(step);
+    return run;
   }
 
   function setTips(tipEl, list) {
@@ -104,17 +131,33 @@
   // 兜底：加载页卡住时不会永远挡住界面。启动/进入/退出各自最长等待，到点强制收尾
   const WATCH = { boot: 12000, enter: 60000, exit: 30000 };
 
+  // 正在淡出的旧加载页：新的一页挂上去之前必须彻底清掉，否则两层叠在一起，
+  // 旧的那层停在 100% 淡出、新的从 0 涨起，看上去就是进度条往回跑
+  let fading = null;
+
+  function dropFading() {
+    const el = fading;
+    if (!el) return;
+    fading = null;
+    el.removeEventListener('transitionend', el._lpEnd);
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }
+
   function cleanup() {
     if (pctRaf) { cancelAnimationFrame(pctRaf); pctRaf = 0; }
     const el = root;
     if (el) {
       root = null;
+      dropFading();
+      fading = el;
       el.classList.add('is-out');
       const drop = function () {
         el.removeEventListener('transitionend', onEnd);
+        if (fading === el) fading = null;
         if (el.parentNode) el.parentNode.removeChild(el);
       };
       const onEnd = function (e) { if (e.target === el && e.propertyName === 'opacity') drop(); };
+      el._lpEnd = onEnd;
       el.addEventListener('transitionend', onEnd);
       setTimeout(drop, OUT_MS + 180);
     }
@@ -145,11 +188,8 @@
     const ui = mount(opts.title);
     if (!ui) { finished = true; closing = null; if (onDone) onDone(); return { done: function () {} }; }
     const tipEl = ui.tipEl, barFill = ui.barFill, pctEl = ui.pctEl;
-    let ready = false, closed = false, boot = 0, pct = 0;
-    barFill.style.transition = 'width ' + sc.warm + 'ms cubic-bezier(.3,.05,.55,.95)';
-    requestAnimationFrame(function () { requestAnimationFrame(function () { barFill.style.width = sc.warmPct + '%'; }); });
-    pct = sc.warmPct;
-    watchPct(barFill.parentNode, barFill, pctEl, function () { return pct; });
+    let ready = false, closed = false, boot = 0;
+    const run = grow(barFill, pctEl, sc);
     const tipList = opts.tips || sc.tips;
     if (opts.skippable !== false) {
       onKey = function (e) { if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') done(); };
@@ -163,11 +203,7 @@
       if (ready || closed) return;
       ready = true;
       if (boot) { clearTimeout(boot); boot = 0; }
-      try {
-        barFill.style.transition = 'width ' + sc.fin + 'ms cubic-bezier(.55,.05,.25,1)';
-        barFill.style.width = '100%';
-      } catch (e) { console.error(e); }
-      pct = 100;
+      try { run(100, easeFin, sc.fin); } catch (e) { console.error(e); }
       setTimeout(close, sc.fin);
     }
     function close() {
@@ -188,7 +224,7 @@
       });
     }
     // 没给 onReady 的场景（例如退出菜单要保留游戏状态）：立刻算加载完成，只跑「快速跑满 → 关闭」
-    else done();
+    else requestAnimationFrame(function () { requestAnimationFrame(done); });
     return { done: done };
   }
 

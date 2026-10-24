@@ -330,25 +330,90 @@ def set_macos_app_name(name):
 _window_mode = {'mode': 'window'}
 
 
+def _win32_set_attr(hwnd, attribute, value):
+    data = ctypes.c_int(value)
+    try:
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data)
+        )
+    except Exception:
+        log.debug('设置窗口属性 %s 失败', attribute, exc_info=True)
+
+
+def _win32_fill_screen(hwnd):
+    """把窗口铺到所在显示器的物理边界外 1px，盖住全屏时最外圈的白线。
+
+    pywebview 进全屏时用 Screen.Bounds（逻辑像素）定位，再关掉圆角与边框；
+    DWM 收起边框后剩下的 1px 接缝会露出 WinForms 窗体底色。窗口尺寸和位置都
+    改成物理像素并各边多出 1px 后，接缝落在屏幕外，肉眼就看不到了。
+    """
+    if sys.platform != 'win32' or not hwnd:
+        return
+    try:
+        import ctypes.wintypes
+
+        user32 = ctypes.windll.user32
+        MONITOR_DEFAULTTONEAREST = 2
+        monitor = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if not monitor:
+            return
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ('cbSize', ctypes.wintypes.DWORD),
+                ('rcMonitor', ctypes.wintypes.RECT),
+                ('rcWork', ctypes.wintypes.RECT),
+                ('dwFlags', ctypes.wintypes.DWORD),
+            ]
+
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return
+        mon = info.rcMonitor
+        x, y = mon.left - 1, mon.top - 1
+        w, h = mon.right - mon.left + 2, mon.bottom - mon.top + 2
+        SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED = 0x0004, 0x0010, 0x0020
+        user32.SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+        # 圆角与边框色只在无边框全屏时才有意义
+        _win32_set_attr(hwnd, 33, 1)
+        _win32_set_attr(hwnd, 34, 0xFFFFFFFE)
+    except Exception:
+        log.debug('铺满显示器失败', exc_info=True)
+
+
 def _set_fullscreen(win, on):
     if bool(_window_mode['mode'] != 'window') == on:
-        return
+        return False
     win.toggle_fullscreen()
+    if win is not None and sys.platform == 'win32':
+        hwnd = window_handle()
+        if hwnd:
+            if on:
+                _win32_fill_screen(hwnd)
+            else:
+                _win32_set_attr(hwnd, 33, 0)
+                _win32_set_attr(hwnd, 34, 0xFFFFFFFF)
+    return True
 
 
 def set_window_mode(win, mode):
-    """切换窗口方式。mode: window 普通窗口 | max 窗口化全屏。"""
+    """切换窗口方式。mode: window 普通窗口 | max 窗口化全屏。
+
+    已经是目标方式时直接返回成功：前端启动时会同步一次（设置里的值），
+    这时窗口本来就是普通窗口，再去动它只会白白引入失败。
+    """
     mode = str(mode or 'window')
     if mode not in ('window', 'max'):
         return {'ok': False, 'error': '未知的窗口方式'}
+    if _window_mode['mode'] == mode:
+        return {'ok': True, 'mode': mode, 'changed': False}
     if win is None:
         return {'ok': False, 'error': '窗口未就绪'}
     try:
-        _set_fullscreen(win, mode != 'window')
-        if mode == 'window':
-            win.restore()
+        if _set_fullscreen(win, mode != 'window'):
+            _window_mode['mode'] = mode
     except Exception as exc:
         log.warning('切换窗口方式失败: %s', exc, exc_info=True)
         return {'ok': False, 'error': str(exc)}
-    _window_mode['mode'] = mode
-    return {'ok': True, 'mode': mode}
+    return {'ok': True, 'mode': mode, 'changed': True}
