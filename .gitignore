@@ -22,3 +22,10 @@ node_modules/
 *.log
 *.tmp
 
+# Desktop (pywebview) tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+desktop-build/
+

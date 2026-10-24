@@ -255,11 +255,13 @@
     setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
   };
   Save.exportSlot = function (slotId) {
-    return readSlotText(slotId).then(function (r) { Save.download(JSON.stringify(parseSlot(r).env), Save.fileName(r.meta)); });
+    return readSlotText(slotId).then(function (r) {
+      return CM.desktop.exportJSON(JSON.stringify(parseSlot(r).env), Save.fileName(r.meta));
+    });
   };
   Save.exportGame = function (game) {
     const env = Save.envelope(game);
-    Save.download(JSON.stringify(env), Save.fileName({ name: game.name, date: [game.clock.y, game.clock.m] }));
+    return CM.desktop.exportJSON(JSON.stringify(env), Save.fileName({ name: game.name, date: [game.clock.y, game.clock.m] }));
   };
   // 导入：校验通过后作为新的手动存档保存，不覆盖已有进度。返回 Promise
   Save.importText = function (text) {

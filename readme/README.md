@@ -41,6 +41,17 @@
 
 在线打开即可游玩。也可下载仓库，使用桌面版 Chrome / Edge / Firefox 打开 `index.html`，无需安装或构建。
 
+### 桌面版（pywebview）
+
+仓库同时提供基于 [pywebview](https://pywebview.flowrl.com/) 的桌面外壳：Python 只负责开窗口、接文件对话框和托管本地资源，游戏本体仍是同一份 `src/` 前端代码。
+
+| 平台 | 启动 |
+| --- | --- |
+| Windows | 双击 `run-desktop.bat`（首次会自动建 `.venv` 并安装依赖） |
+| 任意平台 | `python src/python/main.py`，依赖见 `src/python/requirements.txt` |
+
+桌面版需要 Python 3.10+；Windows 使用系统自带的 WebView2 运行时，macOS / Linux 使用各平台的 WebKit。它的存档目录固定在系统应用数据目录（Windows 为 `%APPDATA%\CityAndMetro`），与浏览器里的存档互相独立，两者之间可以用导出 / 导入的 JSON 文件迁移。关闭窗口或退出时会先把未保存的进度写盘再结束进程。
+
 进度保存在当前浏览器本地，无需账号。支持自动保存、手动保存与 JSON 导入导出；更换电脑、浏览器或网址前先导出备份。各地图进度独立，存档可直接在列表内改名。未确认草案不保存。
 
 ## 地图与玩法
@@ -86,8 +97,12 @@
 | [部署说明](./部署说明.md) | Cloudflare 原生 GitHub 部署、发布记录与实际验证范围 |
 | [js/news.js](./js/news.js) | 游戏内面向玩家的更新公告 |
 | [js/maps.js](./js/maps.js) / [js/config.js](./js/config.js) | 地图登记与共用参数 |
+| [src/python/main.py](./src/python/main.py) | 桌面外壳入口（pywebview 窗口与存档时机） |
 
 运行资源位于 `index.html`、`css/`、`js/`、`img/`；各城场景使用 `data_*.js`，地理使用 `geo_*.js`。执行 `node scripts/build.mjs` 生成发布目录 `dist/`，不需要依赖安装。
+
+桌面外壳的代码在 `src/python/`：`main.py` 负责窗口与关闭时的存档等待，`citymetro/bridge.py` 提供文件对话框与读写接口，`src/js/desktop.js` 是前端侧的适配层。浏览器里打开时这套适配层自动退回到原来的网页逻辑。
+
 
 ## 已知边界
 

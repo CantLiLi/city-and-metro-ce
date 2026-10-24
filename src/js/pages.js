@@ -1292,7 +1292,7 @@
     el.appendChild(this.kv([['进度名称', g.name], ['游戏模式', g.mode === 'free' ? '自由建造' : '经营挑战'], ['游戏日期', g.clock.y + '年' + g.clock.m + '月' + g.clock.d + '日']]));
     el.appendChild(h('div', { class: 'row', style: { margin: '10px 0', flexWrap: 'wrap' } },
       h('button', { class: 'btn sm primary', onclick: function () { self.manualSave(); } }, '手动保存'),
-      h('button', { class: 'btn sm', onclick: function () { try { CM.Save.exportGame(g); self.toast('已导出存档文件', 'good'); } catch (e) { self.toast('导出失败：' + e.message, 'bad'); } } }, '导出当前进度'),
+      h('button', { class: 'btn sm', onclick: function () { Promise.resolve(CM.Save.exportGame(g)).then(function (r) { if (r !== 'cancel') self.toast('已导出存档文件', 'good'); }).catch(function (e) { self.toast('导出失败：' + e.message, 'bad'); }); } }, '导出当前进度'),
       h('button', { class: 'btn sm', onclick: function () { self.showSaveManager(true); } }, '存档管理')));
     const games = CM.Save.list();
     const mine = games.find(function (x) { return x.gameId === g.id; });

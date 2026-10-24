@@ -193,6 +193,13 @@
   }
   window.addEventListener('beforeunload', function () { if (CM.game && !ui.isSaved()) ui.doAutosave(); });
   window.addEventListener('resize', function () { R.resize(); });
+  // 桌面版：外壳等这里把进度写完再销毁窗口（标志由 Python 端在 loaded 后注入，可能晚于本脚本）
+  window.__cmDesktopClose = function () {
+    if (!CM.desktop || !CM.desktop.isDesktop()) return Promise.resolve();
+    const g = CM.game;
+    if (!g || ui.isSaved()) return Promise.resolve();
+    return Promise.resolve(ui.doAutosave(true)).catch(function () {});
+  };
 
   R.resize();
   R.cam.zoom = R.cam.tz = 17; R.cam.view = 1; R.cam.t = 1; previewCamera(0);
