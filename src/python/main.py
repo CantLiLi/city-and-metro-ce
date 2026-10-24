@@ -16,6 +16,7 @@ from citymetro import paths, prefs, storage, window
 from citymetro.about import APP_ID, APP_NAME, VERSION
 from citymetro.bridge import ShellApi, bridge_script
 from citymetro.single_instance import InstanceLock
+from citymetro.window import destroy_now
 
 WINDOW_TITLE = APP_NAME + ' v' + VERSION
 ENGINE_TIMEOUT = 15
@@ -79,10 +80,7 @@ def flush_and_destroy(window):
         time.sleep(0.1)
     else:
         log.warning('等待存档超时 %ss，仍然关闭', SAVE_TIMEOUT)
-    try:
-        window.destroy()
-    except Exception:
-        log.debug('destroy 失败', exc_info=True)
+    destroy_now(window)
 
 
 # 关窗只有一条路径：主线程只做登记，存档等待与销毁都放在后台线程，

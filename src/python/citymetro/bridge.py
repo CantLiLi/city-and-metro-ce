@@ -69,23 +69,33 @@ class ShellApi:
         return {'name': APP_NAME, 'version': VERSION, 'platform': 'pywebview'}
 
     def choose_save_file(self, mode='open'):
+        okay, payload = self._choose_file(mode)
+        return payload if okay else None
+
+    def _choose_file(self, mode):
+        # 对话框失败与用户取消要分开：前端只把 false 当取消，失败要能看到原因
         window = self.window
         if window is None:
-            return None
+            return False, '窗口未就绪'
         if mode == 'save':
             dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, '城市与地铁社区版-进度.cmsave.json'
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
         # pywebview 的对话框会阻塞调用线程（主线程），必须与窗口生命周期错开
-        with self._lock:
-            result = window.create_file_dialog(
-                dialog, directory='', save_filename=filename, file_types=filters
-            )
+        try:
+            with self._lock:
+                result = window.create_file_dialog(
+                    dialog, directory='', save_filename=filename, file_types=filters
+                )
+        except Exception as exc:
+            log.warning('打开文件对话框失败 %s: %s', mode, exc, exc_info=True)
+            return False, '无法打开文件选择窗口：' + str(exc)
         if not result:
-            return None
-        if isinstance(result, (list, tuple)):
-            return result[0] if result else None
-        return str(result)
+            return False, None
+        path = result[0] if isinstance(result, (list, tuple)) else str(result)
+        if not path:
+            return False, None
+        return True, path
 
     def write_export_file(self, path, text):
         try:
@@ -96,6 +106,22 @@ class ShellApi:
             log.warning('写存档失败 %s: %s', path, exc)
             return {'ok': False, 'error': str(exc)}
         return {'ok': True, 'path': path}
+
+    def open_import_file(self):
+        # 一次调用取回路径与文本：取消返回 ok=False 且没有 error，失败带 error
+        okay, payload = self._choose_file('open')
+        if not okay:
+            return {'ok': False, 'error': payload} if payload else {'ok': False}
+        result = self.read_import_file(payload)
+        if result.get('ok'):
+            result['name'] = os.path.basename(payload)
+        return result
+
+    def export_to_file(self, text):
+        okay, payload = self._choose_file('save')
+        if not okay:
+            return {'ok': False, 'error': payload} if payload else {'ok': False}
+        return self.write_export_file(payload, text)
 
     def read_import_file(self, path):
         try:

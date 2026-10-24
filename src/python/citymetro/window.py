@@ -67,6 +67,27 @@ def _windows_frame():
     return max(0, frame.right - frame.left - 100), max(0, frame.bottom - frame.top - 100)
 
 
+def destroy_now(window):
+    """销毁窗口。
+
+    Window.destroy 带 _shown_call 装饰，它会把 destroyed 事件提前置为已触发，所以再去等窗口关闭就等不到了；
+    退出线程要等的是窗口真的关掉，这里直接调底层 destroy_window。
+    """
+    if window is None:
+        return
+    try:
+        import webview.guilib as guilib
+
+        guilib.initialize(guilib.forced_gui_)
+        guilib.guilib.destroy_window(window.uid)
+    except Exception:
+        log.debug('底层销毁窗口失败，退回 window.destroy', exc_info=True)
+        try:
+            window.destroy()
+        except Exception:
+            log.debug('销毁窗口失败', exc_info=True)
+
+
 def window_size():
     """按当前屏幕可用区域算出窗口大小与最小尺寸（pywebview 的逻辑像素，WinForms 自己按 DPI 换算）。"""
     try:

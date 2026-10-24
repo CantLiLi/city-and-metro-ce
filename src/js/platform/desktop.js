@@ -14,25 +14,22 @@
   const info = { isDesktop: isDesktop, call: call, name: '城市与地铁社区版', version: '' };
   CM.desktop = info;
 
+  // 取消返回 null；打不开对话框、读不了文件一律 throw，调用方才能提示出来
   info.exportJSON = function (text, filename) {
     if (!isDesktop()) { CM.Save.download(text, filename); return Promise.resolve('download'); }
-    return call('choose_save_file', ['save']).then(function (path) {
-      if (!path) return 'cancel';
-      return call('write_export_file', [path, text]).then(function (r) {
-        if (r && r.ok) return 'saved';
-        throw new Error((r && r.error) || '写入文件失败');
-      });
+    return call('export_to_file', [text]).then(function (r) {
+      if (!r || (!r.ok && !r.error)) return 'cancel';
+      if (!r.ok) throw new Error(r.error);
+      return 'saved';
     });
   };
 
   info.importJSON = function () {
     if (!isDesktop()) return Promise.resolve(null);
-    return call('choose_save_file', ['open']).then(function (path) {
-      if (!path) return null;
-      return call('read_import_file', [path]).then(function (r) {
-        if (!r || !r.ok) throw new Error((r && r.error) || '读取文件失败');
-        return { text: r.text, name: String(path).split(/[\\/]/).pop() };
-      });
+    return call('open_import_file').then(function (r) {
+      if (!r || (!r.ok && !r.error)) return null;
+      if (!r.ok) throw new Error(r.error);
+      return { text: r.text, name: r.name || '' };
     });
   };
 

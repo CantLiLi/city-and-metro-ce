@@ -635,6 +635,8 @@
       act ? h('button', { class: 'btn sm toast-act', onclick: function (e) { e.stopPropagation(); close(); act.fn(); } }, act.label) : null,
       h('i', { class: 'life', style: { animationDuration: life + 'ms' } }));
     this.toasts.appendChild(t);
+    // 开始界面的存档/设置卡片里没有 HUD，#feed 还带着 hidden，提示会看不见
+    if (this.feed && this.feed.classList.contains('hidden')) this.feed.classList.remove('hidden');
     while (this.toasts.children.length > 4) this.toasts.firstChild.remove();
     if (kind === 'bad') snd('error'); else if (kind === 'good') snd('good'); else snd('notify');
     setTimeout(close, life);
@@ -1861,6 +1863,7 @@
   // 退出：桌面版交给外壳关窗口（外壳会先等进度写盘）；网页无法强制关闭自己打开的标签页，给出提示
   UI.prototype.quitGame = function () {
     const self = this;
+    const inGame = !!this.g();
     const desktop = !!(CM.desktop && CM.desktop.isDesktop());
     const title = '退出游戏？';
     const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。';
