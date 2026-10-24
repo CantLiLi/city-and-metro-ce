@@ -181,3 +181,16 @@ def set_macos_on_top(on):
     level = NSFloatingWindowLevel if on else NSNormalWindowLevel
     # setLevel: 只能碰主线程，而调用点常常在别的工作线程上
     AppHelper.callAfter(lambda: set_level(window, level))
+
+
+def set_macos_app_name(name):
+    """终止进程名还是「Python」，不改成 CFBundleName 的话，程序坞标签和菜单栏都会写 Python。
+
+    NSProcessInfo 的 processName 默认取 argv[0]，setter 能直接覆盖这个显示名。
+    """
+    try:
+        from Foundation import NSProcessInfo
+
+        NSProcessInfo.processInfo().setProcessName_(name)
+    except Exception:
+        log.debug('设置进程显示名失败', exc_info=True)

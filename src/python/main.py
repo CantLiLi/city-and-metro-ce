@@ -116,8 +116,6 @@ def setup_logging():
 
 def set_app_user_model_id():
     """让任务栏/Alt+Tab 按本应用分组，而不是挂在 python.exe 上显示 Python 图标。"""
-    if sys.platform != 'win32':
-        return
     try:
         import ctypes
 
@@ -153,7 +151,10 @@ def activate_existing():
 
 def main():
     setup_logging()
-    set_app_user_model_id()
+    if sys.platform == 'win32':
+        set_app_user_model_id()
+    else:
+        window.set_macos_app_name(APP_NAME)
     lock = InstanceLock(os.path.join(storage.data_dir(), 'instance.lock'))
     if not lock.acquire():
         # 已有窗口在跑：激活它再静默退出，不再弹提示窗

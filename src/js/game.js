@@ -484,7 +484,8 @@
   Game.prototype.planOverlay = function (pid) {
     const d = this.draft; if (!d) return null;
     const p = this.plansById[pid]; if (!p) return null;
-    const ev = this.draftEval(), off = this.net, t = d.net;
+    const off = this.net, t = d.net;
+    const nb = d.builtKeys || Object.create(null);
     const ov = { stations: {}, lines: {}, segs: {}, removals: {} };
     const owner = this;
     const take = function (key, isNew) { const own = owner.planOwner(key); const k = (isNew ? 'n:' : 'b:') + key; return own === undefined ? !p.pend[k] : own === pid; };
@@ -494,6 +495,8 @@
     for (const k in off.stations) if (!t.stations[k]) { if (this.planOwner(k) === pid) ov.removals[k] = true; }
     ov.id = pid;
     ov.net = this.subNet(ov);
+    // 本方案的轨道连到、但目前还没建成的车站（可能是别的方案建的）：确认本方案时一并建成
+    for (const k in ov.net.stations) if (t.stations[k] && !off.stations[k]) ov.stations[k] = true;
     ov.val = M.evaluate(ov.net, off, this.city, this.clock.y);
     p.net = ov.net; p.eval = ov.val; p.evalVer = d.ver;
     // 提示与「顺便改动」：方案里的具体内容 + 不属于任何方案的改动
@@ -505,9 +508,7 @@
       if (c.kind === 'line') { let any = false; for (const g in t.segments) if (lo[g] && t.segments[g].line === c.ref) any = true; return any; }
       return false;
     });
-    ov.add = ev.changes.add.filter(function (s) { return lo[owner.stationKeyByAdd(s)]; });
-    ov.mod = ev.changes.mod.filter(function (s) { return lo[owner.stationKeyByAdd(s)]; });
-    ov.del = ev.changes.del.filter(function (s) { return false; });
+    ov.add = []; ov.mod = []; ov.del = [];
     // 方案的线路（用于「完成度」显示）
     ov.line = p.lineId && ov.net.lines[p.lineId] ? p.lineId : null;
     return ov;
@@ -530,6 +531,8 @@
       if (t.lines[sg.line]) net.lines[sg.line] = t.lines[sg.line];
     }
     for (const k in ov.removals) delete net.stations[k];
+    // 轨道连到的车站若已被拆掉，轨道随之作废（否则网络不完整）
+    for (const k in net.segments) { const sg = net.segments[k]; if (!net.stations[sg.a] || !net.stations[sg.b]) delete net.segments[k]; }
     M.normalizeLines(net);
     return net;
   };
@@ -581,7 +584,7 @@
     if (d.liveSnap) return { error: '请先松开鼠标或结束当前拖动，再确认建设' };
     if (!this.econ.canAffordBuild(val.total)) return { error: '资金不足：需要 ' + U.fmtMoney(val.total) + '，当前一般资金 ' + U.fmtMoney(this.econ.funds) + (this.econ.capex > 0.5 ? ' + 建设专项资金 ' + U.fmtMoney(this.econ.capex) : '') };
     if (this.jumping || this.pending) return { error: '正在结算，请稍候' };
-    const keep = M.clone(d.net);
+    const keep = JSON.parse(JSON.stringify(d.net));
     const built = {}; for (const k in ov.stations) built[k] = 1; for (const k in ov.segs) built[k] = 1;
     const r = this.commitNet(ov.net, p.name || '方案', val);
     if (!r.ok) return r;
@@ -597,6 +600,8 @@
       q.pend = {}; q.evalVer = -1; q.net = null; q.eval = null;
     }
     keep.nextId = d.net.nextId;
+    // 剩下的改动与正式网络里已建成的对象分开编号，免得同一个 id 被当成既有对象的搬迁
+    this.rekeyDraft(keep);
     M.normalizeLines(keep);
     this.plans = this.plans.filter(function (x) { return x.id !== pid; });
     delete this.plansById[pid];
@@ -609,6 +614,24 @@
   };
   // 剩下的草案网络整体归给「剩下的方案」：它们之间的改动不再区分先后，各按自己的重叠部分算
   Game.prototype.coverageBase = function (net) { return { plan: null, own: false, keys: null, grp: this.plans.length ? this.plans[this.plans.length - 1].id : null }; };
+  // 草案里「还没建成、但 id 与正式网络里的对象撞了」的键换新 id（含对象自己的 id 字段），免得被当成同一个对象
+  Game.prototype.rekeyDraft = function (net) {
+    const off = this.net;
+    const stMap = {}, sgMap = {};
+    for (const k in net.stations) if (off.stations[k]) delete net.stations[k];
+    for (const k in net.segments) if (off.segments[k]) delete net.segments[k];
+    for (const k of Object.keys(net.stations)) {
+      const nk = M.newId(net, 's'); stMap[k] = nk;
+      const s = net.stations[k]; s.id = nk; net.stations[nk] = s; delete net.stations[k];
+    }
+    for (const k of Object.keys(net.segments)) {
+      const nk = M.newId(net, 'g'); sgMap[k] = nk;
+      const sg = net.segments[k];
+      sg.id = nk; sg.a = stMap[sg.a] || sg.a; sg.b = stMap[sg.b] || sg.b;
+      net.segments[nk] = sg; delete net.segments[k];
+    }
+    return { st: stMap, sg: sgMap };
+  };
   // 把一份网络按普通的建设流程并入正式网络（含扣费、拆迁、收藏名与里程碑）
   Game.prototype.commitNet = function (net, label, ev) {
     this.econ.spendBuild(ev.byKind, '地铁建设·' + label + '（' + ev.changes.add.length + ' 项新建、' + ev.changes.mod.length + ' 项修改）', { y: this.clock.y, m: this.clock.m, d: this.clock.d });

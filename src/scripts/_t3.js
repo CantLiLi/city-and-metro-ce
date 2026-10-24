@@ -32,3 +32,6 @@ console.log('A still owns',own.length,'->',own.map(k=>k+(g.net.stations[k]?'(已
 console.log('A total',Math.round(ovA2.val.total),'items',ovA2.val.items.length,'conflicts',ovA2.val.conflicts.length);
 console.log('draft stations left',Object.keys(g.draft.net.stations).length,'segs',Object.keys(g.draft.net.segments).length);
 console.log('official stations',Object.keys(g.net.stations).map(k=>g.net.stations[k].name).join(','));
+const oA=g.planOverlay(A.id);
+console.log('A items:',oA.val.items.map(i=>i.kind+':'+i.label+'='+Math.round(i.amount)).join(' | '));
+console.log('A total',Math.round(oA.val.total));
