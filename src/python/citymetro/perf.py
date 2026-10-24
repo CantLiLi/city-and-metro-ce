@@ -2,13 +2,18 @@
 
 Windows：WebView2 的浏览器、渲染、显卡进程都是 python.exe 的子进程，按父进程关系累加整棵树，
 显卡占用只有系统性能计数器（PDH 的 GPU Engine 实例）能读到。
-macOS：WebKit 的网页进程由 launchd 拉起，不在本进程的子进程里，所以按资源联盟（coalition）
-把同一个应用拉起的全部进程找出来，显卡时间也只有联盟统计里有。
+
+macOS：WebKit 的网页进程由 launchd 拉起，不在本进程的子进程里，只能单独认领：父子关系、
+本窗口 WKWebView 的内容进程，再按进程名认领 safari 这种属于网页进程的公用进程。
+资源联盟（coalition）不能直接用：整个程序坞里点开的程序都可能算进同一个联盟，
+按它统计等于把别的软件的内存也算成自己的。联盟只用来读显卡时间，那份数据里没有内存。
 """
 
 import ctypes
 import logging
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -160,7 +165,6 @@ def _sample(pids):
     return cpu, mem
 
 
-PROC_ALL_PIDS = 1
 PROC_PIDCOALITIONINFO = 20
 RUSAGE_INFO_V2 = 2
 COALITION_TYPE_RESOURCE = 0
@@ -201,6 +205,25 @@ class _CoalitionInfo(ctypes.Structure):
     ]
 
 
+class _MemRegion(ctypes.Structure):
+    """<sys/proc_info.h> 里 PROC_PIDREGIONPATHINFO 开头的部分。
+
+    struct proc_regioninfo 一共 152 字节，调用时按 sizeof 传长度，
+    前几项之后的字段与内存统计无关，用到哪写到哪。
+    """
+    _fields_ = [
+        ('offset', ctypes.c_uint64),
+        ('internal', ctypes.c_uint64),
+        ('resident', ctypes.c_uint64),
+        ('dirty', ctypes.c_uint64),
+        ('shared', ctypes.c_uint64),
+        ('_tail', ctypes.c_uint8 * (152 - 5 * 8)),
+    ]
+
+
+PROC_PIDREGIONPATHINFO = 8
+
+
 COALITION_QOS = 7
 
 
@@ -236,8 +259,6 @@ def _mach():
     if _MACH is not None:
         return _MACH
     lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-    lib.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
-    lib.proc_listpids.restype = ctypes.c_int
     lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
     lib.proc_pidinfo.restype = ctypes.c_int
     lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
@@ -271,30 +292,72 @@ def _coalition_id(lib, pid):
     return info.coalition_id[COALITION_TYPE_RESOURCE]
 
 
+# 属于网页内容的公用进程：名字里没有应用标识，只能按名字认领。
+# macOS 的 XPC 服务有的一身系统路径（/System/Library/Frameworks/WebKit.framework/…），
+# 按路径排除会把网页进程本身也排掉，所以只排除明确的系统服务。
+WEB_PROCESS = re.compile(r'safari|webkit', re.IGNORECASE)
+SYSTEM_PROCESS = re.compile(r'WindowServer|NotificationCenter|Dock\.app|ControlCenter', re.IGNORECASE)
+PS_PATTERN = 'pid=,ppid=,args='
+PS_TIMEOUT = 2.0
+
+
+def _mac_table():
+    """全部进程的 (pid, 父进程 pid, 命令行)。
+
+    用 ps 取：越权进程 proc_pidinfo 的 returncode=None，ps 能一次问到底。
+    """
+    try:
+        out = subprocess.run(
+            ['ps', '-axww', '-o', PS_PATTERN],
+            capture_output=True, timeout=PS_TIMEOUT, check=False,
+        ).stdout.decode('utf-8', 'replace')
+    except (OSError, subprocess.SubprocessError):
+        log.debug('读取进程表失败', exc_info=True)
+        return []
+    rows = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        except ValueError:
+            continue
+    return rows
+
+
+def _is_web_process(args):
+    return bool(WEB_PROCESS.search(args)) and not SYSTEM_PROCESS.search(args)
+
+
 def _mac_pids():
-    """与本进程同属一个资源联盟的进程（含 WebKit 的网页进程）。"""
-    lib = _mach()[0]
-    mine = _coalition_id(lib, os.getpid())
-    buf = ctypes.create_string_buffer(4096 * 4)
-    used = lib.proc_listpids(PROC_ALL_PIDS, 0, buf, len(buf))
-    pids = []
-    if used > 0:
-        arr = (ctypes.c_int * (used // 4)).from_buffer(buf)
-        for pid in arr:
-            if pid <= 0:
-                continue
-            if mine is None:
-                if pid == os.getpid():
-                    pids.append(pid)
-            elif _coalition_id(lib, pid) == mine:
-                pids.append(pid)
-    if not pids:
-        pids = [os.getpid()]
-    return pids, mine
+    """本软件的全部进程：自己、子孙、窗口的网页内容进程，再按进程名认领网页进程。"""
+    kids = {}
+    web = set()
+    for pid, ppid, args in _mac_table():
+        kids.setdefault(ppid, []).append(pid)
+        if _is_web_process(args):
+            web.add(pid)
+    out, i = [os.getpid()], 0
+    while i < len(out):
+        out.extend(kids.get(out[i], ()))
+        i += 1
+    try:
+        from citymetro import window
+
+        out.extend(window.macos_web_process_pids())
+    except Exception:
+        log.debug('读取网页进程失败', exc_info=True)
+    return sorted({pid for pid in set(out) | web if pid > 0})
 
 
 def _mac_usage(lib, pids):
-    """这些进程的累计 CPU 秒数与物理内存占用（字节）。"""
+    """这些进程的累计 CPU 秒数与物理内存占用（字节）。
+
+    内存按活动监视器「内存」一列的算法：phys_footprint 去掉其中与别人共享的部分。
+    网页进程是同一个 WebKit 拉起的一批进程，共享的一大块计数是同一份物理内存，
+    直接加发布会翻着倍地虚高。
+    """
     cpu, mem = 0.0, 0
     scale = _mach()[2]
     for pid in pids:
@@ -302,7 +365,11 @@ def _mac_usage(lib, pids):
         if lib.proc_pid_rusage(pid, RUSAGE_INFO_V2, ctypes.byref(info)) != 0:
             continue
         cpu += (info.ri_user_time + info.ri_system_time) * scale
-        mem += info.ri_phys_footprint
+        internal = _MemRegion()
+        if lib.proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, 0, ctypes.byref(internal), ctypes.sizeof(internal)) == ctypes.sizeof(internal):
+            mem += max(0, info.ri_phys_footprint - internal.internal)
+        else:
+            mem += info.ri_phys_footprint
     return cpu, mem
 
 
@@ -386,9 +453,9 @@ class Perf:
     def _snapshot_mac(self, want_gpu):
         lib = _mach()[0]
         now = time.time()
-        pids, coalition_id = _mac_pids()
+        pids = _mac_pids()
         cpu_sec, mem = _mac_usage(lib, pids)
-        gpu_sec = _mac_gpu_seconds(coalition_id) if want_gpu else None
+        gpu_sec = _mac_gpu_seconds(_coalition_id(lib, os.getpid())) if want_gpu else None
         with self._lock:
             prev, self._prev = self._prev, (cpu_sec, now, gpu_sec)
             cpu = _rate(prev, cpu_sec, now, os.cpu_count() or 1)

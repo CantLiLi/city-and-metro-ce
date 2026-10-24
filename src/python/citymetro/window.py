@@ -246,6 +246,48 @@ def set_macos_on_top(on):
     AppHelper.callAfter(lambda: set_level(window, level))
 
 
+def _objc_sel(obj, name):
+    # PyObjC 的临时对象要显式查一下有没有这个方法，直接 getattr 在部分对象上会抛异常
+    if not obj.respondsToSelector_ or not obj.respondsToSelector_(name):
+        return None
+    return getattr(obj, name, None)
+
+
+def macos_web_process_pids():
+    """本窗口 WKWebView 的内容进程（pid）：网页的 JS 堆、解码后的图片与图层都在这里。
+
+    这类进程由 launchd 拉起，不在 python 的子进程里，只能从 WKWebView 的私有
+    _webProcessProxy 问出来；问不到就返回空列表，调用处不计网页进程。
+    """
+    if sys.platform != 'darwin':
+        return []
+    try:
+        import webview
+
+        owners = list(getattr(webview, 'windows', None) or [])
+    except Exception:
+        log.debug('取窗口列表失败', exc_info=True)
+        return []
+    pids = []
+    for win in owners:
+        view = getattr(win, 'webview', None)
+        if view is None:
+            continue
+        proxy_sel = _objc_sel(view, '_webProcessProxy')
+        proxy = proxy_sel() if proxy_sel else None
+        if proxy is None:
+            continue
+        pid_sel = _objc_sel(proxy, 'processIdentifier')
+        pid = pid_sel() if pid_sel else None
+        try:
+            pid = int(pid) if pid is not None else 0
+        except (TypeError, ValueError):
+            pid = 0
+        if pid > 0:
+            pids.append(pid)
+    return pids
+
+
 def set_macos_app_name(name):
     """终止进程名还是「Python」，不改成 CFBundleName 的话，程序坞标签和菜单栏都会写 Python。
 
