@@ -63,9 +63,9 @@
   // 一次编辑动到的对象：新建 / 修改 / 拆除的车站、轨道、线路都记上，供方案归属回溯
   function keySet(net) {
     const s = {};
-    for (const k in net.stations) s[k] = net.stations[k];
-    for (const k in net.segments) s[k] = net.segments[k];
-    for (const k in net.lines) s[k] = net.lines[k];
+    for (const k in net.stations) s[k] = JSON.stringify(net.stations[k]);
+    for (const k in net.segments) s[k] = JSON.stringify(net.segments[k]);
+    for (const k in net.lines) s[k] = JSON.stringify(net.lines[k]);
     return s;
   }
   function keyDiff(pre, net) {
@@ -451,6 +451,7 @@
   };
   Game.prototype.planNew = function (kind, opts) {
     opts = opts || {};
+    this.ensureDraft();
     const p = {
       id: 'p' + (++this.planSeq), kind: kind || 'station', name: opts.name || '',
       stations: {}, moves: {}, segs: {}, removals: {}, sites: {}, types: {}, lines: {}, lineId: null, notes: [], touched: false,
@@ -492,9 +493,10 @@
   Game.prototype.planOverlay = function (pid) {
     const d = this.draft; if (!d) return null;
     const p = this.plansById[pid]; if (!p) return null;
+    if (p.ovVer === d.ver && p.ov) return p.ov;
     const off = this.net, t = d.net;
     const nb = d.builtKeys || Object.create(null);
-    const ov = { stations: {}, lines: {}, segs: {}, removals: {} };
+    const ov = { stations: {}, lines: {}, segs: {}, removals: {}, extra: {} };
     const owner = this;
     const take = function (key, isNew) {
       const own = owner.planOwner(key); const k = (isNew ? 'n:' : 'b:') + key;
@@ -515,7 +517,7 @@
     ov.id = pid;
     ov.net = this.subNet(ov);
     // 本方案的轨道连到、但目前还没建成的车站（可能是别的方案建的）：确认本方案时一并建成
-    for (const k in ov.net.stations) if (t.stations[k] && !off.stations[k]) ov.stations[k] = true;
+    for (const k in ov.net.stations) if (t.stations[k] && !off.stations[k]) { ov.stations[k] = true; ov.extra[k] = 1; }
     // 本方案自己的轨道也要算「本方案改过」的那部分（每条新建轨道已含在 segs 里）
     ov.val = M.evaluate(ov.net, off, this.city, this.clock.y);
     // 本方案只承担自己那部分的费用：把不属于本方案的变动从改动清单里剔除（连带的车站只算新建）
@@ -536,6 +538,7 @@
     ov.add = []; ov.mod = []; ov.del = [];
     // 方案的线路（用于「完成度」显示）
     ov.line = p.lineId && ov.net.lines[p.lineId] ? p.lineId : null;
+    p.ov = ov; p.ovVer = d.ver;
     return ov;
   };
   // 方案的部分网络：正式网络 + 本方案自己的那部分改动（连带引用的车站，否则轨道悬空）。
@@ -546,9 +549,9 @@
     for (const k in off.stations) net.stations[k] = off.stations[k];
     for (const k in off.segments) net.segments[k] = off.segments[k];
     for (const k in off.lines) net.lines[k] = off.lines[k];
-    for (const k in ov.stations) if (t.stations[k] && !off.stations[k]) net.stations[k] = t.stations[k];
-    for (const k in ov.segs) if (t.segments[k] && !off.segments[k]) net.segments[k] = t.segments[k];
-    for (const k in ov.lines) if (t.lines[k] && !off.lines[k]) net.lines[k] = t.lines[k];
+    for (const k in ov.stations) if (t.stations[k] && !(ov.extra && ov.extra[k])) net.stations[k] = t.stations[k];
+    for (const k in ov.segs) if (t.segments[k]) net.segments[k] = t.segments[k];
+    for (const k in ov.lines) if (t.lines[k]) net.lines[k] = t.lines[k];
     // 本方案的轨道连到的车站（可能属于别的方案）：一并带上，费用里会算上它们；
     // 已是正式网络一部分的不再算（它们已建成，不属于任何一个草案里的新轨道）
     for (const k in ov.segs) {
@@ -666,9 +669,11 @@
     }
     keep.nextId = d.net.nextId;
     // 剩下的改动与正式网络里已建成的对象分开编号，免得同一个 id 被当成既有对象的搬迁
-    // 这次建成的对象已经进入正式网络：草案里与它们同键的副本直接去掉，剩下的才是还没建的部分
+    // 这次建成的对象已经进入正式网络：草案里换成正式网络里的那一份（不能删，删掉会被求值当成拆除）
     for (const k in built) {
-      if (this.net.stations[k] || this.net.segments[k] || this.net.lines[k]) { delete keep.stations[k]; delete keep.segments[k]; } else if (this.net.lines[k]) delete keep.lines[k];
+      if (this.net.stations[k]) keep.stations[k] = this.net.stations[k]; else delete keep.stations[k];
+      if (this.net.segments[k]) keep.segments[k] = this.net.segments[k]; else delete keep.segments[k];
+      if (this.net.lines[k]) keep.lines[k] = this.net.lines[k]; else delete keep.lines[k];
     }
     const remap = this.rekeyDraft(keep, this.net);
     const ren = function (key) {
@@ -853,6 +858,17 @@
       mapInit: this.mapInit || null,
       macro: this.macro && CM.Macro ? CM.Macro.serialize(this.macro) : null,
       traffic: this.traffic || { v: CFG.TRAFFIC_MODEL },
+      draft: this.serializeDraft(),
+    };
+  };
+  // 草案：网络、撤销栈与各方案。求值结果、编译结果、预测都是可重算的中间量，不入档。
+  Game.prototype.serializeDraft = function () {
+    const d = this.draft;
+    if (!d) return null;
+    return {
+      net: d.net, undo: d.undo.slice(-40), ver: d.ver,
+      coverage: d.coverage,
+      plans: this.plans, planSeq: this.planSeq, planActive: this.planActive,
     };
   };
   Game.restore = function (s) {
@@ -912,6 +928,22 @@
         '存档已升级到 v' + CFG.GAME_VERSION + ' 交通模型（升级前的原存档已另存为「升级前备份」，可在存档列表中载入或导出）';
     } else g.traffic = Object.assign({ v: CFG.TRAFFIC_MODEL }, s.traffic);
     if (airportOpened) g.logEvent({ tag: '规则', title: '新区域开放：' + airportOpened.name, desc: (D.airport.name || '机场') + '照常运营，用地不开发；范围内可以地下设站与地下穿越（v1.9 起）。' });
+    g.restoreDraft(s.draft);
     return g;
+  };
+  // 草案没有版本号字段：缺草案的旧存档按「没有草案」处理
+  Game.prototype.restoreDraft = function (sd) {
+    this.draft = null; this.plans = []; this.plansById = Object.create(null); this.planSeq = 0; this.planActive = null;
+    if (!sd || !sd.net) return;
+    this.plans = (sd.plans || []).filter(function (p) { return p && p.id; });
+    this.plansById = Object.create(null);
+    for (const p of this.plans) { this.plansById[p.id] = p; p.net = null; p.eval = null; p.evalVer = -1; p.ref = null; }
+    this.planSeq = sd.planSeq || 0;
+    this.planActive = sd.planActive && this.plansById[sd.planActive] ? sd.planActive : (this.plans.length ? this.plans[this.plans.length - 1].id : null);
+    const ver = sd.ver || 1;
+    this.draft = {
+      net: sd.net, undo: sd.undo || [], redo: [], ver: ver, evalVer: -1, eval: null,
+      compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: sd.coverage || [],
+    };
   };
 })(window.CM);

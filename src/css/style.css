@@ -744,10 +744,33 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 
 /* 开始界面右上角的深浅模式按钮；设置中的音量行 */
 .start-root { display: contents; }
-/* 滑出卡片：开始界面里点「设置 / 退出」时，卡片从右侧滑进来，主菜单留在左边不动。
+/* 舞台：主菜单与地图详情共用左侧这一块，切换时交叉淡入 */
+.start-stage { display: grid; align-content: center; margin-left: max(6vw, 28px); width: min(400px, calc(100vw - 56px)); max-height: calc(100vh - 32px); transition: width .3s var(--ease); }
+.start-stage > .start-wrap { grid-area: 1 / 1; margin-left: 0; width: 100%; transition: opacity .2s var(--ease), transform .3s var(--ease); }
+.start-stage > .start-wrap.gone { opacity: 0; transform: translateX(-10px); pointer-events: none; }
+/* 详情与主菜单叠在同一格：舞台高度取两者中较高的，不做过渡 */
+.msel-pane { grid-area: 1 / 1; opacity: 0; transform: translateX(-10px); transition: opacity .24s var(--ease), transform .3s var(--ease); pointer-events: none; }
+.msel-pane.in { opacity: 1; transform: none; pointer-events: auto; }
+/* 详情展开时舞台变宽，容纳地图详情的两栏排版 */
+.start-stage:has(.msel-pane) { width: min(760px, calc(100vw - 56px)); }
+/* 滑出卡片里的地图列表：窄卡里去掉原两栏布局的左栏边框与整卡高度 */
+.msel-sheet { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
+.msel-sheet .msel-head { padding: 0 2px; }
+.msel-sheet .msel-list { margin: 0 -6px; padding: 2px 6px 4px; }
+.msel-sheet .msel-thumb { width: 84px; height: 58px; }
+.msel-sheet .msel-it b { font-size: 14.5px; }
+.msel-sheet .msel-note { display: none; }
+.card.msel-card { display: flex; flex-direction: column; height: min(640px, calc(100vh - 48px)); width: min(430px, calc(100vw - 32px)); padding: 18px 16px 14px; overflow: hidden; }
+/* 详情在左侧舞台上按视口高度铺开，底部操作区固定，中间内容滚动 */
+.start-stage .msel-dwrap { height: min(620px, calc(100vh - 88px)); border-radius: 18px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 20px 50px rgba(36, 66, 104, 0.14); background: var(--surface-solid); }
+.start-stage .msel-scroll { padding: 14px 16px 8px; scrollbar-width: thin; }
+.start-stage .msel-hero { height: 156px; border-radius: 14px; }
+.start-stage .msel-hero-tx h2 { font-size: 25px; }
+.start-stage .msel-actbar { padding: 8px 16px 12px; }
+/* 滑出卡片：开始界面里点「开始 / 设置 / 退出」时，卡片从右侧滑进来，主菜单留在左边不动。
    两列网格：左列是主菜单，右列放卡片；列宽瞬间就位、不做过渡，
    只有卡片自己做位移+淡入（两重动画叠加会看起来像「先闪一下再动」） */
-#screen.start.sheet-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); place-items: center; justify-items: start; }
+#screen.start.sheet-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); place-items: center; justify-items: start; padding-right: max(3vw, 16px); }
 #screen.start.sheet-open > .start-sheet { justify-self: center; }
 .start-sheet { position: relative; justify-self: center; align-self: center; padding: 4px; }
 /* 卡片默认停在起点（右侧偏外、透明），插入时不会先在终点露一帧；

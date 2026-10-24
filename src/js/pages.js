@@ -1202,15 +1202,14 @@
     if (!d) {
       el.appendChild(this.callout('info', 'info', '还没有建设草案。点下面的 + 新建一个方案，或用底部的「建站」「绘线」工具开始规划；确认前不会扣费。'));
     }
-    // 新建方案
-    const picker = h('div', { class: 'pl-new hidden' },
+    // 新建方案：三个入口常显，点一下即建
+    const picker = h('div', { class: 'pl-new' },
       Object.keys(PLAN_KIND).map(function (k) {
         const K = PLAN_KIND[k];
         return h('button', { class: 'pl-newbtn', onclick: function () { self.newPlan(k); } }, h('span', { class: 'badge b-blue' }, ic(K[0])), h('div', { class: 'grow' }, h('b', null, '新建' + K[1] + '方案'), h('div', { class: 'tiny muted' }, K[2])));
       }));
-    const addBtn = h('button', { class: 'pl-add', 'data-tip': '新建方案', onclick: function () { picker.classList.toggle('hidden'); addBtn.classList.toggle('on'); } }, ic('plus'));
     el.appendChild(h('div', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
-      h('b', { class: 'grow' }, '建设方案'), addBtn));
+      h('b', { class: 'grow' }, '建设方案')));
     el.appendChild(picker);
     if (!d) return { title: '建设方案', el: el };
     // 方案列表
@@ -1247,7 +1246,13 @@
     const ov = g.planOverlay(p.id);
     const val = ov ? ov.val : null;
     const nAdd = val ? val.changes.add.length : 0, nMod = val ? val.changes.mod.length : 0, nDel = val ? val.changes.del.length : 0;
-    const c = h('div', { class: 'pl-card' + (g.planActive === p.id ? ' on' : '') });
+    const c = h('div', { class: 'pl-card' + (g.planActive === p.id ? ' on' : ''), 'data-tip': '点卡片把它设为当前方案：之后在地图上的修改都记在这里' });
+    // 点卡片空白处即设为当前方案（名称输入框与按钮不算）
+    c.addEventListener('click', function (e) {
+      if (g.planActive === p.id) return;
+      if (e.target.closest('button, input')) return;
+      self.pickPlan(p.id);
+    });
     // 标题行：类型、名称（可就地改名）、设为当前
     const nameEl = h('b', { class: 'pl-name', 'data-tip': '点击改名' }, p.name || (K[1] + '方案'));
     nameEl.addEventListener('click', function () {

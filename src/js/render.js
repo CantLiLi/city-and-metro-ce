@@ -2001,6 +2001,8 @@
     const v = this.view;
     const sel = ui ? ui.selection : null;
     const hlLine = ui && ui.highlightLine;
+    // 当前方案的改动：属于它的对象正常显示并描一圈强调色，其余草案内容压暗
+    const planOv = g.draft && g.planActive && g.plansById[g.planActive] ? g.planOverlay(g.planActive) : null;
     const lyrDim = this.layer === 'cong' || this.layer === 'flow' ? 1 - 0.65 * (this.layerFade || 0) : 1;   // 拥堵、出行方向图层下淡化地铁
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     if (!this.segPx) this.segPx = new Map(); else this.segPx.clear();
@@ -2063,8 +2065,16 @@
       if (s.type === 'underground') { alpha = U.lerp(0.92, 1, under); width = lw * U.lerp(0.95, 1.05, under); }
       else if (under > 0) alpha = U.lerp(1, 0.35, under);
       if (hlLine && hlLine !== s.line) alpha *= 0.3;
+      const inPlan = planOv ? !!planOv.segs[s.id] : null;
+      if (planOv && !inPlan) alpha *= 0.42;
       alpha *= lyrDim;
       this.drawTrack(ctx, cs, arr, col, alpha, width, under, t, this._tunBatch && !(hlLine && hlLine !== s.line));
+      if (inPlan) {
+        const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
+        ctx.globalAlpha = 0.55 + 0.35 * pulse;
+        ctx.strokeStyle = TH.stInter; ctx.lineWidth = width + 5; this.strokeArr(ctx, arr);
+        ctx.globalAlpha = 1;
+      }
       // 草案标记
       if (draft) {
         const o = g.net.segments[s.id];
@@ -2120,6 +2130,8 @@
       const serviced = C.serviced[i];
       let alpha = 1;
       if (hlLine && !lines.has(hlLine)) alpha = 0.35;
+      const inPlanS = planOv ? !!planOv.stations[s.id] : null;
+      if (planOv && !inPlanS) alpha *= 0.42;
       alpha *= lyrDim;
       ctx.globalAlpha = alpha;
       if (s.type === 'underground' && under > 0.05) {
@@ -2157,6 +2169,13 @@
       if (draft && !g.net.stations[s.id]) {
         ctx.strokeStyle = 'rgba(30,136,229,0.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.lineDashOffset = -this.time * 10;
         ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0;
+      }
+      if (inPlanS) {
+        const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
+        ctx.globalAlpha = 0.6 + 0.4 * pulse;
+        ctx.strokeStyle = TH.stInter; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r + 3.5 + pulse * 1.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = alpha;
       }
       if (sel && sel.kind === 'station' && sel.id === s.id) {
         const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
