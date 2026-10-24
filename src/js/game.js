@@ -628,17 +628,36 @@
       delete keep.stations[k];
       if (this.net.stations[k]) adopt['b:' + k] = 1;
     }
-    const mov = function (pend) {
+    // 别的方案建成的对象：本方案若还要用（轨道端点或已记在 kept 里）就转成已建成的键，
+    // 用不到的直接丢掉 —— 否则本方案会误以为自己要新建别人已经建好的车站
+    const mov = function (pend, q) {
       const out = {};
-      for (const k in pend) { out[rekey[k] || k] = 1; if (k.slice(0, 2) === 'n:' && adopt[k]) out['b:' + k.slice(2)] = 1; }
+      for (const k in pend) {
+        const re = rekey[k] || k;
+        out[re] = 1;
+        if (k.slice(0, 2) === 'b:') { delete out[re]; continue; }
+        const raw = k.slice(2);
+        if (adopt[k] && q && q.ref && (q.ref['b:' + raw] || q.ref.stations[raw])) { out['b:' + raw] = 1; delete out[re]; }
+        if (adopt[k]) { /* 被别的方案建成：只有本方案确实引用才保留 */ }
+      }
       return out;
     };
     for (const q of this.plans) {
       if (q.id === pid) continue;
-      q.pend = mov(q.pend);
-      q.kept = mov(q.kept || {});
-      // 已建成的对象都归入正式网络：草案不再区分归属，参数用正式网络里的那份
-      for (const a in adopt) q.kept[a] = 1;
+      // 先按重建后的草案算出本方案真正用到的车站与轨道
+      const pn = this.subNet(q);
+      const ref = { stations: {}, segs: {} };
+      for (const f of ['pend', 'kept']) for (const k in q[f] || {}) { const raw = k.slice(2); if (k.slice(0, 2) === 'n:') { ref.stations[raw] = 1; } }
+      for (const sk in pn.segments) { const sg = pn.segments[sk]; ref.stations[sg.a] = 1; ref.stations[sg.b] = 1; }
+      q.ref = ref;
+      q.pend = mov(q.pend, q);
+      q.kept = mov(q.kept || {}, q);
+      const pn2 = this.subNet(q);
+      for (const a in adopt) {
+        const raw = a.slice(2);
+        if (ref.stations[raw]) q.kept[a] = 1;
+      }
+      for (const sk in pn2.segments) { const sg = pn2.segments[sk]; if (this.net.segments[sk]) q.kept['b:' + sk] = 1; }
       if (q.lineId && d.net.lines[q.lineId] && !this.net.lines[q.lineId]) {
         const want = d.net.lines[q.lineId].name;
         for (const id in this.net.lines) if (this.net.lines[id].name === want) { q.lineId = id; break; }
@@ -698,14 +717,21 @@
   // 剩下的草案网络整体归给「剩下的方案」：它们之间的改动不再区分先后，各按自己的重叠部分算
   Game.prototype.coverageBase = function (net) { return { plan: null, own: false, keys: null, grp: this.plans.length ? this.plans[this.plans.length - 1].id : null }; };
   // 草案里「还没建成、但 id 与正式网络里的对象撞了」的键换新 id（含对象自己的 id 字段），免得被当成同一个对象。
+  // 撞名的车站也要改名：求值按名称认站，同名会被当成「拆了旧站又建新站」重复计费。
   // 已建成的对象保留在草案里：其它方案可能还引用着它们（作为轨道端点），子网络会从正式网络取它们的参数。
   Game.prototype.rekeyDraft = function (net, off) {
     off = off || this.net;
     const stMap = {}, sgMap = {};
+    const names = Object.create(null);
+    for (const k in off.stations) names[off.stations[k].name] = 1;
     for (const k of Object.keys(net.stations)) {
       if (off.stations[k]) continue;
+      const s = net.stations[k];
       const nk = M.newId(net, 's'); stMap[k] = nk;
-      const s = net.stations[k]; s.id = nk; net.stations[nk] = s; delete net.stations[k];
+      s.id = nk;
+      if (names[s.name]) { let n = 2; while (names[s.name + '（' + n + '）']) n++; s.name = s.name + '（' + n + '）'; }
+      names[s.name] = 1;
+      net.stations[nk] = s; delete net.stations[k];
     }
     for (const k of Object.keys(net.segments)) {
       if (off.segments[k]) continue;

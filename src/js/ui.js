@@ -1535,9 +1535,12 @@
     // 不这么做的话浏览器可能把两次样式合并，卡片会直接在终点出现。
     void host.offsetWidth;
     host.classList.add('sheet-in');
+    // 过渡跑完就切到 settled（与 sheet-in 的终点样式相同但不带动画），
+    // 这样卡片不会因为撤掉 sheet-in 而退回透明起点
     this._sheetTimer = setTimeout(function () {
       self._sheetTimer = null;
       host.classList.remove('sheet-in');
+      host.classList.add('sheet-settled');
     }, SHEET_FALLBACK_MS);
   };
   UI.prototype.closeSheet = function () {
@@ -1547,6 +1550,7 @@
     this._sheetBack = null;
     if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
     host.classList.remove('sheet-in');
+    host.classList.remove('sheet-settled');
     this.screenEsc = null;
     this.screenRefresh = null;
     let done = false;

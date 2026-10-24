@@ -755,6 +755,7 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 .start-sheet > .card { --sheet-from: 160px; width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); animation: none; transform: translateX(var(--sheet-from)); opacity: 0; }
 .start-sheet > .card.solo { width: min(420px, calc(100vw - 32px)); }
 .start-sheet.sheet-in > .card { transition: transform .46s var(--ease), opacity .32s var(--ease); transform: translateX(0); opacity: 1; }
+.start-sheet.sheet-settled > .card { transform: translateX(0); opacity: 1; }
 .start-sheet.sheet-leave > .card { transition: transform .26s var(--ease), opacity .22s var(--ease); transform: translateX(var(--sheet-from)); opacity: 0; }
 /* 主菜单让到左边：卡片出场时主菜单轻微右移、略压暗，形成叠放关系而不是遮挡 */
 .start-root.sheet-beside .start-wrap { transition: transform .34s var(--ease), opacity .3s var(--ease); transform: translateX(6px); opacity: .72; }
@@ -771,6 +772,7 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
   /* 窄屏放不下两列：卡片从下往上滑，主菜单退到后面 */
   .start-sheet > .card { --sheet-from: 0px; transform: translateY(40px); max-height: calc(100vh - 24px); }
   .start-sheet.sheet-in > .card { transform: translateY(0); }
+  .start-sheet.sheet-settled > .card { --sheet-from: 0px; transform: translateY(0); }
   .start-sheet.sheet-leave > .card { transform: translateY(40px); }
   .start-root.sheet-beside .start-wrap { transform: none; opacity: .28; filter: blur(2px); }
   .sheet-ask { left: 50%; top: auto; bottom: 0; transform: translate(-50%, 0); }

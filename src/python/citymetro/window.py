@@ -11,8 +11,9 @@ import sys
 
 log = logging.getLogger('citymetro')
 
-# 窗口四周留出的桌面留白比例（左右各一份）
-SCREEN_MARGIN = 0.03
+# 窗口占屏幕可用区域的比例：左右各留 (1-75%)/2，上下多留是因为 Dock 和标题栏都在高度上
+SIDE_FILL = 0.75
+VERTICAL_FILL = 0.85
 # 最小尺寸最多占到可用区域的比例，macOS 的菜单栏 / Dock 再厚也不会顶出去
 SCREEN_FILL = 0.92
 DESIGN_SIZE = (1440, 900)
@@ -85,14 +86,15 @@ def window_size():
             taken_w, taken_h = _windows_frame()
         except Exception:
             log.debug('读取窗口边框尺寸失败', exc_info=True)
-    usable_w = width * (1 - SCREEN_MARGIN * 2) - taken_w
-    usable_h = height * (1 - SCREEN_MARGIN * 2) - taken_h
+    # 窗口占可用区域 75% × 85%，上下多留的原因是 macOS 的 Dock 和标题栏都在高度上
+    usable_w = width * SIDE_FILL - taken_w
+    usable_h = height * VERTICAL_FILL - taken_h
     # 可用区域小得连设计尺寸的四成都放不下，老老实实按设计尺寸来
-    if usable_w < DESIGN_SIZE[0] * 0.4 or usable_h < DESIGN_SIZE[1] * 0.4:
+    if usable_w < DESIGN_SIZE[0] * 0.4 or usable_h < DESIGN_SIZE[1] * 0.3:
         return DESIGN_SIZE, MIN_WINDOW_SIZE
 
-    # 保持设计比例把可用区域铺满：屏幕比 16:10 宽就按宽度对齐，比它窄就按高度对齐
-    scale = min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1])
+    # 保持设计比例落进可用区域：屏幕比 16:10 宽就按宽度对齐，比它窄就按高度对齐
+    scale = max(0.5, min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1]))
     size = (round(DESIGN_SIZE[0] * scale), round(DESIGN_SIZE[1] * scale))
     # 最小尺寸不能超过屏幕可拖动区域，否则窗口一旦缩小就再也拉不回来
     min_size = (

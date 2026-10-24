@@ -610,7 +610,8 @@
         res.siteReset.push(id);
         const df = M.devFactor(city, c);
         const fr = CFG.cost.demolishFactor.station[s.type] * 0.35;
-        if (df > 0 && fr > 0) {
+        // 全新车站选址的地方本来就要清理，不算“拆迁既有车站”
+        if (o && df > 0 && fr > 0) {
           item('demolition', '车站拆迁 ' + s.name, C.demolishPerCell * df * fr * ci, id);
           res.demolitions.push({ c: c, frac: fr * 0.7 });
         }
