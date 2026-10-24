@@ -85,7 +85,7 @@
     planBtn.appendChild(this.planCnt);
     this.top = h('header', { id: 'hudTop', class: 'hud hidden' },
       h('div', { class: 'cluster glass citybar' },
-        h('div', { class: 'brand' }, h('resources', { src: 'resources/logo-white.png', alt: '城市与地铁' })),
+        h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁' })),
         datePill,
         h('div', { class: 'speed' }, spd('pause', '', 0, '暂停 / 继续', '空格'), spd('s1', '1×', 1, '正常速度', '1'), spd('s2', '3×', 2, '3 倍速', '2'), spd('s3', '8×', 3, '8 倍速', '3')),
         h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'))),
@@ -838,7 +838,7 @@
       for (const id in dn.segments) if (!on.segments[id] && inPlan(id)) newSeg.push(dn.segments[id]);
     }
     const r = g.confirmDraft(pid);
-    if (r.error) { this.toast(r.error, 'bad'); snd('error'); return; }
+    if (r.error) { this.toast(r.error, 'bad'); snd('error'); this.rerenderPage(); this.renderDraftbar(); return; }
     if (r.ok) {
       snd('build');
       const R = this.R, net = g.net;
@@ -1275,7 +1275,7 @@
     const narrowItem = function (icon, label, fn) { const b = item(icon, label, fn); b.classList.add('dd-narrow'); return b; };
     const g = this.g();
     const dd = h('div', { class: 'dropdown' },
-      h('div', { class: 'dd-head' }, h('resources', { src: 'resources/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
+      h('div', { class: 'dd-head' }, h('img', { src: 'resources/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
       item('save', '保存进度', function () { self.manualSave(); }),
       item('folder', '读取存档', function () { self.showSaveManager(true); }),
       h('hr'),
@@ -1610,7 +1610,7 @@
     setTimeout(function () { input.focus(); input.select(); }, 30);
   };
   UI.prototype.showLoading = function (text) {
-    this.openScreen(h('div', { class: 'card', style: { width: 'min(380px, calc(100vw - 32px))' } }, h('div', { class: 'loading' }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '' }), h('div', { class: 'muted' }, text))));
+    this.openScreen(h('div', { class: 'card', style: { width: 'min(380px, calc(100vw - 32px))' } }, h('div', { class: 'loading' }, h('img', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '' }), h('div', { class: 'muted' }, text))));
   };
   // 开始界面、选择地图、开局简报与更新公告见 screens.js
   // 退出：桌面版交给外壳关窗口（外壳会先等进度写盘）；网页无法强制关闭自己打开的标签页，给出提示
@@ -1639,7 +1639,7 @@
   UI.prototype.showQuitFallback = function () {
     const self = this;
     const back = function () { self.closeSheet(); };
-    const card = h('div', { class: 'card solo', style: { textAlign: 'center' } }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: back }, '返回主菜单')));
+    const card = h('div', { class: 'card solo', style: { textAlign: 'center' } }, h('img', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: back }, '返回主菜单')));
     this.openSheet(card, { esc: back });
   };
   // ======================== 设置 ========================

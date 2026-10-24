@@ -1200,7 +1200,7 @@
     const g = this.g(), self = this, el = h('div', { class: 'pl-page' });
     const d = g.draft;
     if (!d) {
-      el.appendChild(this.callout('info', 'info', '还没有建设草案。点下面的 + 新建一个方案，或用底部的「建站」「绘线」工具开始规划；确认前不会扣费。'));
+      el.appendChild(this.callout('info', 'info', '还没有建设草案。点上面任意一个方案入口开始规划，或用「建站」「绘线」工具直接画；确认前不会扣费。'));
     }
     // 新建方案：三个入口常显，点一下即建
     const picker = h('div', { class: 'pl-new' },
@@ -1214,7 +1214,7 @@
     if (!d) return { title: '建设方案', el: el };
     // 方案列表
     const list = h('div', { class: 'pl-list' });
-    if (!g.plans.length) list.appendChild(h('div', { class: 'note' }, '草案里还没有方案。点 + 新建，之后的修改会记在这个方案里。'));
+    if (!g.plans.length) list.appendChild(h('div', { class: 'note' }, '草案里还没有方案。点上面的入口新建一个，之后的修改会记在它名下。'));
     for (const p of g.plans) list.appendChild(this.planCard(p));
     el.appendChild(list);
     // 还没有归属方案的改动（只统计真正没人认领的）
@@ -1255,7 +1255,8 @@
     });
     // 标题行：类型、名称（可就地改名）、设为当前
     const nameEl = h('b', { class: 'pl-name', 'data-tip': '点击改名' }, p.name || (K[1] + '方案'));
-    nameEl.addEventListener('click', function () {
+    nameEl.addEventListener('click', function (e) {
+      e.stopPropagation();
       const inp = h('input', { class: 'pl-input', value: p.name || K[1] + '方案', maxlength: 40 });
       nameEl.replaceWith(inp); inp.focus(); inp.select();
       const done = function (ok) { const v = ok ? inp.value : (p.name || K[1] + '方案'); g.planRename(p.id, v); self.renderPage(false); };
@@ -1268,8 +1269,10 @@
       h('span', { class: 'pl-cost' }, ic('coin'), U.fmtMoney(val ? val.total : 0))));
     // 变更摘要
     c.appendChild(h('div', { class: 'pl-sum tiny' + (nAdd + nMod + nDel ? '' : ' muted') }, nAdd + ' 新建 · ' + nMod + ' 修改 · ' + nDel + ' 拆除'));
-    if (val && val.conflicts.filter(function (x) { return ov.conflicts.indexOf(x) >= 0; }).length) {
-      c.appendChild(h('div', { class: 'pl-cf tiny bad' }, ic('warn'), ' 有 ' + ov.conflicts.length + ' 处冲突需先解决'));
+    if (ov && ov.conflicts.length) {
+      c.appendChild(h('button', { class: 'pl-cf tiny bad', 'data-tip': '点击定位到本方案的冲突，再点跳到下一处', onclick: function (e) { e.stopPropagation(); self.focusPlanConflict(p.id); } },
+        ic('warn'), ' 有 ' + ov.conflicts.length + ' 处冲突需先解决'));
+      c.appendChild(h('div', { class: 'pl-cfh tiny muted' }, ov.conflicts[0].msg + (ov.conflicts.length > 1 ? '（等 ' + ov.conflicts.length + ' 处）' : '')));
     }
     if (p.notes && p.notes.length) for (const s of p.notes) c.appendChild(h('div', { class: 'tiny muted' }, '· ' + s));
     // 操作
@@ -1282,10 +1285,23 @@
       conf));
     return c;
   };
+  // 定位本方案的冲突：地图上高亮并居中，条数与原因跟卡片上显示的一致（再点跳到下一处）
+  UI.prototype.focusPlanConflict = function (pid) {
+    const g = this.g(); if (!g) return;
+    const ov = g.planOverlay(pid); if (!ov || !ov.conflicts.length) return;
+    const n = ov.conflicts.length;
+    const i = this._cfPid === pid ? ((this._cfIdx || 0) + 1) % n : 0;
+    this._cfPid = pid; this._cfIdx = i;
+    const c = ov.conflicts[i];
+    this.hoverConflict = c.n;
+    this.flyTo(c.x, c.y, Math.max(this.R.cam.zoom, 22));
+    this.toast('本方案第 ' + (i + 1) + '/' + n + ' 处（地图图钉 ' + c.n + '）：' + c.msg, 'bad');
+  };
   // 设为当前方案：之后的修改记到它名下
   UI.prototype.pickPlan = function (pid) {
     const g = this.g(); if (!g) return;
     g.planActive = pid;
+    this.hoverConflict = null; this._cfPid = null; this._cfIdx = 0;
     this.toast('当前方案：' + (g.plansById[pid] ? (g.plansById[pid].name || '未命名方案') : ''), 'info');
     this.renderPage(false);
   };

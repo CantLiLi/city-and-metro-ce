@@ -17,25 +17,25 @@
 
 1950 年开局接管浅草—涩谷银座线的 18 座车站，在 2D 视图中观察街区、河道与既有地铁，再决定如何扩建。
 
-![东京：白天的 2D 地图与开局银座线](./img/screenshot-tokyo-day.png)
+![东京：白天的 2D 地图与开局银座线](../src/resources/img/screenshot-tokyo-day.png)
 
 ### 广州：珠江两岸的立体夜景
 
 2.5D 夜景中的建筑、江面与地铁线网。下图来自游戏内约 2012 年的广州演示背景，收起界面后拍摄。
 
-![广州：2.5D 夜景、珠江与内置演示地铁线网](./img/screenshot-guangzhou-night.png)
+![广州：2.5D 夜景、珠江与内置演示地铁线网](../src/resources/img/screenshot-guangzhou-night.png)
 
 ### 选择你的城市与年代
 
 六张地图按难度排列，各有地理、发展方向与经营条件；可以搜索城市，按年代和地区筛选。
 
-![地图选择：六图列表与杭州 2000 年详情](./img/screenshot-map-selection.png)
+![地图选择：六图列表与杭州 2000 年详情](../src/resources/img/screenshot-map-selection.png)
 
 ### 从地铁经营，看到城市经济
 
 经济统计展示 GDP、增长、地方财政与交通效率。下图来自独立创建的广州五站线路演示进度，正常跳年推进至 2002 年，含 1990—2001 年记录；数值为游戏模拟结果。
 
-![经济统计：广州 2002 年的 GDP、增长与财政趋势](./img/screenshot-economy-statistics.png)
+![经济统计：广州 2002 年的 GDP、增长与财政趋势](../src/resources/img/screenshot-economy-statistics.png)
 
 ## 运行与存档
 

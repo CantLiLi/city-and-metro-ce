@@ -111,7 +111,7 @@
     for (const id of all) {
       const mp = CM.MAPS[id], n = CM.Save.list(id).length;
       const it = h('button', { class: 'msel-item', role: 'option', 'data-id': id, onclick: function () { pick(id); }, ondblclick: function () { pick(id); const p = detail.querySelector('.map-mode.primary'); if (p) p.click(); } },
-        h('span', { class: 'msel-thumb' }, h('resources', { alt: '', src: CM.mapThumb(id, theme) || '' }), mp.tutorial ? h('span', { class: 'msel-flag' }, '教程') : null),
+        h('span', { class: 'msel-thumb' }, h('img', { alt: '', src: CM.mapThumb(id, theme) || '' }), mp.tutorial ? h('span', { class: 'msel-flag' }, '教程') : null),
         h('span', { class: 'msel-it' },
           h('b', null, mp.title || mp.name),
           h('small', null, mp.tagline || mp.sub),
@@ -143,7 +143,7 @@
           h('span', { class: 'badge ' + badge }, ic(icon)), h('span', { class: 'grow' }, h('b', null, title), h('small', null, desc)), ic('chev', 16));
       };
       const hero = h('div', { class: 'msel-hero' },
-        h('resources', { alt: '', src: CM.mapThumb(sel, theme) || '' }),
+        h('img', { alt: '', src: CM.mapThumb(sel, theme) || '' }),
         h('div', { class: 'msel-hero-tx' },
           h('div', { class: 'msel-kicker' }, h('span', null, mp.region || ''), h('i'), h('span', null, y0 + ' 年起'), h('i'), h('span', null, mp.kind === 'fictional' || mp.tutorial ? '虚构城市' : '真实地理')),
           h('h2', null, mp.title || mp.name),
@@ -289,7 +289,7 @@
     const city = g.city, tot = city.totals();
     let open = 0, regs = 0; for (let k = 0; k < city.regions.length; k++) { if (city.regions[k].scenic) continue; regs++; if (city.regionOpen[k]) open++; }
     const y0 = CFG.START.y;
-    const hero = h('div', { class: 'brief-hero' }, h('resources', { alt: '', src: CM.mapThumb(mp.id, theme) || '' }),
+    const hero = h('div', { class: 'brief-hero' }, h('img', { alt: '', src: CM.mapThumb(mp.id, theme) || '' }),
       h('div', { class: 'brief-hero-tx' }, h('div', { class: 'msel-kicker' }, h('span', null, '开局简报'), h('i'), h('span', null, y0 + ' 年 1 月')), h('h2', null, (D.city || mp.name) + ' · ' + y0), h('div', { class: 'msel-tagline' }, mp.tagline || '')));
     const parts = [hero];
     // 东京等：开局接管既有地铁

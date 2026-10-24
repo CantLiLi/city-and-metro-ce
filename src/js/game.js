@@ -493,7 +493,8 @@
   Game.prototype.planOverlay = function (pid) {
     const d = this.draft; if (!d) return null;
     const p = this.plansById[pid]; if (!p) return null;
-    if (p.ovVer === d.ver && p.ov) return p.ov;
+    const ovKey = d.ver + ':' + this.netVersion;
+    if (p.ovKey === ovKey && p.ov) return p.ov;
     const off = this.net, t = d.net;
     const nb = d.builtKeys || Object.create(null);
     const ov = { stations: {}, lines: {}, segs: {}, removals: {}, extra: {} };
@@ -538,7 +539,7 @@
     ov.add = []; ov.mod = []; ov.del = [];
     // 方案的线路（用于「完成度」显示）
     ov.line = p.lineId && ov.net.lines[p.lineId] ? p.lineId : null;
-    p.ov = ov; p.ovVer = d.ver;
+    p.ov = ov; p.ovKey = ovKey;
     return ov;
   };
   // 方案的部分网络：正式网络 + 本方案自己的那部分改动（连带引用的车站，否则轨道悬空）。
@@ -609,7 +610,7 @@
     if (!ov) return { error: '方案不存在' };
     const val = ov.val;
     if (!(val.changes.add.length || val.changes.mod.length || val.changes.del.length)) return { error: '该方案还没有任何改动' };
-    if (val.conflicts.length) return { error: '该方案存在 ' + val.conflicts.length + ' 处冲突，需先解决' };
+    if (ov.conflicts.length) return { error: '该方案存在 ' + ov.conflicts.length + ' 处冲突，需先解决' };
     if (d.liveSnap) return { error: '请先松开鼠标或结束当前拖动，再确认建设' };
     if (!this.econ.canAffordBuild(val.total)) return { error: '资金不足：需要 ' + U.fmtMoney(val.total) + '，当前一般资金 ' + U.fmtMoney(this.econ.funds) + (this.econ.capex > 0.5 ? ' + 建设专项资金 ' + U.fmtMoney(this.econ.capex) : '') };
     if (this.jumping || this.pending) return { error: '正在结算，请稍候' };
@@ -647,20 +648,16 @@
     };
     for (const q of this.plans) {
       if (q.id === pid) continue;
-      // 先按重建后的草案算出本方案真正用到的车站与轨道
-      const pn = this.subNet(q);
+      // 本方案记过名的车站（才是它真的要用的；已建成的对象不经过 kept，免得把整张正式网络算成本方案内容）
       const ref = { stations: {}, segs: {} };
       for (const f of ['pend', 'kept']) for (const k in q[f] || {}) { const raw = k.slice(2); if (k.slice(0, 2) === 'n:') { ref.stations[raw] = 1; } }
-      for (const sk in pn.segments) { const sg = pn.segments[sk]; ref.stations[sg.a] = 1; ref.stations[sg.b] = 1; }
       q.ref = ref;
       q.pend = mov(q.pend, q);
       q.kept = mov(q.kept || {}, q);
-      const pn2 = this.subNet(q);
       for (const a in adopt) {
         const raw = a.slice(2);
         if (ref.stations[raw]) q.kept[a] = 1;
       }
-      for (const sk in pn2.segments) { const sg = pn2.segments[sk]; if (this.net.segments[sk]) q.kept['b:' + sk] = 1; }
       if (q.lineId && d.net.lines[q.lineId] && !this.net.lines[q.lineId]) {
         const want = d.net.lines[q.lineId].name;
         for (const id in this.net.lines) if (this.net.lines[id].name === want) { q.lineId = id; break; }
@@ -712,6 +709,17 @@
     this.planActive = this.plans.length ? this.plans[this.plans.length - 1].id : null;
     // 这次确认的只是方案，草案本身要留住（撤销点重来）
     this.draft = { net: keep, undo: [], redo: [], ver: d.ver + 1, evalVer: -1, eval: null, compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: cov };
+    // 其它方案的内容若已被这次建设全部建完，方案自然消解（不留一张空卡片）
+    for (const q of this.plans.slice()) {
+      const qo = this.planOverlay(q.id);
+      if (qo && (Object.keys(qo.stations).length || Object.keys(qo.segs).length || Object.keys(qo.lines).length || Object.keys(qo.removals).length)) continue;
+      this.plans = this.plans.filter(function (x) { return x.id !== q.id; });
+      delete this.plansById[q.id];
+    }
+    this.planActive = this.plans.length ? this.plans[this.plans.length - 1].id : null;
+    // 归属表里可能还记着刚消解掉的方案：改挂到剩下的方案上，否则剩下的改动会变成「不属于任何方案」
+    const alive = Object.create(null); for (const x of this.plans) alive[x.id] = 1;
+    for (const c of this.draft.coverage) if (c.plan && !alive[c.plan]) c.plan = this.planActive;
     // 最后一个方案建完、草案里不再有东西：直接结束草案
     if (!this.plans.length && !Object.keys(keep.stations).length && !Object.keys(keep.segments).length) { this.draft = null; this.emit('draft'); return r; }
     if (!this.plans.length && !this.draftEval().changed) { this.draft = null; this.emit('draft'); return r; }
@@ -937,7 +945,7 @@
     if (!sd || !sd.net) return;
     this.plans = (sd.plans || []).filter(function (p) { return p && p.id; });
     this.plansById = Object.create(null);
-    for (const p of this.plans) { this.plansById[p.id] = p; p.net = null; p.eval = null; p.evalVer = -1; p.ref = null; }
+    for (const p of this.plans) { this.plansById[p.id] = p; p.net = null; p.eval = null; p.evalVer = -1; p.ref = null; p.ov = null; p.ovKey = null; }
     this.planSeq = sd.planSeq || 0;
     this.planActive = sd.planActive && this.plansById[sd.planActive] ? sd.planActive : (this.plans.length ? this.plans[this.plans.length - 1].id : null);
     const ver = sd.ver || 1;
