@@ -976,11 +976,12 @@
       acc: acc, accOk: !!accOk, choices: choices, gtS: store ? store.gt : null, tmS: store ? store.tm : null, kmS: store ? store.km : null, DS: store ? store.D : null,
       perMin: IND.perMin, capSh: IND.cap.sh, capLz: IND.cap.lz,
       carDem: carDem, hasCar: hasCar, S: S, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
-      zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP };
+      zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP, task: dt + p };
     // 起点需求计算可以分片并行：跳月等批量推进时交给 Worker 池（见 sim-par.js），
     // 驱动方（jump 的推进循环）会 await 这个 parWait 再继续；实时循环与预测不传 par，仍是原来的分步循环。
     let cnt = 0;
-    const par = opts.par && CM.SimPar && CM.SimPar.ready() ? CM.SimPar.run(K, Z, this.od) : null;
+    // 上一轮的 stable 说明本轮读到的 skT/skK 与上一轮喂给 Worker 的完全相同，可跳过重发
+    const par = opts.par && CM.SimPar && CM.SimPar.ready() ? CM.SimPar.run(K, Z, this.od, P.stable) : null;
     if (par) {
       yield { parWait: par };
     } else {

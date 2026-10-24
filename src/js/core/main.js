@@ -6,6 +6,7 @@
   const R = new CM.Renderer(canvas);
   // 显卡模式只在启动时决定一次：关闭时改画到要求频繁读取的画布（浏览器按软件光栅化处理）
   if (CM.Settings.get('gpu') === false) R.setGpu(false);
+  if (CM.Settings.get('lodLive') === true) R.setLodLive(true);
   const ui = new CM.UI(R);
   const tools = new CM.Tools(R, ui);
   ui.tools = tools;
@@ -194,6 +195,10 @@
     CM.game = null;
     if (CM.Follow) CM.Follow.stop(true);
     if (CM.Tutorial) CM.Tutorial.detach();
+    // 退出地图时立刻释放：开始界面背景一直在动，空闲降载的判断不会触发，
+    // 但挂着的渲染缓存与模拟 Worker 已经用不上了，不该等到重新开局
+    R.freeCaches();
+    if (CM.SimPar && CM.SimPar.stop) CM.SimPar.stop();
     CM.useMap('gz');   // 开始界面背景是广州
     ui.closeSearch();
     if (CM.NetMap) CM.NetMap.close();

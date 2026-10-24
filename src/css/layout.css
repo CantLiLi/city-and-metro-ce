@@ -131,22 +131,21 @@
   .card.msel-card { height: calc(100vh - 40px); width: calc(100vw - 32px); }
 }
 /* 游戏内悬浮面板：沿用上面滑出卡片的位移+淡入，只是背景换成半透明虚化，
-   不铺满、不压暗游戏画面；主菜单淡出、卡片从右侧滑入，进出各播一次 */
+   不铺满、不压暗游戏画面；只有遮罩与卡片，没有主菜单背景。
+   游戏里还铺着开始界面时 screen 没有 .start（那是开始界面的渐变底），
+   这时仍按开始界面的两列站位，让卡片停在原来的位置 */
 #screen.overlay { place-items: center; background: rgba(28, 46, 74, .14); backdrop-filter: blur(3px) saturate(.96); -webkit-backdrop-filter: blur(3px) saturate(.96); transition: opacity .3s var(--ease); }
 :root[data-theme="dark"] #screen.overlay { background: rgba(4, 8, 16, .34); }
-#screen.overlay > .start-root .start-wrap { opacity: 0; transform: translateX(-14px); transition: opacity .26s var(--ease), transform .34s var(--ease); }
-#screen.overlay.sheet-open > .start-root .start-wrap, #screen.overlay.sheet-leaving > .start-root .start-wrap { opacity: 1; transform: none; }
+#screen.overlay:not(.start) { place-items: center start; }
 #screen.overlay .start-sheet { position: relative; justify-self: center; }
 @media (max-width: 900px) {
-  #screen.overlay { grid-template-columns: minmax(0, 1fr); }
-  #screen.overlay > .start-root .start-wrap { transform: none; opacity: 0; }
+  #screen.overlay, #screen.overlay:not(.start) { grid-template-columns: minmax(0, 1fr); place-items: center; }
   #screen.overlay.sheet-leaving .start-sheet.sheet-leave > .card { transform: translateY(40px); }
   #screen.overlay .start-sheet { position: absolute; inset: 0; display: grid; place-items: center; padding: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .start-sheet > .card, .start-sheet.sheet-in > .card, .start-sheet.sheet-leave > .card, .sheet-ask, .sheet-ask.out { transition-duration: .01ms; animation-duration: .01ms; }
   .start-root.sheet-beside .start-wrap { transition: none; }
-  #screen.overlay > .start-root .start-wrap { transition-duration: .01ms; }
 }
 .start-theme { position: fixed; top: 18px; right: 18px; width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform .2s var(--spring), background .2s; }
 .start-theme:hover { transform: translateY(-1px) rotate(-12deg); }

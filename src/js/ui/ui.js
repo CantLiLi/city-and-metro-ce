@@ -1697,23 +1697,24 @@
     if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
     this.screen.onpointerdown = null;
     const root = this.screen.firstElementChild;
-    const fromStart = !!(root && root.classList.contains('start-root'));
+    const cls = this.screen.classList;
+    // 已经铺着开始界面（开始界面、或游戏内残留的开始界面）就沿用它的两列布局，
+    // 判据用 screen 自己的类：卡片开着时它的父节点已经不是 screen 的第一个子元素了
+    const startBg = !!(root && root.classList.contains('start-root')) || this.screen.classList.contains('start');
+    const fromStart = startBg && !this.g();
     // 已经有卡片开着（比如退出确认还没关就点了设置）：先撤掉，只留最新的一张
     const old = this.screen.querySelector('.start-sheet');
     if (old) old.remove();
     // 卡片本身就是 .card，由 .start-sheet 提供滑出动画与宽度（见 css/layout.css）
     const host = h('div', { class: 'start-sheet' }, card);
+    // 不清空 screen：它可能正铺着开始界面，清掉的话关闭时要靠默认回调重建主菜单，
+    // 而读档进游戏时主菜单绝不能再冒出来。游戏内就摘掉主菜单，只留遮罩与卡片
     if (!fromStart) {
-      // 不是从开始界面进来的（退出兜底页、游戏内悬浮面板等）：补一个开始界面当背景
-      this.screen.innerHTML = '';
-      this.screen.className = 'start';
-      this.screen.appendChild(h('div', { class: 'start-root' }, h('div', { class: 'start-wrap' })));
-      this.renderThemeBtns();
-    } else if (mode) {
-      this.screen.classList.toggle('overlay', mode === 'overlay');
-    } else {
-      this.screen.classList.remove('overlay');
+      const m = this.screen.querySelector('.start-root');
+      if (m) m.remove();
+      cls.remove('start');
     }
+    cls.toggle('overlay', mode === 'overlay' && !fromStart);
     // 撤 hidden、上浮层状态必须同一帧，否则会先闪一帧「停在终点」再回到原位重播
     this.screen.classList.remove('hidden');
     this.screen.classList.add('sheet-open');
@@ -1741,8 +1742,12 @@
   UI.prototype.closeSheet = function () {
     const host = this.screen.querySelector('.start-sheet');
     if (!host) { this.closeScreen(); return; }
-    const self = this, back = this._sheetBack;
-    const overlay = this.screen.classList.contains('overlay');
+    const self = this;
+    // 开始界面兜底：卡片收完要把主菜单放回来就留着它；没有的话整层收掉回游戏，
+    // 兜底回调也一并作废，主菜单连一帧都不该出现
+    let back = this._sheetBack;
+    const startBg = !!this.screen.querySelector('.start-root') || this.screen.classList.contains('start');
+    if (!startBg) back = null;
     this._sheetBack = null;
     if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
     host.classList.remove('sheet-in');
@@ -1754,11 +1759,10 @@
       if (done) return; done = true;
       clearTimeout(timer);
       if (self._sheetSettle === timer) self._sheetSettle = null;
-      // 悬浮面板的背景只是装饰，卡片收完后整层撤掉，回到游戏画面
-      if (overlay) {
+      // 没有开始界面兜底时，整层收掉回到游戏画面
+      if (!startBg) {
         host.remove();
-        self.screen.classList.remove('sheet-open', 'sheet-leaving', 'overlay');
-        if (back) back();
+        self.screen.className = 'hidden';
         return;
       }
       // FLIP：撤掉两列布局后主菜单会横向换了位置，记录旧位置，重建后再补一段位移
@@ -1940,9 +1944,10 @@
       perf: [
         row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '用显卡渲染画面；关闭后用处理器（CPU）渲染，显卡驱动异常、花屏时可以关掉，但可能引起动画不流畅、帧率变低。切换后需重启游戏生效'),
         row('clock', '最大帧率', seg('fpsLimit', [[0, '垂直同步'], [30, '30'], [60, '60'], [90, '90']]), '垂直同步跟随显示器的刷新率；选 30、60、90 可限制画面每秒最多绘制多少帧，调低更省电，调高更流畅'),
-        row('building', '模型质量', seg('modelDetail', [['high', '高质量模型'], ['low', '低质量模型']]), '高质量模型：建筑、地标、山体树木、列车、汽车与行人都按精细模型绘制；低质量模型：远景只留高楼、树木与汽车行人更少、列车省去车窗、乘客与描边，画面更粗糙但更快'),
-        row('expand', '渲染精度', seg('renderRes', [['high', '高分辨率'], ['low', '低分辨率']]), '高分辨率：地图与模型按屏幕的精细度绘制，边缘更清晰；低分辨率：降低模型的光栅精度与像素比上限，画面稍糊但更省显卡'),
+        row('building', '模型质量', seg('modelDetail', [['high', '高质量模型'], ['mid', '中质量模型'], ['low', '低质量模型']]), '高质量模型：建筑、地标、山体树木、列车、汽车与行人都按精细模型绘制；中质量模型：树木与车辆略减、远景建筑合并，大部分细节保留；低质量模型：远景只留高楼、树木与汽车行人更少、列车省去车窗、乘客与描边，画面更粗糙但更快'),
+        row('expand', '渲染精度', seg('renderRes', [['high', '高分辨率'], ['mid', '中分辨率'], ['low', '低分辨率']]), '高分辨率：地图与模型按屏幕的精细度绘制，边缘更清晰；中分辨率：光栅精度与像素比上限略降，清晰度与性能折中；低分辨率：光栅精度与像素比上限明显降低，画面稍糊但更省显卡'),
         row('density', '建筑密度', seg('bldDensity', [['min', '极低'], ['low', '低'], ['mid', '中'], ['high', '高'], ['max', '最高'], ['full', '超高']]), '每一格（约 250 米）里画多少栋普通建筑，从高到低依次减少；地标建筑与带 landmark 标签的超高层任何时候都会保留，越低越流畅'),
+        row('pulse', '实时 LOD 修改', toggle('lodLive'), '关闭：缩放停下后才重新计算渲染精度，缩放过程更顺滑；开启：缩放过程中就实时按当前缩放重算精度，画面细节跟得更紧，但缩放时补块更多、可能掉帧'),
         row('layers', '绘制阴影', toggle('shadow'), '关闭后建筑、地标、高架桥与车辆都不再画投影，画面更干净也更快'),
         row('radar', '显示监控信息', toggle('monitor', function () { monForm.classList.toggle('off', !S.get('monitor')); }), '在右下角显示本软件的运行占用，下面的勾选决定显示哪几项'),
         monForm,
@@ -1952,7 +1957,7 @@
         row('save', '自动保存', toggle('autosave'), '暂停、每月结算与每次建设后自动保存'),
       ],
     };
-    const CATS = [['sound', 'sound', '声音设置', '音效开关，总音量、列车与环境音量'], ['display', 'expand', '显示设置', '车辆与行人、界面大小、地图标注与全屏方式'], ['perf', 'bolt', '性能设置', '显卡加速、模型质量与渲染精度、建筑密度、最大帧率与运行监控'], ['game', 'map', '游戏设置', '自动保存']];
+    const CATS = [['sound', 'sound', '声音设置', '音效开关，总音量、列车与环境音量'], ['display', 'expand', '显示设置', '车辆与行人、界面大小、地图标注与全屏方式'], ['perf', 'bolt', '性能设置', '显卡加速、模型质量与渲染精度、实时 LOD、建筑密度、最大帧率与运行监控'], ['game', 'map', '游戏设置', '自动保存']];
     const title = h('h2', null, '设置');
     const backBtn = h('button', { class: 'iconbtn hide', 'data-tip': '返回分类', onclick: function () { home(); } }, ic('back'));
     const body = h('div', { class: 'set-body single' });

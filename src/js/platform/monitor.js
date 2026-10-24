@@ -46,38 +46,40 @@
   box.appendChild(chartFps.wrap);
   box.appendChild(chartLow.wrap);
   const hist = [], histLow = [];
-  let acc = 0, frames = 0, lowNow = 0;   // 当前 0.1 秒窗口内累计的帧时间与帧数
-  // 1% Low：逐帧帧时间按 1 ms 分档计数（超过 255 ms 并入最后一档），只保留最近 LOW_N 帧
-  const LOW_N = 1200, LOW_BUCKETS = 256;
-  const lowRing = new Uint16Array(LOW_N);
-  const lowCount = new Uint32Array(LOW_BUCKETS);
+  let acc = 0, lowNow = 0;   // acc：上次出样本到现在累计的帧时间
+  // 1% Low：只看最近 LOW_WIN 秒内真正画出来的帧（超过 LOW_STALL 的按停顿丢弃），
+  // 取其中最慢的 1% 帧的平均帧时间换算帧率
+  const LOW_WIN = 3, LOW_STALL = 250, LOW_N_MAX = 2048;
+  const lowMs = new Float32Array(LOW_N_MAX);
   let lowPos = 0, lowLen = 0;
-  function lowReset() { lowCount.fill(0); lowPos = 0; lowLen = 0; }
+  function lowReset() { lowPos = 0; lowLen = 0; }
   function lowPush(ms) {
-    const b = Math.min(LOW_BUCKETS - 1, Math.max(0, Math.round(ms)));
-    if (lowLen === LOW_N) lowCount[lowRing[lowPos]]--;
-    else lowLen++;
-    lowRing[lowPos] = b; lowCount[b]++;
-    lowPos = (lowPos + 1) % LOW_N;
+    if (!(ms > 0) || ms > LOW_STALL) return;
+    lowMs[lowPos] = ms; lowPos = (lowPos + 1) % LOW_N_MAX;
+    if (lowLen < LOW_N_MAX) lowLen++;
   }
-  // 最慢的 1% 帧的平均帧时间换算成帧率（没有数据时返回 0）
+  function lowNewest(n) { return lowMs[(lowPos - n + LOW_N_MAX) % LOW_N_MAX]; }
+  // 窗口按时间取：从最新一帧往回累到 LOW_WIN 秒为止，返回这段时间的帧数与总耗时
+  function lowWindow() {
+    let sum = 0, n = 0;
+    while (n < lowLen && (sum === 0 || sum + lowNewest(n + 1) <= LOW_WIN * 1000)) { n++; sum += lowNewest(n); }
+    return { n: n, ms: sum };
+  }
   function lowValue() {
-    if (!lowLen) return 0;
-    const k = Math.max(1, Math.round(lowLen * 0.01));
-    let need = k, sum = 0;
-    for (let b = LOW_BUCKETS - 1; b >= 0 && need > 0; b--) {
-      const n = lowCount[b];
-      if (!n) continue;
-      const take = Math.min(n, need);
-      sum += take * (b + 0.5);
-      need -= take;
-    }
+    const w = lowWindow();
+    if (!w.n) return 0;
+    const v = [];
+    for (let i = 1; i <= w.n; i++) v.push(lowNewest(i));
+    v.sort(function (a, b) { return b - a; });
+    const k = Math.max(1, Math.round(v.length * 0.01));
+    let sum = 0;
+    for (let i = 0; i < k; i++) sum += v[i];
     return 1000 / (sum / k);
   }
   function pushSample(fps) {
     hist.push(fps);
     if (hist.length > SPARK_N) hist.shift();
-    if (lowLen >= 60) {   // 帧数太少时 1% 只取到一两帧，曲线上会是一串毛刺，攒够再画
+    if (lowWindow().n >= 30) {   // 帧数太少时 1% 只取到一两帧，曲线上会是一串毛刺，攒够再画
       lowNow = lowValue();
       histLow.push(lowNow);
       if (histLow.length > SPARK_N) histLow.shift();
@@ -188,7 +190,7 @@
     box.classList.toggle('float', floating);
     if (floating) { if (!pos) pos = { x: 12, y: 12 }; applyPos(); }
     else { box.style.left = ''; box.style.top = ''; }
-    acc = 0; frames = 0;
+    acc = 0;
     if (!on('monFps') && !on('monLow')) { hist.length = 0; histLow.length = 0; lowNow = 0; lowReset(); }
     if (any) { paintAt = pollAt = 0; paint(); drawAll(); poll(); }
   }
@@ -211,15 +213,14 @@
   function tick(dt) {
     if (!visible()) return;
     paintAt += dt; pollAt += dt;
-    if (on('monFps') || on('monLow')) {
-      // 休眠时主循环只跑 1 帧/秒，那一帧会把曲线拉成谷底，这一段时间不采样
-      if (CM.Idle && CM.Idle.asleep()) { acc = 0; frames = 0; }
-      else {
-        if (on('monLow')) lowPush(Math.min(999, dt * 1000));
-        acc += dt; frames++;
-        if (acc >= SPARK_DT - 1e-6) { pushSample(frames / acc); acc = 0; frames = 0; }
-      }
+    // 帧率与 1% Low 都按帧耗时算；主循环没画帧的那段（空闲降载）不是「一帧慢」，不计进去
+    if ((on('monFps') || on('monLow')) && !(CM.Idle && (CM.Idle.light() || CM.Idle.asleep()))) {
+      if (on('monLow')) lowPush(dt * 1000);
+      const win = lowWindow();   // 只留最近 LOW_WIN 秒的帧
+      acc += dt;
+      if (win.ms && acc >= SPARK_DT - 1e-6) { pushSample(win.n / (win.ms / 1000)); acc = 0; }
     }
+    // 进程占用（CPU/RAM/GPU）按时间刷新，跟降载无关
     if (paintAt >= 0.4) { paintAt = 0; paint(); }
     if (pollAt >= 1) { pollAt = 0; poll(); }
   }

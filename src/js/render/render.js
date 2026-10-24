@@ -7,6 +7,10 @@
   const EX = 2.0 / CFG.CELL_M;               // 米 → 世界单位（夸张）
   const LEVELS = [8, 16, 32, 64];
   const CHUNK_PX = 512;
+  // 不计入分块缓存的几张常驻大位图的像素上限：氛围雾、地名标注层、拥堵热力（后两者原本就有上限，这里统一到此处）
+  const ATMO_MAXPX = 1.6e6;                  // 雾化与径向渐变，放大后无可见差异，不必按全屏分辨率保存
+  const CONG_MAXPX = 6e6;                    // 拥堵热力位图
+  const LABEL_MAXPX = 9e6;                   // 地名标注层
   const MAX_H = 5.0;                          // 世界单位（建筑最大高度，含广州塔天线）
   const FONT = '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif';
   const UNDER_DEPTH = 4;                      // 地下视图中地下线路的视觉下沉倍数
@@ -18,10 +22,12 @@
   // maxTier 是自动降档的上限，hot/calm 为降档与恢复的耗时阈值（ms）。
   const MODEL_DET = {
     high: { coarseLvl: 16, treeN: 3, winZ: 20, doorZ: 26, paxZ: 26, paxFrac: 1, agentDetail: 1, agentMax: 1, edge: 1 },
+    mid: { coarseLvl: 24, treeN: 2, winZ: 23, doorZ: 30, paxZ: 34, paxFrac: 0.6, agentDetail: 1, agentMax: 0.8, edge: 1 },
     low: { coarseLvl: 32, treeN: 1, winZ: 26, doorZ: 34, paxZ: 99, paxFrac: 0, agentDetail: 0, agentMax: 0.6, edge: 0 },
   };
   const MODEL_RES = {
     high: { lod: 1, dprCap: 1.5, maxTier: 0, hot: 20, calm: 14 },
+    mid: { lod: 0.82, dprCap: 1.25, maxTier: 1, hot: 16, calm: 11 },
     low: { lod: 0.62, dprCap: 1, maxTier: 2, hot: 13, calm: 9 },
   };
   // 建筑密度（设置 → 性能）：每格保留多少普通建筑的比例；带 landmark 标签的建筑（地标、超高层）始终保留
@@ -49,7 +55,7 @@
       shadow2d: 'rgba(70,100,140,0.10)', bldStroke: 'rgba(100,130,170,0.16)', parkTree: 'rgba(125,180,125,0.5)',
       road: { local: '#ffffff', localCase: '#dee5ee', coll: '#ffffff', collCase: '#d0dbe7', art: '#ffffff', artCase: '#bfccdc', exp: '#f8fafd', expCase: '#a9b9cd', expLine: 'rgba(170,186,208,0.55)', bridgeCase: '#93a3b9', tunnel: 'rgba(140,156,178,0.45)', rail: '#ffffff', railCase: '#a5b1c2' },
       lockFill: 'rgba(165,173,183,0.7)', lockHatch: 'rgba(133,150,175,0.24)',
-      ink: '#1c2c45', halo: 'rgba(255,255,255,0.92)', district: '#58708f', landmarkInk: '#36557d', roadInk: '#7a8ca6', lockInk: '#7a889e',
+      ink: '#1c2c45', halo: 'rgba(255,255,255,0.92)', plate: 'rgba(238,244,250,0.78)', district: '#58708f', landmarkInk: '#36557d', roadInk: '#7a8ca6', lockInk: '#7a889e',
       stFill: '#ffffff', stInter: '#25334a', isoShadow: 'rgba(80,110,150,0.10)', roofOld: [[226, 232, 240], [214, 222, 232]], roofInd: [222, 228, 236],
       tree: [[134, 188, 128], [112, 170, 112]], trunk: '#8f9c85', elevCase: 'rgba(90,112,145,0.45)', lineCase: 'rgba(255,255,255,0.96)', pier: '#a9b5c6',
       lm2d: { fill: '#e5ebf2', stroke: '#9fb1c8' }, edgeLine: 'rgba(90,120,160,0.12)',
@@ -77,7 +83,7 @@
       shadow2d: 'rgba(0,0,0,0.32)', bldStroke: 'rgba(140,170,210,0.14)', parkTree: 'rgba(70,130,100,0.55)',
       road: { local: '#2b384b', localCase: '#162030', coll: '#324157', collCase: '#131c2a', art: '#3d4f68', artCase: '#0f1723', exp: '#4b6080', expCase: '#0e1520', expLine: 'rgba(150,180,220,0.3)', bridgeCase: '#080d15', tunnel: 'rgba(110,130,160,0.4)', rail: '#5a6678', railCase: '#0c121b' },
       lockFill: 'rgba(8,12,20,0.67)', lockHatch: 'rgba(116,134,164,0.22)',
-      ink: '#e6edf7', halo: 'rgba(12,18,28,0.88)', district: '#8ea2bd', landmarkInk: '#a9c4e8', roadInk: '#8d9db3', lockInk: '#95a3b7',
+      ink: '#e6edf7', halo: 'rgba(12,18,28,0.88)', plate: 'rgba(16,24,36,0.72)', district: '#8ea2bd', landmarkInk: '#a9c4e8', roadInk: '#8d9db3', lockInk: '#95a3b7',
       stFill: '#ffffff', stInter: '#0e1622', isoShadow: 'rgba(0,0,0,0.28)', roofOld: [[78, 90, 108], [70, 80, 98]], roofInd: [72, 82, 98],
       tree: [[52, 108, 82], [42, 92, 70]], trunk: '#3e4a44', elevCase: 'rgba(0,0,0,0.6)', lineCase: 'rgba(10,16,26,0.92)', pier: '#4a566a',
       lm2d: { fill: '#2c3646', stroke: '#7d93b4' }, edgeLine: 'rgba(160,185,220,0.10)',
@@ -110,6 +116,7 @@
     this.shadows = true;
     this.bldDensity = 'full';
     this.modelDetail = 'high'; this.renderRes = 'high';
+    this.lodLive = false;   // 实时 LOD：缩放过程中就按当前缩放算精度（关着时等缩放停下再换档）
     this._mq = Object.assign({}, MODEL_RES.high, MODEL_DET.high);
     this.textWidths = new Map();
     this.roadLabelGeom = new WeakMap();
@@ -117,11 +124,20 @@
     this.segDecos = new WeakMap();
     this.heatLayers = new Map();
     this.geoPaths = new WeakMap();
+    this._lmc = null; this._lmcCity = null;
     this.metroLayer = null; this.metroOx = this.metroOy = 0;
+    this.layerTmp = makeCanvas(1, 1);
   }
   CM.Renderer = Renderer;
 
   Renderer.prototype.noteFrameTime = function (ms) { this.lastFrameMs = ms; };
+  // 实时 LOD：开启后缩放过程中就按当前缩放实时换档；关闭时沿用「缩放缓动期间冻结档位、停下后换档」
+  Renderer.prototype.setLodLive = function (on) {
+    on = !!on;
+    if (this.lodLive === on) return;
+    this.lodLive = on;
+    if (on) this._lodHold = null;
+  };
   // 切换模型渲染精度：分块的细节门槛随精度变化，需清掉已铺的分块并按新精度重铺
   Renderer.prototype.setModelOpts = function (detail, res) {
     detail = MODEL_DET[detail] ? detail : 'high';
@@ -132,6 +148,7 @@
     this.detail.tier = 0; this.detail.busy = 0; this.detail.calm = 0;
     this.requestedLevel = null; this.requestedTier = -1;
     this.clearImages(); this.dropMetroLayer();
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.modelQo = function () { return this._mq; };
   // 建筑密度：只影响普通建筑的数量，地标与带 landmark 标签的建筑始终保留
@@ -140,6 +157,7 @@
     if (this.bldDensity === v) return;
     this.bldDensity = v;
     this.clearImages(); this.dropMetroLayer();
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.bldKeep = function () { return BLD_KEEP[this.bldDensity] || 1; };
   // 标签判定：既能读 tag（单个）也能读 tags（数组），例如 { tag: 'landmark' } 或 { tags: ['landmark'] }
@@ -154,6 +172,7 @@
     if (this.shadows === on) return;
     this.shadows = on;
     this.clearImages(); this.dropMetroLayer();
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.adaptDetail = function (dt) {
     const d = this.detail, elapsed = Math.min(0.1, dt || 1 / 60), mq = this.modelQo();
@@ -161,7 +180,7 @@
     if (Math.abs(this.cam.zoom - this.cam.tz) > 1e-3) return;
     const work = this.lastFrameMs == null ? (this.lastRenderMs || 0) : this.lastFrameMs;
     const missedFrame = dt > 1 / 45 ? dt * 1000 : 0;
-    const cost = Math.min(100, Math.max(work, missedFrame, this.cachePx > CFG.perf.cacheMaxPx ? 20 : 0));
+    const cost = Math.min(100, Math.max(work, missedFrame, this.cachePx + this.bigPx() > CFG.perf.cacheMaxPx ? 20 : 0));
     d.ema += (cost - d.ema) * 0.12;
     d.busy = d.ema > mq.hot ? d.busy + elapsed : Math.max(0, d.busy - elapsed * 2);
     d.calm = d.ema < mq.calm ? d.calm + elapsed : 0;
@@ -170,6 +189,12 @@
     this.stats.detailTier = d.tier;
     this.stats.modelQuality = this.modelDetail + '/' + this.renderRes;
   };
+  // 屏幕坐标对齐到设备像素：文字落在亚像素位置上，每帧的字形光栅化结果都不一样，屏幕上就是抖动闪烁
+  Renderer.prototype.snapPx = function (v) { const d = this.dpr || 1; return Math.round(v * d) / d; };
+  // 整像素取整的视角偏移：地图内容按它投影，标注缓存位图也按它记账。取整后平移与缩放带来的亚像素位移
+  // 不会再让文字每帧重新光栅化，标注也不会因为原坐标在整像素上逐帧翻转而闪
+  Renderer.prototype.snapOx = function () { return Math.round(this.ox * this.dpr) / this.dpr; };
+  Renderer.prototype.snapOy = function () { return Math.round(this.oy * this.dpr) / this.dpr; };
   Renderer.prototype.textWidth = function (ctx, text) {
     const key = ctx.font + '|' + text;
     let width = this.textWidths.get(key);
@@ -189,6 +214,12 @@
     this.cancelIsoJob();
     for (const cache of [this.ground, this.iso]) { for (const e of cache.values()) e.cv.width = e.cv.height = 1; cache.clear(); }
     this.cachePx = 0;
+  };
+  // 分块缓存之外的常驻大位图（氛围雾、标注层、拥堵热力）的像素总量。读写时各自记账，
+  // 读取时顺手校正：空闲释放或主题/尺寸变化把它们置空后，记账随之归零
+  Renderer.prototype.bigPx = function () {
+    const px = function (cv) { return cv ? cv.width * cv.height : 0; };
+    return px(this._atmo) + px(this.labelImage && this.labelImage.cv) + px(this._cgBmp && this._cgBmp.cv);
   };
   // 空闲休眠时释放可重建的缓存（分块图、热力/标注/拥堵位图、文字宽度表），总览图保留作唤醒后的过渡底图
   Renderer.prototype.freeCaches = function () {
@@ -227,8 +258,8 @@
     if (target === this.displayedLevel) { this.stats.rasterLevel = target; return target; }
     // 缩放缓动中不为「待切换档位」预建分块：缩放中途档位还会再变，建了大多作废，还要吃掉每帧的补块预算。
     // 显示中的档位有缺口由地面/建筑循环自己补（有低分辨率块可贴就先贴），缩放停下后这里再统一补建并换档。
-    // 平移时档位不变，补的块之后还要用，照常预建。
-    const staging = !this.zoomEasing;
+    // 平移时档位不变，补的块之后还要用，照常预建。开了实时 LOD 就照常预建——档位本来就跟着缩放走。
+    const staging = this.lodLive || !this.zoomEasing;
     let ready = true;
     const C = CHUNK_PX / target;
     const ci0 = Math.max(0, Math.floor(bounds.x0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(bounds.x1 / C));
@@ -274,7 +305,7 @@
     return x + w >= -pad && y + h >= -pad && x <= this.w + pad && y <= this.h + pad;
   };
   Renderer.prototype.groundVisible = function (x, y, size) {
-    const M = this.M, z = this.z, ax = this.ox + (M[0] * x + M[1] * y) * z, ay = this.oy + (M[2] * x + M[3] * y) * z;
+    const M = this.M, z = this.z, ax = this.px + (M[0] * x + M[1] * y) * z, ay = this.py + (M[2] * x + M[3] * y) * z;
     const dx = M[0] * size * z, ex = M[1] * size * z, dy = M[2] * size * z, ey = M[3] * size * z;
     return this.screenVisible(ax + Math.min(0, dx) + Math.min(0, ex), ay + Math.min(0, dy) + Math.min(0, ey), Math.abs(dx) + Math.abs(ex), Math.abs(dy) + Math.abs(ey), 3);
   };
@@ -282,13 +313,17 @@
   // ---------------- 氛围：边缘雾化与 2.5D 远处薄雾（按画面尺寸与主题缓存为一张图，每帧只贴图一次） ----------------
   Renderer.prototype.drawAtmosphere = function (ctx) {
     const W = this.w, H = this.h, t = Math.round(this.tEase * 10) / 10;
-    const key = W + 'x' + H + ':' + this.themeName + ':' + t;
+    // 位图尺寸有上限：超出时按比例缩小，贴图时再放大（雾化与径向渐变放大后无可见差异）
+    const ka = Math.min(1, Math.sqrt(ATMO_MAXPX / Math.max(1, W * H)));
+    const aw = Math.max(1, Math.round(W * ka)), ah = Math.max(1, Math.round(H * ka));
+    const key = aw + 'x' + ah + ':' + this.themeName + ':' + t;
     if (this._atmoKey !== key) {
       const cv = this._atmo || (this._atmo = makeCanvas(1, 1));
-      const w2 = Math.max(1, Math.round(W)), h2 = Math.max(1, Math.round(H));
-      if (cv.width !== w2 || cv.height !== h2) { cv.width = w2; cv.height = h2; }
+      if (cv.width !== aw || cv.height !== ah) { cv.width = aw; cv.height = ah; }
       const g = cv.getContext('2d'), fog = TH.fog || TH.bg;
-      g.clearRect(0, 0, cv.width, cv.height);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, aw, ah);
+      g.setTransform(ka, 0, 0, ka, 0, 0);
       if (t > 0.05) {
         const lg = g.createLinearGradient(0, 0, 0, H * 0.4);
         lg.addColorStop(0, U.rgb(fog, 0.6 * t)); lg.addColorStop(1, U.rgb(fog, 0));
@@ -297,6 +332,7 @@
       const R = Math.hypot(W, H) / 2, rg = g.createRadialGradient(W / 2, H / 2, R * 0.62, W / 2, H / 2, R * 1.04);
       rg.addColorStop(0, U.rgb(fog, 0)); rg.addColorStop(1, U.rgb(fog, TH.night ? 0.7 : 0.78));
       g.fillStyle = rg; g.fillRect(0, 0, W, H);
+      g.setTransform(1, 0, 0, 1, 0, 0);
       this._atmoKey = key;
     }
     ctx.drawImage(this._atmo, 0, 0, W, H);
@@ -395,6 +431,8 @@
     this.heatLayers.clear(); this.segScreens = new WeakMap(); this.segDecos = new WeakMap(); this.metroOrder = null;
     this.roadLabelGeom = new WeakMap(); this.textWidths.clear(); this._cgBmp = null;
     this.geoPaths = new WeakMap(); this.labelImage = null;
+    if (this._atmo) this._atmo.width = this._atmo.height = 1;
+    this._atmoKey = '';
     this._hd = null; this._hdCity = null; this._lmc = null; this._lmcCity = null;
     this.lastFrameMs = null; this.detail = { tier: 0, ema: 8, busy: 0, calm: 0 };
     this.roadVer = g ? g.city.roadVersion : -1;
@@ -404,6 +442,7 @@
     this._rk = null; this.styleEpoch = g ? Math.floor(g.clock.y / 5) : null; this.styleYear = g ? this.styleEpoch * 5 : null;
     this.dropMetroLayer();
     this.prewarmDeco();
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   // 切换主题：配色变了，把已有分块标记为过期，由渲染循环在原画布上重画。
   // 不整份丢弃重建，否则每次切换都要重新分配一遍同样大小的分块缓存（内存池只涨不落）
@@ -416,6 +455,7 @@
     this._flLay = null; this._flLayKey = null; this._sf = null; this._sfKey = null; this._rm = {};
     this.dropMetroLayer();
     if (this.game) this.renderOverview(); else this.overviewStale = true;
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.resize = function () {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -427,6 +467,7 @@
     // 软件画布跟屏幕画布同尺寸，整块拷贝时不做缩放
     if (this.soft) { this.soft.width = this.cv.width; this.soft.height = this.cv.height; }
     this.dropMetroLayer();
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();   // 尺寸变了画布刚被清空，静止时也要补一帧
   };
   // GPU 加速开关：开启时直接画在屏幕画布上；关闭时画到要求 willReadFrequently 的画布上，
   // 浏览器会把这张画布交给 CPU 光栅化（显卡驱动有问题或帧率异常时的退路）。切换立即生效，无需重载。
@@ -434,9 +475,12 @@
     on = on !== false;
     if (on === this.gpu) return;
     this.gpu = on;
-    if (on) { this.soft = null; this.ctx = this.cv.getContext('2d'); return; }
-    this.soft = makeCanvas(this.cv.width || 1, this.cv.height || 1);
-    this.ctx = this.soft.getContext('2d', { willReadFrequently: true });
+    if (on) { this.soft = null; this.ctx = this.cv.getContext('2d'); }
+    else {
+      this.soft = makeCanvas(this.cv.width || 1, this.cv.height || 1);
+      this.ctx = this.soft.getContext('2d', { willReadFrequently: true });
+    }
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();   // 换了绘制目标，屏幕画布上的内容作废
   };
   // 软件模式下每帧结束时把离屏画面整块拷到屏幕画布
   Renderer.prototype.present = function () {
@@ -458,12 +502,18 @@
     this.oy = this.h / 2 - (m10 * c.cx + m11 * c.cy) * c.zoom;
     this.hs = c.zoom * HSF * t;
     this.tEase = t;
+    // 视角静止时把偏移吸附到整设备像素：世界坐标不变（相机本身不吸附），只是投影时整体平移不到 1px，
+    // 换取整帧内容不再承受亚像素重采样——缩放带来的取整跳变会被相机连续变化盖住，看不出来
+    this.snap = Math.abs(c.zoom - c.tz) < 1e-4 && !c.fly;
+    const rounded = this.snap ? this.dpr >= 1 : false;
+    this.px = rounded ? Math.round(this.ox * this.dpr) / this.dpr : this.ox;
+    this.py = rounded ? Math.round(this.oy * this.dpr) / this.dpr : this.oy;
   };
   Renderer.prototype.P = function (x, y, h, out) {
     const M = this.M, z = this.z;
     out = out || {};
-    out.x = this.ox + (M[0] * x + M[1] * y) * z;
-    out.y = this.oy + (M[2] * x + M[3] * y) * z - (h || 0) * this.hs;
+    out.x = this.px + (M[0] * x + M[1] * y) * z;
+    out.y = this.py + (M[2] * x + M[3] * y) * z - (h || 0) * this.hs;
     return out;
   };
   Renderer.prototype.unproject = function (sx, sy) {
@@ -557,13 +607,16 @@
     this.heatKey = '';
   };
   Renderer.prototype.evict = function () {
-    if (this.cachePx <= CFG.perf.cacheMaxPx) return;
+    // 分块缓存之外的常驻大位图先计入占用：它们本身不可回收，但会把分块缓存的空间压小，
+    // 否则 1440p 下这几张（标注层与拥堵热力都按全屏分辨率）全额常驻还会让分块照旧占满总上限
+    const big = this.bigPx(), total = CFG.perf.cacheMaxPx;
+    if (this.cachePx + big <= total) return;
     const all = [];
     this.ground.forEach(function (e, k) { all.push([e, k, 'g']); });
     this.iso.forEach(function (e, k) { all.push([e, k, 'i']); });
     all.sort(function (a, b) { return a[0].used - b[0].used; });
     for (const it of all) {
-      if (this.cachePx <= CFG.perf.cacheMaxPx * 0.8) break;
+      if (this.cachePx + big <= total * 0.8) break;
       if (it[0].used >= this.frame) continue;
       (it[2] === 'g' ? this.ground : this.iso).delete(it[1]);
       this.cachePx -= it[0].px;
@@ -1046,7 +1099,8 @@
     const pj = function (x, y, h) { return [(x - y) * ISO[0] * s + ox, (x + y) * ISO[2] * s + oy - h * HSF * s]; };
     try { this.isoLandmark(ctx, pj, lm, s); } catch (err) { console.error(err); }
     e = { cv: cv, ax: (lm.x - lm.y) * ISO[0] * s + ox, ay: (lm.x + lm.y) * ISO[2] * s + oy, px: cv.width * cv.height, used: this.frame, born: this.time, stale: false };
-    const old = this.iso.get(key); if (old) this.cachePx -= old.px;
+    const old = this.iso.get(key);
+    if (old) { this.cachePx -= old.px; if (old.cv !== cv) old.cv.width = old.cv.height = 1; }
     this.iso.set(key, e); this.cachePx += e.px;
     return e;
   };
@@ -1912,15 +1966,16 @@
     const groundAlpha = 1 - 0.68 * under;
     ctx.globalAlpha = groundAlpha;
     ctx.imageSmoothingEnabled = true;
-    const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
+    const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.px, dpr * this.py);
     const detailScale = z >= 28 ? 1 : (this.detail.tier === 2 ? 0.68 : this.detail.tier === 1 ? 0.85 : 1);
     const mq = this.modelQo();
     const baseEff = z * Math.min(dpr, mq.dprCap) * (1 - 0.28 * t) * detailScale;
     const lodMul = mq.lod;
     // 高性能模式按较低的精度铺地面与模型分块；最远视野仍保底一层分块，避免整城建筑直接消失
     let eff = Math.max(baseEff * lodMul, Math.min(baseEff, 6));
-    // 滚轮放大的缓动期间冻结 LOD 档位：换档要重建视口内全部分块，停下来再换
-    if (this.zoomEasing) {
+    // 滚轮放大的缓动期间冻结 LOD 档位：换档要重建视口内全部分块，停下来再换。
+    // 开了「实时 LOD 修改」就不冻结，缩放中直接按当前缩放算精度
+    if (this.zoomEasing && !this.lodLive) {
       if (this._lodHold == null) this._lodHold = this._effPrev != null ? this._effPrev : eff;
       if (this.z > (this._zPrev || this.z)) eff = this._lodHold;
     } else if (this._lodHold != null) this._lodHold = null;
@@ -1929,9 +1984,14 @@
     const lvl = this.rasterLevel(eff, { x0: wx0, y0: wy0, x1: wx1, y1: wy1 }, queue,
       t >= 0.999 && cam.view === 1 && under < 0.99 && (this.layerFade || 0) < 0.99);
     // 正在为下一档补块（换档在即）或缩放缓动中：暂不为当前显示档追建分块——档马上要换，建了也得扔，
-    // 白占每帧的补块预算还会拖慢换档；等得太久（约 1.5 秒）说明换档卡住了，就照常补，别让画面一直缺
-    this._lodWait = this.stats.lodPreparing ? (this._lodWait || 0) + 1 : 0;
-    const hold = this.zoomEasing || (this._lodWait > 0 && this._lodWait < 90);
+    // 白占每帧的补块预算还会拖慢换档；等得太久说明换档卡住了，就照常补，别让画面一直缺。
+    // 阈值按时间折算（约 0.5 秒）：原来按 90 帧算，高刷屏上要静止等 1.5 秒，看着就是换档时卡住
+    this._lodWait = this.stats.lodPreparing ? (this._lodWait || 0) + dt * 1000 : 0;
+    const hold = (!this.lodLive && this.zoomEasing) || (this._lodWait > 0 && this._lodWait < 500);
+    // 平移中不为「还贴着旧图」的地面块补建：拖动时那些块本来就在视野外或边缘，
+    // 过期内容再旧也只是一两年的城市风貌，松手后统一重绘；补块预算全留给真正缺块的边缘，
+    // 否则拖动期间每帧都要吃掉几毫秒去重画已经能看的块
+    const holdGround = hold || this.camMoving;
     setWorld();
     if (this.overviewJob) queue.push({ kind: 'o', d: 1 });
     // 整城底图只在可能露出空隙时才贴：静止且上一帧分块已铺满时整屏再叠一遍纯属重复填充
@@ -1960,7 +2020,7 @@
           if (!e) { covered = false; queue.push({ kind: 'g', key: key, lvl: lvl, ci: ci, cj: cj, d: d }); continue; }
         }
         // 缩放缓动中或换档在即：追着补建这一档多是白建，先贴现有的块，稳定后统一补
-        if (!hold && (e.key !== key || e.stale)) queue.push({ kind: 'g', key: key, lvl: lvl, ci: ci, cj: cj, d: d });
+        if (!holdGround && (e.key !== key || e.stale)) queue.push({ kind: 'g', key: key, lvl: lvl, ci: ci, cj: cj, d: d });
         e.used = this.frame;
         const C2 = CHUNK_PX / e.lvl;
         const k = e.key.split(':');
@@ -2071,8 +2131,9 @@
     // 本帧剩下的可支配时间：前面画得越久，留给补块越少
     const head = Math.max(1, 11 - (performance.now() - tStart));
     let budget = Math.max(1, Math.min(CFG.perf.chunkBudgetMs, this.detail.tier ? 3 : 6, head));
-    // 缩放缓动中压到 2.5ms：这段时间每帧都在重投影，帧预算本来就紧，补块不该再抢
-    if (this.zoomEasing) budget = Math.min(budget, 2.5);
+    // 缩放缓动中压到 4.5ms：这段时间每帧都在重投影，补块不该抢满，但压到 2.5ms 又会让换档一拖再拖，
+    // 停止缩放后还要集中补一大片，那一下看起来就是卡顿
+    if (this.zoomEasing) budget = Math.min(budget, 4.5);
     const queueStart = performance.now();
     let n = 0;
     for (const q of queue) {
@@ -2105,8 +2166,10 @@
       if (performance.now() - t1 > budget) break;
     }
     this.stats.chunksDrawn = n;
-    // 视角在动时不回收缓存：这时分块几乎不新增，排序整张表只是白花时间（每 8 帧兜一次底）
+    // 视角在动时不回收缓存：这时分块几乎不新增，排序整张表只是白花时间；
+    // 但常驻大位图（标注层、拥堵热力在平移/缩放时会重画成大图）只在动的时候增长，超限立刻回收
     if (!this.camMoving || this._frames % 8 === 0) this.evict();
+    else if (this.cachePx + this.bigPx() > CFG.perf.cacheMaxPx) this.evict();
     this._frames = (this._frames || 0) + 1;
     this.lastRenderMs = performance.now() - frameStart;
   };
@@ -2144,7 +2207,7 @@
   Renderer.prototype.segScreen = function (cs, under, out) {
     const pts = cs.g.pts, hs = cs.h, n = pts.length;
     // 缓存键每帧（及地下视图进度变化时）只拼一次
-    if (this._ssFrame !== this.frame || this._ssUnder !== under) { this._ssFrame = this.frame; this._ssUnder = under; this._ssKey = this.M.join(',') + ':' + this.z + ':' + this.ox + ':' + this.oy + ':' + under + ':' + this.hs; }
+    if (this._ssFrame !== this.frame || this._ssUnder !== under) { this._ssFrame = this.frame; this._ssUnder = under; this._ssKey = this.M.join(',') + ':' + this.z + ':' + this.px + ':' + this.py + ':' + under + ':' + this.hs; }
     const key = this._ssKey;
     let cached = !out && this.segScreens.get(cs);
     if (cached && cached.key === key) return cached.arr;
@@ -2155,8 +2218,8 @@
       let h = hs[i];
       if (h < 0) h = h * uw * UNDER_DEPTH;
       const M = this.M, z = this.z;
-      arr[i * 2] = this.ox + (M[0] * pts[i][0] + M[1] * pts[i][1]) * z;
-      arr[i * 2 + 1] = this.oy + (M[2] * pts[i][0] + M[3] * pts[i][1]) * z - h * this.hs;
+      arr[i * 2] = this.px + (M[0] * pts[i][0] + M[1] * pts[i][1]) * z;
+      arr[i * 2 + 1] = this.py + (M[2] * pts[i][0] + M[3] * pts[i][1]) * z - h * this.hs;
     }
     if (!out) this.segScreens.set(cs, { key: key, arr: arr });
     return arr;
@@ -2185,10 +2248,11 @@
     ctx.restore();
   };
   // 地铁层位图的四周余量：平移时靠它整块贴回，位移超出余量才重描。
-  // 贴图只合成视口那一块，余量不再增加每帧填充率，只花内存，所以给得比 8% 宽一些：
-  // 拖动时能多滑几帧位图，少几次「退回矢量快速路径」——那条路径会临时省掉道床、枕木、栏杆。
+  // 贴图只合成视口那一块，余量不再增加每帧填充率，只花内存，所以给得宽一些（两成）：
+  // 一次拖动往往滑不到余量边缘，就不用退回矢量快速路径——那条路径每帧都要重投影并重描整个可见线网，
+  // 还会临时省掉道床、枕木、栏杆。上限 14e6 像素守住内存，高分屏这里会自动收窄。
   Renderer.prototype.metroMargin = function () {
-    let mx = Math.max(64, Math.round(this.w * 0.11)), my = Math.max(64, Math.round(this.h * 0.11));
+    let mx = Math.max(64, Math.round(this.w * 0.22)), my = Math.max(64, Math.round(this.h * 0.22));
     const cap = 14e6, pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr;
     if (pix > cap) { const k = Math.sqrt(cap / pix); mx = Math.max(40, Math.floor(mx * k)); my = Math.max(40, Math.floor(my * k)); }
     return { mx: mx, my: my };
@@ -2233,7 +2297,7 @@
       return;
     }
     const core = this.metroLayerKey(g, ui);
-    const full = core + '|' + this.z + '|' + this.hs + '|' + this.ox + '|' + this.oy;
+    const full = core + '|' + this.z + '|' + this.hs + '|' + this.px + '|' + this.py;
     const m = this.metroLayer;
     if (m && m.cv && m.full === full) {
       this.blitMetro(ctx, m.cv, 0, 0, m.mx, m.my);
@@ -2244,11 +2308,11 @@
     // 贴图位移不做设备像素取整：位图从不回贴到自身，不存在「越贴越糊」，取整反而让整层轨道
     // 相对连续移动的地面／车流按整像素跳（dpr=1 时最明显），看起来就是跟手差
     if (m && m.cv && m.core === core && m.z === this.z && !m.pxStale) {
-      const bx = this.ox - m.ox, by = this.oy - m.oy;
+      const bx = this.px - m.ox, by = this.py - m.oy;
       if (Math.abs(bx) <= m.mx && Math.abs(by) <= m.my) {
         const dx = bx - (m.dx || 0), dy = by - (m.dy || 0);
         if (dx || dy) { this.shiftMetroPx(dx, dy); m.dx = bx; m.dy = by; }
-        this.metroOx = this.ox; this.metroOy = this.oy;
+        this.metroOx = this.px; this.metroOy = this.py;
         this.blitMetro(ctx, m.cv, bx, by, m.mx, m.my);
         this.drawMetroSel(ctx, ui, C);
         return;
@@ -2272,8 +2336,8 @@
     x.clearRect(0, 0, cw, ch);
     x.setTransform(this.dpr, 0, 0, this.dpr, mg.mx * this.dpr, mg.my * this.dpr);
     this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my));
-    this.metroOx = this.ox; this.metroOy = this.oy;
-    this.metroLayer = { core: core, full: full, cv: cv, ox: this.ox, oy: this.oy, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
+    this.metroOx = this.px; this.metroOy = this.py;
+    this.metroLayer = { core: core, full: full, cv: cv, ox: this.px, oy: this.py, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
     // 这一帧已经付过整层重描的代价：同一帧不要再重建标注位图，两笔重活撞一起就是一次明显的掉帧
     this._metroBuiltFrame = this.frame;
     this.blitMetro(ctx, cv, 0, 0, mg.mx, mg.my);
@@ -2924,7 +2988,7 @@
       const mx = (x1 - x0) * 0.3, my = (y1 - y0) * 0.3;
       const bx0 = Math.max(0, x0 - mx), by0 = Math.max(0, y0 - my), bx1 = Math.min(city.W, x1 + mx), by1 = Math.min(city.H, y1 + my);
       const area = (bx1 - bx0) * (by1 - by0);
-      const sb = Math.min(z * dpr, Math.sqrt(6e6 / area));   // 位图每世界单位的像素数（上限约 600 万像素）
+      const sb = Math.min(z * dpr, Math.sqrt(CONG_MAXPX / area));   // 位图每世界单位的像素数（上限约 600 万像素）
       const w = Math.ceil((bx1 - bx0) * sb), h = Math.ceil((by1 - by0) * sb);
       const cv = c && c.cv.width === w && c.cv.height === h ? c.cv : makeCanvas(w, h);
       const x = cv.getContext('2d');
@@ -2936,7 +3000,7 @@
     const sb = c.sb;
     ctx.save();
     ctx.setTransform(dpr * M[0] * z / sb, dpr * M[2] * z / sb, dpr * M[1] * z / sb, dpr * M[3] * z / sb,
-      dpr * (this.ox + z * (M[0] * c.x0 + M[1] * c.y0)), dpr * (this.oy + z * (M[2] * c.x0 + M[3] * c.y0)));
+      dpr * (this.px + z * (M[0] * c.x0 + M[1] * c.y0)), dpr * (this.py + z * (M[2] * c.x0 + M[3] * c.y0)));
     ctx.drawImage(c.cv, 0, 0);
     ctx.restore();
   };
@@ -3245,7 +3309,7 @@
       const it = list[q], name = C.stations[it.i].name, val = loadView ? '高峰负荷 ' + U.fmtPct(sf.ratio[it.i], 0) : U.fmtPeople(it.v) + ' 人次';
       ctx.font = '600 12px ' + FONT; const w1 = ctx.measureText(name).width;
       ctx.font = '11px ' + FONT; const w2 = ctx.measureText(val).width;
-      const w = Math.max(w1, w2) + 6, x = it.sp.x, y = it.sp.y + it.r + 4;
+      const w = Math.max(w1, w2) + 6, x = this.snapPx(it.sp.x), y = this.snapPx(it.sp.y + it.r + 4);
       const b = [x - w / 2, y, x + w / 2, y + 28];
       if (placed.some(function (o, k) { return k !== q && b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]; })) continue;
       placed.push(b); shown++;
@@ -3306,8 +3370,9 @@
       if (placed.some(function (o) { return b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]; })) continue;
       placed.push(b); shown++;
       ctx.lineJoin = 'round'; ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo;
-      ctx.strokeText(name, p.x, p.y + r + 9); ctx.fillStyle = TH.ink; ctx.fillText(name, p.x, p.y + r + 9);
-      ctx.font = '11px ' + FONT; ctx.strokeText(val, p.x, p.y + r + 23); ctx.fillStyle = TH.roadInk; ctx.fillText(val, p.x, p.y + r + 23);
+      const tx = this.snapPx(p.x), ty = this.snapPx(p.y + r + 9), ty2 = this.snapPx(p.y + r + 23);
+      ctx.strokeText(name, tx, ty); ctx.fillStyle = TH.ink; ctx.fillText(name, tx, ty);
+      ctx.font = '11px ' + FONT; ctx.strokeText(val, tx, ty2); ctx.fillStyle = TH.roadInk; ctx.fillText(val, tx, ty2);
     }
   };
   // 点击选中设施：设施图层中的圆点；其他情况下点在设施场地（地标）或其中心附近
@@ -3448,7 +3513,7 @@
       ctx.setLineDash([10, 6]); ctx.lineDashOffset = -age * 20; outline(3); ctx.setLineDash([]);
     } else if (hl.kind === 'region') {
       const rm = this.regionMask(hl.region);
-      ctx.save(); ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.ox, dpr * this.oy);
+      ctx.save(); ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.px, dpr * this.py);
       ctx.globalAlpha = fade * (0.16 + 0.1 * pulse); ctx.imageSmoothingEnabled = false; ctx.drawImage(rm.cv, 0, 0, rm.cv.width, rm.cv.height); ctx.restore();
       ctx.beginPath();
       for (const e of rm.edges) { this.P(e[0], e[1], 0, tmp); ctx.moveTo(tmp.x, tmp.y); this.P(e[2], e[3], 0, tmp); ctx.lineTo(tmp.x, tmp.y); }
@@ -3461,11 +3526,11 @@
     }
     // 名称标签
     if (hl.label) {
-      const p = this.P(hl.lx, hl.ly, 0);
-      ctx.font = '700 13px ' + FONT; const w = ctx.measureText(hl.label).width + 22, x = p.x - w / 2, y = p.y - 44;
+      const p = this.P(hl.lx, hl.ly, 0), qx = this.snapPx(p.x), qy = this.snapPx(p.y);
+      ctx.font = '700 13px ' + FONT; const w = ctx.measureText(hl.label).width + 22, x = qx - w / 2, y = qy - 44;
       ctx.fillStyle = U.rgb(col, 0.96); ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, 26, 13) : ctx.rect(x, y, w, 26); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(p.x - 6, y + 26); ctx.lineTo(p.x + 6, y + 26); ctx.lineTo(p.x, y + 33); ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(hl.label, p.x, y + 13.5);
+      ctx.beginPath(); ctx.moveTo(qx - 6, y + 26); ctx.lineTo(qx + 6, y + 26); ctx.lineTo(qx, y + 33); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(hl.label, qx, this.snapPx(y + 13.5));
     }
   };
   // ---------------- 标注 ----------------
@@ -3482,21 +3547,29 @@
       return;
     }
     this.labA = labA; this.mapLabA = mapLabA;
-    // 视角在动就直接画到主画布：位图拉伸会把文字一起放大发虚，每帧重排版又太贵，两头都不合适。
-    // 稳定后重描位图再晚 200ms（比地铁层更靠后），同样避开正在补块的帧；
-    // 地铁层这一帧刚重描过就推后，两笔重活分开落在两帧上
-    if (this.camMoving || this.camStill < 200 || this._metroBuiltFrame === this.frame || (this.stats.lodPreparing && this.camStill < 600)) { this.drawLabelContent(ctx, ui, 0, 0); return; }
     const key = [this.w, this.h, this.dpr, this.z, this.M.join(','), this.cam.under, this.tEase > 0.5, this.bFade > 0.5, this.game.city.version, this.game.netVersion, this.layer, this.themeName, document.fonts ? document.fonts.status : ''].join('|');
-    let mx = Math.max(48, Math.round(this.w * 0.08)), my = Math.max(48, Math.round(this.h * 0.08));
+    // 余量按视野的两成留：一次拖动的位移常常吃不满这点余量，位图就一直贴着走，不用每帧重排版重描
+    let mx = Math.max(48, Math.round(this.w * 0.2)), my = Math.max(48, Math.round(this.h * 0.2));
     const pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr;
-    if (pix > 9e6) { const k2 = Math.sqrt(9e6 / pix); mx = Math.max(24, Math.floor(mx * k2)); my = Math.max(24, Math.floor(my * k2)); }
+    if (pix > LABEL_MAXPX) { const k2 = Math.sqrt(LABEL_MAXPX / pix); mx = Math.max(24, Math.floor(mx * k2)); my = Math.max(24, Math.floor(my * k2)); }
+    // 记账用整像素取整后的偏移：位图内容按这个偏移投影，贴回的位移也只有它变的时候才变
+    const sox = this.snapOx(), soy = this.snapOy();
     let image = this.labelImage;
-    if (image && image.key === key && image.C === this.drawnC) {
-      const dx = this.ox - image.ox, dy = this.oy - image.oy;
+    const reusable = !!image && image.key === key && image.C === this.drawnC;
+    if (reusable) {
+      const dx = sox - image.ox, dy = soy - image.oy;
       if (Math.abs(dx) <= image.mx && Math.abs(dy) <= image.my) {
-        // 贴图按设备像素取整，避免平移时文字被重采样发虚
-        const bx = Math.round(dx * this.dpr) / this.dpr, by = Math.round(dy * this.dpr) / this.dpr;
-        ctx.drawImage(image.cv, bx - image.mx, by - image.my, this.w + 2 * image.mx, this.h + 2 * image.my);
+        ctx.drawImage(image.cv, dx - image.mx, dy - image.my, this.w + 2 * image.mx, this.h + 2 * image.my);
+        return;
+      }
+    }
+    // 位图用不上、或余量刚好用尽时才到这里。余量用尽就地重描一次：缩放与内容都没变，
+    // 重描成本跟原先每帧直画相当，之后几十帧只贴图。真正用不上（缩放中每帧 key 都会变、相机还在动、
+    // 地铁层刚在这一帧重描过、正在补块）就直接画到主画布，别把一帧花在建一张马上作废的位图上
+    if (!reusable) {
+      this.labelImage = null;
+      if (this.zoomEasing || this.camMoving || this.camStill < 200 || this._metroBuiltFrame === this.frame || (this.stats.lodPreparing && this.camStill < 600)) {
+        this.drawLabelContent(ctx, ui, 0, 0);
         return;
       }
     }
@@ -3505,15 +3578,20 @@
     const x = cv.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cw, ch);
     x.setTransform(this.dpr, 0, 0, this.dpr, mx * this.dpr, my * this.dpr);
-    this.drawLabelContent(x, ui, mx, my);
-    image = this.labelImage = { key: key, C: this.drawnC, cv: cv, ox: this.ox, oy: this.oy, mx: mx, my: my };
+    this.drawLabelContent(x, ui, mx, my, sox, soy);
+    image = this.labelImage = { key: key, C: this.drawnC, cv: cv, ox: sox, oy: soy, mx: mx, my: my };
     ctx.drawImage(cv, -mx, -my, this.w + 2 * mx, this.h + 2 * my);
   };
-  Renderer.prototype.drawLabelContent = function (ctx, ui, mx, my) {
+  Renderer.prototype.drawLabelContent = function (ctx, ui, mx, my, sox, soy) {
     const g = this.game, z = this.z, v = this.view, city = g.city;
     if (g.preview) return;   // 开始界面背景不显示标注
-    // mx / my 是位图相对视野四周留的余量（像素）：画布外的标注也要一并画出，平移复用才连贯
+    // mx / my 是位图相对视野四周留的余量（像素）：画布外的标注也要一并画出，平移复用才连贯。
+    // sox / soy 是投影用的整像素偏移：重描位图时必须与记账的那一份一致，否则贴回去会差一个像素
     const mX = mx || 0, mY = my || 0;
+    // 重描位图时用记账那一份偏移，画完还原（其余绘制都依赖 this.px / this.py）
+    const sax = this.px, say = this.py;
+    if (sox != null) { this.px = sox; this.py = soy; }
+    try {
     let vx = v;
     if (mX || mY) {
       let ax0 = 1e9, ay0 = 1e9, ax1 = -1e9, ay1 = -1e9;
@@ -3528,7 +3606,13 @@
     this.labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
     this.mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
     const placed = new Map(), tile = 48;
+    const dpr = this.dpr || 1;
+    // 文字锚点对齐到设备像素：相机位移是连续的，文字落在亚像素位置时每帧的字形光栅化结果都不一样，
+    // 屏幕上看起来就是抖动闪烁。取整到整格后字形稳定，代价是最多偏半个设备像素
+    const snap = function (v) { return Math.round(v * dpr) / dpr; };
     const fits = function (x0, y0, x1, y1) {
+      // 避让判定也按对齐后的位置算：否则亚像素位移会让两个标注的相交关系逐帧翻转，低优先级的那个一直闪
+      x0 = snap(x0); y0 = snap(y0); x1 = snap(x1); y1 = snap(y1);
       const i0 = Math.floor(x0 / tile), i1 = Math.floor(x1 / tile), j0 = Math.floor(y0 / tile), j1 = Math.floor(y1 / tile);
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
         const list = placed.get(i + ':' + j);
@@ -3539,25 +3623,41 @@
       return true;
     };
     const halo = function (text, x, y, font, fill, align) {
+      const px = snap(x), py = snap(y);
       ctx.font = font; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
       ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo; ctx.lineJoin = 'round';
-      ctx.strokeText(text, x, y); ctx.fillStyle = fill; ctx.fillText(text, x, y);
+      ctx.strokeText(text, px, py); ctx.fillStyle = fill; ctx.fillText(text, px, py);
+    };
+    // 车站名、区名下面垫一块半透明底：底下的地面与街景每帧都在变，只靠描边时字口随底色明暗闪，
+    // 而且换乘站的白底圆点会把旁边的字吞掉。底框按对齐后的位置算，尺寸只由字宽和字号决定，不逐帧变化。
+    // 字号必须从字体串里的 "Npx" 取，不能对整串 parseFloat：那会拿到字重（600），底框高度会撑成几百像素
+    const plate = (text, x, y, font, align) => {
+      ctx.font = font; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+      const fs = /(\d+(?:\.\d+)?)px/.exec(font);
+      const w = Math.ceil(this.textWidth(ctx, text)) + 5, h = Math.round((fs ? +fs[1] : 12) * 1.55);
+      const x0 = snap((align === 'center' ? x - w / 2 : x) - 2), y0 = snap(y - h / 2);
+      ctx.fillStyle = TH.plate; ctx.fillRect(x0, y0, w, h);
     };
     // 车站名
     const C = this.drawnC;
     const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station' || this.layer === 'fac' || this.layer === 'gap';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
     if (C && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
       ctx.globalAlpha = this.labA;
-      const fs = Math.round((11.5 + U.clamp((z - 20) / 4, 0, 1)) * 4) / 4;
+      // 字号取整：0.25 像素的台阶会让排版宽度在缩放中反复变化，邻近标注跟着闪
+      const fs = Math.round(11.5 + U.clamp((z - 20) / 4, 0, 1));
       ctx.font = fs + 'px ' + FONT;
       const order = this.stPx.map(function (p, i) { return [p, i]; }).filter(function (a) { return a[0]; });
       order.sort(function (a, b) { return (C.stationLines[b[1]].size - C.stationLines[a[1]].size) || ({ L: 2, M: 1, S: 0 }[C.stations[b[1]].size] - { L: 2, M: 1, S: 0 }[C.stations[a[1]].size]); });
+      const stationFont = function (lines) { return (lines > 1 ? '600 ' : '') + fs + 'px ' + FONT; };
       for (const it of order) {
         const p = it[0], s = C.stations[it[1]];
+        const font = stationFont(C.stationLines[it[1]].size);
+        ctx.font = font;
         const w = this.textWidth(ctx, s.name);
         const x = p.x + p.r + 4, y = p.y;
-        if (!fits(x - 2, y - fs / 2 - 2, x + w + 2, y + fs / 2 + 2)) continue;
-        halo(s.name, x, y, (C.stationLines[it[1]].size > 1 ? '600 ' : '') + fs + 'px ' + FONT, TH.ink);
+        if (!fits(x - 2, y - fs / 2 - 2, x + w + 5, y + fs / 2 + 2)) continue;
+        plate(s.name, x, y, font);
+        halo(s.name, x, y, font, TH.ink);
       }
       ctx.globalAlpha = 1;
     }
@@ -3603,14 +3703,16 @@
         seen.add(gr.name);
         halo(text, pt.x, pt.y, '10.5px ' + FONT, TH.roadInk, 'center');
       }
-    }    // 区名
+    }
+    // 区名
     if (z < 16 && this.mapLabA > 0.01 && this.layer !== 'flow') {
       const a = U.clamp((16 - z) / 5, 0, 1) * 0.75;
-      const dfs = Math.round((15 + 2 * U.clamp((z - 7) / 4, 0, 1)) * 4) / 4;
+      const dfs = Math.round(15 + 2 * U.clamp((z - 7) / 4, 0, 1));
       for (const dl of (city.districtLabels || [])) {
         const p = this.P(dl[1], dl[2], 0);
+        const label = dl[0], font = '600 ' + dfs + 'px ' + FONT;
         ctx.globalAlpha = a * this.mapLabA;
-        halo(dl[0], p.x, p.y, '600 ' + dfs + 'px ' + FONT, TH.district, 'center');
+        halo(label, p.x, p.y, font, TH.district, 'center');
       }
       ctx.globalAlpha = 1;
     }
@@ -3632,6 +3734,7 @@
         shown.add(k);
       }
     }
+    } finally { this.px = sax; this.py = say; }
   };
 
   // ---------------- 拾取 ----------------
