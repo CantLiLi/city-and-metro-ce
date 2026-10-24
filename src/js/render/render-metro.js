@@ -121,8 +121,6 @@
       const bx = Math.round((this.lpx - m.ox) * (this.ldpr || 1)) / (this.ldpr || 1);
       const by = Math.round((this.lpy - m.oy) * (this.ldpr || 1)) / (this.ldpr || 1);
       if (Math.abs(bx) <= m.mx && Math.abs(by) <= m.my) {
-        const dx = bx - (m.dx || 0), dy = by - (m.dy || 0);
-        if (dx || dy) { this.shiftMetroPx(dx, dy, m.z); m.dx = bx; m.dy = by; }
         this.metroOx = this.lpx; this.metroOy = this.lpy;
         this.blitMetro(m.cv, bx, by, m.mx, m.my);
         this.drawMetroSel(ui, C);
@@ -144,8 +142,11 @@
     x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
     x.clearRect(0, 0, cw, ch);
     x.setTransform(d, 0, 0, d, mg.mx * d, mg.my * d);
-    // 位图里的内容按整设备像素的偏移投影：贴回时位移也是整格，两步都不重采样，线条才不会发虚
-    this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my));
+    // drawMetroStatic 用 this.px / this.py 投影，这里临时换成整设备像素的那一份：位图内容和贴回的
+    // 位移记在同一个网格上，回贴才是像素对像素，不会一贴就糊一格
+    const sax = this.px, say = this.py;
+    this.px = ox; this.py = oy;
+    try { this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my)); } finally { this.px = sax; this.py = say; }
     this.metroOx = ox; this.metroOy = oy;
     this.metroLayer = { core: core, full: full, cv: cv, ox: ox, oy: oy, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
     // 这一帧已经付过整层重描的代价：同一帧不要再重建标注位图，两笔重活撞一起就是一次明显的掉帧

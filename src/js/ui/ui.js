@@ -1669,6 +1669,7 @@
     if (this._searchClose) { window.removeEventListener('pointerdown', this._searchClose, true); this._searchClose = null; }
   };
   UI.prototype.openScreen = function (card, onEsc, cls) {
+    this.discardSheet();
     if (this.fold && this.fold.speed) { this.fold = {}; this.applyFold(); }
     if (this.tools) this.tools.cancelDrag();
     this.screen.onpointerdown = null;
@@ -1677,7 +1678,26 @@
     this.screen.appendChild(card);
     this.screenEsc = onEsc || null;
   };
-  UI.prototype.closeScreen = function () { this.screen.onpointerdown = null; this.screen.className = 'hidden'; this.screenEsc = null; this.screenRefresh = null; };
+  // 换界面 / 关界面时立刻作废滑出卡片的收尾：定时器、离场动画、兜底回调一并撤掉，
+  // 否则它的收尾会把刚铺上的界面藏掉或把旧节点放回来
+  UI.prototype.discardSheet = function () {
+    if (this._sheetSettle) { clearTimeout(this._sheetSettle); this._sheetSettle = null; }
+    if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
+    this._sheetBack = null;
+    this.screen.classList.remove('sheet-open');
+    this.screen.classList.remove('sheet-leaving');
+  };
+  UI.prototype.closeScreen = function () {
+    // 推进中的进度卡是直接铺在 #screen 上的，关闭只上 hidden 不清节点的话，
+    // 下一次弹浮层卡时它还会一起显出来，所以整层在关闭时一并清掉
+    this.discardSheet();
+    this.screen.onpointerdown = null;
+    this.screen.className = 'hidden';
+    this.screen.innerHTML = '';
+    this.screenEsc = null;
+    this.screenRefresh = null;
+    this.jumpBar = this.jumpPct = null;
+  };
   // ======================== 滑出卡片 ========================
   // 开始界面里点「设置 / 退出」时不再盖一张暗底弹窗，而是让卡片从主菜单右侧滑出来：
   // 主菜单、标题与地图都留在原处，背景不变暗，卡片也不压住主菜单。
@@ -1693,8 +1713,7 @@
     opts = opts || {};
     if (this.tools) this.tools.cancelDrag();
     // 上一次关闭还在收尾就被重新打开：作废它，否则它的定时器会把刚滑出的卡片藏掉
-    if (this._sheetSettle) { clearTimeout(this._sheetSettle); this._sheetSettle = null; }
-    if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
+    this.discardSheet();
     this.screen.onpointerdown = null;
     const root = this.screen.firstElementChild;
     const cls = this.screen.classList;
@@ -1759,6 +1778,8 @@
       if (done) return; done = true;
       clearTimeout(timer);
       if (self._sheetSettle === timer) self._sheetSettle = null;
+      // 收尾前整层已被别的界面接管：不要再改动它
+      if (!self.screen.contains(host)) return;
       // 没有开始界面兜底时，整层收掉回到游戏画面
       if (!startBg) {
         host.remove();
@@ -2229,6 +2250,10 @@
       if (r.ok) { if (self.saveSeq === ver) self.markSaved(g, r.savedAt, snap); }
       else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('自动保存失败：' + r.error, 'bad'); }
       return r;
+    }, function (e) {
+      self.saving = null;
+      if (self.g() === g) { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: String(e && e.message || e) }); }
+      return { ok: false, error: String(e && e.message || e) };
     });
     return this.saving;
   };
@@ -2243,6 +2268,9 @@
       self.rerenderPage();
       if (self.screenRefresh) self.screenRefresh();
       return r;
+    }, function (e) {
+      if (self.g() === g) { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: String(e && e.message || e) }); self.toast('保存失败：' + String(e && e.message || e), 'bad'); }
+      return { ok: false, error: String(e && e.message || e) };
     });
     this._manualSaves.add(pending);
     return pending.finally(function () { self._manualSaves.delete(pending); });
@@ -2250,11 +2278,11 @@
 
   // ======================== 跳月/跳年 与 失败 ========================
   UI.prototype.showJump = function () {
-    const g = this.g(), j = g.jumping;
+    const g = this.g(), j = g.jumping, t = j.target;
+    // 先收起旧界面：closeSheet 收尾时会清掉 jumpBar/jumpPct 引用，所以进度元素必须在它之后再建
+    this.closeSheet();
     this.jumpBar = h('i', { style: { width: '2%' } });
     this.jumpPct = h('b', { class: 'jump-pct' }, '2%');
-    const t = j.target;
-    this.closeSheet();
     this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)), null, 'jumping');
   };
   UI.prototype.updateJump = function (p) {
@@ -2262,15 +2290,22 @@
     if (this.jumpBar) this.jumpBar.style.width = v + '%';
     if (this.jumpPct) this.jumpPct.textContent = v + '%';
   };
+  UI.prototype.clearJump = function () {
+    this.discardSheet();
+    this.screen.onpointerdown = null;
+    this.screen.className = 'hidden';
+    this.screen.innerHTML = '';
+    this.screenEsc = null;
+    this.screenRefresh = null;
+    this.jumpBar = this.jumpPct = null;
+  };
   // 推进完成报告：推进一个月给出简短消息（可展开完整报告）；推进一年直接显示报告。
   // 报告：期间时间轴（大事标记）· 城市与交通指标卡（前 → 后与变化）· 城市经济 · 财政收支（经营挑战）· 任务 · 期间大事
   UI.prototype.showJumpResult = function (r) {
     const g = this.g(), self = this, a = r.after;
     const months = (r.to[0] - r.from[0]) * 12 + (r.to[1] - r.from[1]);
-    this.closeScreen();
-    this.lastReport = r;
+    this.clearJump();
     if (months <= 1 && !r.failed) {
-      this.closeOverlay();
       const d = a.pop - r.before.pop;
       this.toast('已推进到 ' + r.to[0] + '年' + r.to[1] + '月：人口 ' + U.fmtPeople(a.pop) + '（' + (d >= 0 ? '+' : '−') + U.fmtPeople(Math.abs(d)) + '），地铁分担率 ' + U.fmtPct(a.share) + (g.econ.isFree() ? '' : '，资金 ' + U.fmtMoney(a.funds)), 'good', { label: '查看报告', fn: function () { self.showReport(r); } });
       this.rerenderPage();

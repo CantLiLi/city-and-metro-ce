@@ -141,7 +141,7 @@
   CM.newGame = function (opts) {
     if (CM.Soundscape) CM.Soundscape.reset();
     const mp = CM.MAPS[opts.map] || CM.MAPS.gz;
-    // 加载页期间完成生成，动画走完再切换到游戏画面，避免建图卡住时露出空地图
+    // 加载页期间完成生成，生成一结束就收尾切到游戏画面，避免建图卡住时露出空地图
     if (!CM.LoadPage) {
       ui.showLoading('正在生成 ' + mp.cfg.START.y + ' 年的' + mp.data.city + '，并计算居民出行…');
       setTimeout(function () {
@@ -288,6 +288,9 @@
   if (R.lcv) R.lcv.classList.add('lab-intro');
   const mapIn = function () { canvas.classList.add('map-in'); if (R.lcv) R.lcv.classList.remove('lab-intro'); };
   CM.onLoadPageDone = mapIn;
+  // 启动进度：加载页换成本脚本时才挂上遮罩，初始化写完就收尾，不等固定时长。
+  // 背景城市在 80ms 后才生成，但那只是背景，不该拖着加载页
+  if (CM.LoadPage && CM.LoadPage.initial) CM.LoadPage.initial.done();
   CM.Save.init().then(function () { ui.showStart(); }, function () { ui.showStart(); });
   setTimeout(function () {
     if (!preview) { try { preview = makePreview(); } catch (e) { console.error(e); } }

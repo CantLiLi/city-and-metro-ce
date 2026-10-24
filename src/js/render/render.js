@@ -244,6 +244,7 @@
   // 不会再让文字每帧重新光栅化，标注也不会因为原坐标在整像素上逐帧翻转而闪
   Renderer.prototype.snapOx = function () { return Math.round(this.ox * this.dpr) / this.dpr; };
   Renderer.prototype.snapOy = function () { return Math.round(this.oy * this.dpr) / this.dpr; };
+  Renderer.prototype._snapPx = function (v) { const d = this.dpr || 1; return Math.round(v * d) / d; };
   Renderer.prototype.textWidth = function (ctx, text) {
     const key = ctx.font + '|' + text;
     let width = this.textWidths.get(key);
@@ -2301,7 +2302,7 @@
   Renderer.prototype.metroLayerKey = function (g, ui) {
     return [this.w, this.h, this.dpr, this.M.join(','), this.themeName,
       U.smooth(this.cam.under).toFixed(3), this.layer, (this.layerFade || 0).toFixed(2),
-      this.tEase > 0.05 ? 1 : 0, (ui && ui.highlightLine) || '', this.detail.tier, g.city.version, g.netVersion || 0,
+      this.tEase > 0.05 ? 1 : 0, (ui && ui.highlightLine) || '', g.city.version, g.netVersion || 0,
       g.model && g.model.version ? g.model.version : 0].join('|');
   };
   // 只合成视口那一块：位图比视口大一圈（余量），整幅贴上去等于每帧白合成视口外的部分，
@@ -2363,24 +2364,28 @@
       return;
     }
     const core = this.metroLayerKey(g, ui);
-    const full = core + '|' + this.z + '|' + this.hs + '|' + this.px + '|' + this.py;
+    // 位图按整设备像素的偏移出图，贴回时也只按整像素挪：位图里已经带上了主画布的 dpr 网格，
+    // 再用连续的 px/py 贴回，同一段轨道在停下的那一帧和下一帧会落在不同的子像素上（静止时是它自己的
+    // 重采样拷贝，拖动时是和地面同一套投影），描边粗细、抗锯齿深浅于是随视角在变
+    const ox = this._snapPx(this.px), oy = this._snapPx(this.py);
+    const full = core + '|' + this.z + '|' + this.hs + '|' + ox + '|' + oy;
     const m = this.metroLayer;
     if (m && m.cv && m.full === full) {
       this.blitMetro(ctx, m.cv, 0, 0, m.mx, m.my);
       this.drawMetroSel(ctx, ui, C);
+      this.blitMetGlys(ctx, ui, C, m.ox, m.oy);
       return;
     }
-    // 平移：位移还在位图余量内就整块贴着走（屏幕坐标缓存同步平移），超出余量交给快速路径。
-    // 贴图位移不做设备像素取整：位图从不回贴到自身，不存在「越贴越糊」，取整反而让整层轨道
-    // 相对连续移动的地面／车流按整像素跳（dpr=1 时最明显），看起来就是跟手差
+    // 平移：位移还在位图余量内就整块贴着走（屏幕坐标缓存同步平移），超出余量交给快速路径
     if (m && m.cv && m.core === core && m.z === this.z && !m.pxStale) {
-      const bx = this.px - m.ox, by = this.py - m.oy;
+      const bx = ox - m.ox, by = oy - m.oy;
       if (Math.abs(bx) <= m.mx && Math.abs(by) <= m.my) {
         const dx = bx - (m.dx || 0), dy = by - (m.dy || 0);
         if (dx || dy) { this.shiftMetroPx(dx, dy); m.dx = bx; m.dy = by; }
-        this.metroOx = this.px; this.metroOy = this.py;
+        this.metroOx = ox; this.metroOy = oy;
         this.blitMetro(ctx, m.cv, bx, by, m.mx, m.my);
         this.drawMetroSel(ctx, ui, C);
+        this.blitMetGlys(ctx, ui, C, m.ox, m.oy);
         return;
       }
     }
@@ -2401,9 +2406,11 @@
     x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
     x.clearRect(0, 0, cw, ch);
     x.setTransform(this.dpr, 0, 0, this.dpr, mg.mx * this.dpr, mg.my * this.dpr);
-    this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my));
-    this.metroOx = this.px; this.metroOy = this.py;
-    this.metroLayer = { core: core, full: full, cv: cv, ox: this.px, oy: this.py, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
+    const sax = this.px, say = this.py;
+    this.px = ox; this.py = oy;
+    try { this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my)); } finally { this.px = sax; this.py = say; }
+    this.metroOx = ox; this.metroOy = oy;
+    this.metroLayer = { core: core, full: full, cv: cv, ox: ox, oy: oy, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
     // 这一帧已经付过整层重描的代价：同一帧不要再重建标注位图，两笔重活撞一起就是一次明显的掉帧
     this._metroBuiltFrame = this.frame;
     this.blitMetro(ctx, cv, 0, 0, mg.mx, mg.my);
@@ -2413,12 +2420,13 @@
   // 几何照样精确（不像位图拉伸会糊、也不会露空档），代价是省掉道床、枕木、栏杆这些装饰
   Renderer.prototype.drawMetroFast = function (ctx, ui, C) {
     const under = U.smooth(this.cam.under), lw = this.lineWidthPx(), v = this.view;
+    const xfer = this.metroXfer(C);
     const hlLine = ui && ui.highlightLine;
     const lyrDim = this.layer === 'cong' || this.layer === 'flow' ? 1 - 0.65 * (this.layerFade || 0) : 1;
     const idx = this.metroIndex(C, v), order = idx.indexed.order, visible = idx.visible;
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     if (!this.segPx) this.segPx = new Map(); else this.segPx.clear();
-    const paths = new Map(), caps = new Map();
+    const paths = new Map(), caps = new Map(), marks = new Map();
     for (let q = 0; q < order.length; q++) {
       if (!visible.has(q)) continue;
       const o = order[q], s = o.cs.seg, bb = o.bbox;
@@ -2445,25 +2453,44 @@
         cp.path.moveTo(arr[0], arr[1]);
         for (let i = 2; i < arr.length; i += 2) cp.path.lineTo(arr[i], arr[i + 1]);
       }
+      // 轨面标记：静止版有中线／点线，拖动中少了它，松手时线会「变脏」一下
+      const mode = s.type === 'surface' ? 1 : (s.type === 'underground' ? 2 : 0);
+      if (mode) {
+        const runs = this.segDeco(o.cs)[mode === 1 ? 'ground' : 'buried'];
+        if (runs.length) {
+          const mk = mode + '|' + alpha;
+          let mp = marks.get(mk);
+          if (!mp) { mp = { path: new Path2D(), mode: mode, alpha: alpha }; marks.set(mk, mp); }
+          for (const r of runs) for (let i = r[0]; i <= r[1]; i++) {
+            if (i === r[0]) mp.path.moveTo(arr[i * 2], arr[i * 2 + 1]); else mp.path.lineTo(arr[i * 2], arr[i * 2 + 1]);
+          }
+        }
+      }
     }
     ctx.lineWidth = lw + 2.5;
     caps.forEach(function (p) { ctx.globalAlpha = p.alpha; ctx.strokeStyle = p.color; ctx.stroke(p.path); });
     ctx.lineWidth = lw;
     paths.forEach(function (p) { ctx.globalAlpha = p.alpha; ctx.strokeStyle = p.color; ctx.stroke(p.path); });
     ctx.globalAlpha = 1;
+    marks.forEach(function (mp) {
+      if (mp.mode === 1) { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, lw * 0.22); ctx.setLineDash([lw, lw]); }
+      else { if (this.game.preview) return; ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, lw * 0.18); ctx.setLineDash([2, lw * 1.6]); }
+      ctx.globalAlpha = mp.alpha; ctx.lineCap = 'butt'; ctx.stroke(mp.path);
+    }, this);
+    ctx.setLineDash([]); ctx.lineCap = 'round'; ctx.globalAlpha = 1;
     // 车站
     this.stPx = [];
     const R0 = U.clamp(this.z * 0.11, 3.2, 9);
     const mult = { S: 0.8, M: 1, L: 1.3 };
-    const groups = new Map();
+    const groups = new Map(), glyphs = new Map();
     for (let i = 0; i < C.stations.length; i++) {
       const s = C.stations[i];
       if (s.x < v.x0 - 1 || s.x > v.x1 + 1 || s.y < v.y0 - 1 || s.y > v.y1 + 1) { this.stPx.push(null); continue; }
       const p = this.P(s.x, s.y, this.stH(s, under));
       const lines = C.stationLines[i];
-      const inter = lines.size > 1;
+      const inter = lines.size > 1 || xfer.has(i);
       const r = R0 * mult[s.size] * (inter ? 1.4 : 1);
-      this.stPx.push({ x: p.x, y: p.y, r: r, id: s.id });
+      this.stPx.push({ x: p.x, y: p.y, cx: p.x, cy: p.y, r: r, id: s.id });
       let alpha = 1;
       if (hlLine && !lines.has(hlLine)) alpha = 0.35;
       alpha = Math.round(alpha * lyrDim * 20) / 20;
@@ -2474,13 +2501,99 @@
       if (!gp) { gp = { path: new Path2D(), r: r, alpha: alpha, stroke: stroke }; groups.set(key, gp); }
       gp.path.moveTo(p.x + r, p.y);
       gp.path.arc(p.x, p.y, r, 0, Math.PI * 2);
+      const gk = r * 0.36 + '|' + alpha;
+      let xg = glyphs.get(gk);
+      if (!xg) { xg = { path: new Path2D(), half: r * 0.36, alpha: alpha }; glyphs.set(gk, xg); }
+      xferPath(xg.path, p.x, p.y, xg.half);
     }
     groups.forEach(function (gp) {
       ctx.globalAlpha = gp.alpha;
       ctx.fillStyle = TH.stFill; ctx.fill(gp.path);
       ctx.strokeStyle = gp.stroke; ctx.lineWidth = Math.max(1.8, gp.r * 0.3); ctx.stroke(gp.path);
     });
+    // 换乘标识：静止版是逐站描的，这里按同样的尺寸归组批量描，拖动中不能只留个白点
+    glyphs.forEach(function (xg) {
+      ctx.globalAlpha = xg.alpha;
+      ctx.strokeStyle = TH.stInter; ctx.lineWidth = Math.max(1.2, xg.half * 0.7);
+      ctx.stroke(xg.path);
+    });
     ctx.globalAlpha = 1;
+  };
+  // 位图贴上去的那几帧：轨道和车站都在位图里，只补画静止版里逐站描的换乘标识。
+  // 位图内容挂在 (bx,by) 位移上，标识要按同一份位移落位，否则松手那一刻会跳一下
+  Renderer.prototype.blitMetGlys = function (ctx, ui, C, bx, by) {
+    const under = U.smooth(this.cam.under), v = this.view;
+    const hlLine = ui && ui.highlightLine;
+    const lyrDim = this.layer === 'cong' || this.layer === 'flow' ? 1 - 0.65 * (this.layerFade || 0) : 1;
+    const R0 = U.clamp(this.z * 0.11, 3.2, 9), mult = { S: 0.8, M: 1, L: 1.3 };
+    const xfer = this.metroXfer(C);
+    const glyphs = new Map();
+    for (let i = 0; i < C.stations.length; i++) {
+      const s = C.stations[i];
+      if (s.x < v.x0 - 1 || s.x > v.x1 + 1 || s.y < v.y0 - 1 || s.y > v.y1 + 1) continue;
+      const lines = C.stationLines[i];
+      if (!C.serviced[i] || !(lines.size > 1 || xfer.has(i))) continue;
+      const r = R0 * mult[s.size] * 1.4, half = r * 0.36;
+      if (r < 6.5) continue;
+      let alpha = 1;
+      if (hlLine && !lines.has(hlLine)) alpha = 0.35;
+      alpha = Math.round(alpha * lyrDim * 20) / 20;
+      const p = this.P(s.x, s.y, this.stH(s, under));
+      const gk = half + '|' + alpha;
+      let xg = glyphs.get(gk);
+      if (!xg) { xg = { path: new Path2D(), half: half, alpha: alpha }; glyphs.set(gk, xg); }
+      xferPath(xg.path, p.x - bx, p.y - by, half);
+    }
+    if (!glyphs.size) return;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    glyphs.forEach(function (xg) {
+      ctx.globalAlpha = xg.alpha;
+      ctx.strokeStyle = TH.stInter; ctx.lineWidth = Math.max(1.2, xg.half * 0.7);
+      ctx.stroke(xg.path);
+    });
+    ctx.globalAlpha = 1;
+  };
+  // 站外换乘关系只与线网结构有关，算一次存着
+  Renderer.prototype.metroXfer = function (C) {
+    if (this._xferC === C && this._xferVer === this.game.netVersion) return this._xferSet;
+    const mnet = this.game.model && this.game.model.net;
+    const set = new Set();
+    if (mnet && mnet.acc) {
+      const MC = mnet.C;
+      for (const tr of mnet.acc.transfers) {
+        if (tr.a > tr.b) continue;
+        const ia = C.sIndex.get(MC.stations[tr.a].id), ib = C.sIndex.get(MC.stations[tr.b].id);
+        if (ia === undefined || ib === undefined) continue;
+        const la = C.stationLines[ia], lb = C.stationLines[ib];
+        if (!la.size || !lb.size) continue;
+        let share = false; la.forEach(function (l) { if (lb.has(l)) share = true; });
+        if (share) continue;
+        set.add(ia); set.add(ib);
+      }
+    }
+    this._xferC = C; this._xferVer = this.game.netVersion; this._xferSet = set;
+    return set;
+  };
+  // 站外换乘的 A→B 两两连线（只画一次就在位图里，取像素即可）
+  Renderer.prototype.metroXferLinks = function (C) {
+    if (this._xlinkC === C && this._xlinkVer === this.game.netVersion) return this._xlink2;
+    const mnet = this.game.model && this.game.model.net, xs = [];
+    if (mnet && mnet.acc) {
+      const MC = mnet.C;
+      for (const tr of mnet.acc.transfers) {
+        if (tr.a > tr.b) continue;
+        const ia = C.sIndex.get(MC.stations[tr.a].id), ib = C.sIndex.get(MC.stations[tr.b].id);
+        if (ia === undefined || ib === undefined) continue;
+        const la = C.stationLines[ia], lb = C.stationLines[ib];
+        if (!la.size || !lb.size) continue;
+        let share = false; la.forEach(function (l) { if (lb.has(l)) share = true; });
+        if (share) continue;
+        const A = C.stations[ia], B = C.stations[ib];
+        xs.push({ x: A.x, y: A.y, h: CFG.metro.height[A.type] }, { x: B.x, y: B.y, h: CFG.metro.height[B.type] });
+      }
+    }
+    this._xlinkC = C; this._xlinkVer = this.game.netVersion; this._xlink2 = xs;
+    return xs;
   };
   // 选中高亮每帧单独画：位图缓存里放不了会呼吸的脉冲环
   Renderer.prototype.drawMetroSel = function (ctx, ui, C) {
@@ -2593,26 +2706,16 @@
       ctx.globalAlpha = 1;
     }
     // 站外换乘：两座不同线路的运营车站之间可步行换乘（虚线连接，两站都按换乘站标示）
-    const xfer = new Set(), xLinks = [];
-    const mnet = g.model && g.model.net;
-    if (mnet && mnet.acc) {
-      const MC = mnet.C;
-      for (const tr of mnet.acc.transfers) {
-        if (tr.a > tr.b) continue;
-        const ia = C.sIndex.get(MC.stations[tr.a].id), ib = C.sIndex.get(MC.stations[tr.b].id);
-        if (ia === undefined || ib === undefined) continue;
-        const la = C.stationLines[ia], lb = C.stationLines[ib];
-        if (!la.size || !lb.size) continue;
-        let share = false; la.forEach(function (l) { if (lb.has(l)) share = true; });
-        if (share) continue;
-        xfer.add(ia); xfer.add(ib); xLinks.push([ia, ib]);
-      }
-    }
+    const xfer = this.metroXfer(C), xLinks = this.metroXferLinks(C);
     const stH = (s) => this.stH(s, under);
     if (xLinks.length) {
-      ctx.strokeStyle = TH.stInter; ctx.globalAlpha = 0.55; ctx.lineWidth = Math.max(2, lw * 0.45); ctx.setLineDash([3, 4]); ctx.lineCap = 'round';
+      ctx.strokeStyle = TH.stInter; ctx.globalAlpha = 0.55; ctx.lineWidth = Math.max(2, lw * 0.45);
+      ctx.setLineDash([3, 4]); ctx.lineCap = 'round';
       ctx.beginPath();
-      for (const l of xLinks) { const A = C.stations[l[0]], B = C.stations[l[1]], pa = this.P(A.x, A.y, stH(A)), pb = this.P(B.x, B.y, stH(B)); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); }
+      for (let k = 0; k < xLinks.length; k += 2) {
+        const pa = this.P(xLinks[k].x, xLinks[k].y, stH(xLinks[k])), pb = this.P(xLinks[k + 1].x, xLinks[k + 1].y, stH(xLinks[k + 1]));
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+      }
       ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
     // 车站
@@ -2810,8 +2913,8 @@
       ctx.globalAlpha = 1;
       return;
     }
-    // 近景细节（枕木、栏杆、挡墙）只在缩放 ≥ 24 且自动细节未降档时绘制；负载升高时与其他中远景细节一起省略
-    const d = this.segDeco(cs), K = TH.trk, hs = cs.h, near = z >= 24 && this.detail.tier < 2;
+    // 近景细节（枕木、栏杆、挡墙）只跟缩放走：模型精度档位不参与地铁轨道绘制
+    const d = this.segDeco(cs), K = TH.trk, hs = cs.h, near = z >= 24;
     const fade = 1 - 2 * under;
     // 高出地面部分：2.5D 投影阴影与桥墩，2D 向右下偏移的阴影（偏移量随轨面高度变化，引桥逐渐抬升）
     if (d.raised) this.drawRaisedBase(ctx, cs, arr, alpha, width, t, d);
@@ -2822,12 +2925,6 @@
       else { ctx.globalAlpha = alpha; ctx.strokeStyle = K.deck; ctx.lineWidth = width + 6; strokeRange(ctx, arr, r); }
     }
     ctx.lineCap = 'butt';
-    // 地面：道床与枕木
-    if (d.ground.length) {
-      ctx.globalAlpha = alpha; ctx.strokeStyle = K.ballast; ctx.lineWidth = width + 3.5;
-      for (const r of d.ground) strokeRange(ctx, arr, r);
-      if (near) { ctx.strokeStyle = K.sleeper; ctx.setLineDash([1.3, Math.max(2.4, width * 0.55)]); for (const r of d.ground) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
-    }
     // 高出地面：留出与下方线路交叉的间隙，再画桥面衬边
     if (d.high.length) {
       ctx.globalAlpha = alpha; ctx.strokeStyle = TH.lineCase; ctx.lineWidth = width + 5;
@@ -2835,20 +2932,16 @@
       ctx.strokeStyle = TH.elevCase; ctx.lineWidth = width + 2.5;
       for (const r of d.high) strokeRange(ctx, arr, r);
     }
+    // 地面段 / 地下段的标记区间：标记只铺在有轨道的那些采样上
+    const markOn = s.type === 'surface' ? d.ground : (s.type === 'underground' ? d.buried : []);
     ctx.lineCap = 'round';
-    // 线路本色：地下段略透明
     ctx.strokeStyle = col; ctx.lineWidth = width;
-    if (d.buried.length === 1 && d.buried[0][0] === 0 && d.buried[0][1] === arr.length / 2 - 1) { ctx.globalAlpha = alpha * U.lerp(0.82, 1, under); this.strokeArr(ctx, arr); }
-    else {
-      ctx.globalAlpha = alpha; this.strokeArr(ctx, arr);
-      if (d.buried.length) { ctx.globalAlpha = alpha * 0.25 * fade; ctx.strokeStyle = TH.lineCase; ctx.lineWidth = width * 0.5; for (const r of d.buried) strokeRange(ctx, arr, r); }
-    }
-    ctx.globalAlpha = alpha;
-    // 中线标记：地面段白色短线，地下段白色点线
-    if (s.type === 'surface') { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); for (const r of d.ground) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
-    if (d.buried.length && !this.game.preview) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); for (const r of d.buried) strokeRange(ctx, arr, r); ctx.setLineDash([]); }
+    ctx.globalAlpha = alpha; this.strokeArr(ctx, arr);
+    ctx.globalAlpha = 1;
+    this.drawTrackMark(ctx, s.type === 'surface' ? 1 : (s.type === 'underground' ? 2 : 0), markOn, arr, alpha, width, K);
     if (near) {
       // 桥面栏杆（高架与越水桥梁）与引桥挡墙
+      ctx.globalAlpha = alpha;
       ctx.strokeStyle = K.parapet; ctx.lineWidth = 1;
       for (const r of d.high) { strokeOffset(ctx, arr, r, width / 2 + 1.25); strokeOffset(ctx, arr, r, -width / 2 - 1.25); }
       for (const r of d.water) { const mid = (r[0] + r[1]) >> 1; if (hs[mid] >= -DECO_FLAT && hs[mid] <= DECO_FLAT) { strokeOffset(ctx, arr, r, width / 2 + 2.6); strokeOffset(ctx, arr, r, -width / 2 - 2.6); } }
@@ -2911,14 +3004,27 @@
       ctx.stroke();
     }
   };
+  // 轨面标记；枕木色 K 由调用方传入，快慢两条路径各用各的主题表
+  Renderer.prototype.drawTrackMark = function (ctx, mode, runs, arr, alpha, width, K) {
+    if (!mode || !runs.length) return;
+    if (mode === 2 && this.game.preview) return;
+    ctx.globalAlpha = alpha;
+    if (mode === 1) { ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = Math.max(1, width * 0.22); ctx.setLineDash([width, width]); }
+    else if (mode === 3) { ctx.strokeStyle = K.ballast; ctx.lineWidth = width + 3.5; ctx.setLineDash([]); }
+    else { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = Math.max(1, width * 0.18); ctx.setLineDash([2, width * 1.6]); }
+    ctx.lineCap = 'butt';
+    for (const r of runs) strokeRange(ctx, arr, r);
+    ctx.setLineDash([]); ctx.lineCap = 'round'; ctx.globalAlpha = 1;
+  };
   // 换乘箭头（⇄）：上箭头向右、下箭头向左
   function xferGlyph(ctx, x, y, s, col) {
-    const a = s * 0.42, hd = s * 0.5;
     ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.2, s * 0.3); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(x - s, y - a); ctx.lineTo(x + s, y - a); ctx.lineTo(x + s - hd, y - a - hd);
-    ctx.moveTo(x + s, y + a); ctx.lineTo(x - s, y + a); ctx.lineTo(x - s + hd, y + a + hd);
-    ctx.stroke();
+    ctx.beginPath(); xferPath(ctx, x, y, s); ctx.stroke();
+  }
+  function xferPath(p, x, y, s) {
+    const a = s * 0.42, hd = s * 0.5;
+    p.moveTo(x - s, y - a); p.lineTo(x + s, y - a); p.lineTo(x + s - hd, y - a - hd);
+    p.moveTo(x + s, y + a); p.lineTo(x - s, y + a); p.lineTo(x - s + hd, y + a + hd);
   }
   Renderer.prototype.strokeArr = function (ctx, arr) {
     ctx.beginPath();

@@ -1,5 +1,5 @@
 'use strict';
-// 加载页：系统 logo + 进度条。启动时驻留 4s；进入地图与退出回主界面时各 4s，提示全部一次显示
+// 加载页：系统 logo + 进度条。显示多久由加载本身决定：加载一完成就快速跑满进度条并关闭
 (function (CM) {
   // 依赖 util.js 的 CM.U.h：它支持数组子节点与 html，自带的简化版会在提示渲染里抛异常
   const U = CM.U;
@@ -9,10 +9,11 @@
   const VERSION = CFG.GAME_VERSION || '2.0.0';
   const REPO = 'https://github.com/CantLiLi/city-and-metro-ce/issues';
 
-  // 三种场景：启动、进入地图、退出地图。时长与提示各自独立
+  // 三种场景：启动、进入地图、退出地图。提示各自独立。
+  // 时长不再固定：进度条先慢爬到 warmPct 等加载，加载一完成就快速跑满并关闭
   const SCENES = {
     boot: {
-      hold: 4000, warm: 3100, warmPct: 70, fin: 700,
+      warm: 3100, warmPct: 70, fin: 480,
       tips: [
         { t: '正在准备城市数据与地铁线路，请稍候' },
         { t: '建议最大化或全屏窗口游玩' },
@@ -21,7 +22,7 @@
       ],
     },
     enter: {
-      hold: 4000, warm: 2900, warmPct: 72, fin: 800,
+      warm: 2900, warmPct: 72, fin: 480,
       tips: [
         { t: '正在生成城市与居民出行数据，请稍候' },
         { t: '开局资金有限：先修一条主干线，再慢慢延伸' },
@@ -30,7 +31,7 @@
       ],
     },
     exit: {
-      hold: 4000, warm: 2900, warmPct: 72, fin: 800,
+      warm: 2900, warmPct: 72, fin: 480,
       tips: [
         { t: '正在保存进度并返回主菜单…' },
         { t: '进度已自动保存在本浏览器中，下次可点「继续游戏」' },
@@ -55,7 +56,7 @@
     mobile: 'resources/favicon.png',
   };
 
-  let root = null, finished = false, holdTimer = null, finTimer = null, onKey = null, pctRaf = 0;
+  let root = null, finished = false, onKey = null, pctRaf = 0;
 
   function mount(title) {
     if (root || !document.body) return null;
@@ -73,15 +74,20 @@
     return { tipEl: tipEl, barFill: barFill, pctEl: pctEl };
   }
 
-  // 数字进度跟着条子的实际宽度走，缓动曲线换了也不用改这里
-  function watchPct(barEl, barFill, pctEl) {
+  // 数字进度跟着条子的实际宽度走，缓动曲线换了也不用改这里（pct 给出目标值，减少动效时按它显示）
+  function watchPct(barEl, barFill, pctEl, pct) {
     const step = function () {
-      const total = barEl.getBoundingClientRect().width;
-      const got = barFill.getBoundingClientRect().width;
-      pctEl.textContent = (total > 0 ? Math.round(got / total * 100) : 0) + '%';
       pctRaf = requestAnimationFrame(step);
+      const total = barEl.getBoundingClientRect().width;
+      if (!total) { pctEl.textContent = '0%'; return; }
+      const got = barFill.getBoundingClientRect().width;
+      pctEl.textContent = Math.round(animating() ? got / total * 100 : pct()) + '%';
     };
     pctRaf = requestAnimationFrame(step);
+  }
+
+  function animating() {
+    return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
 
   function setTips(tipEl, list) {
@@ -95,9 +101,10 @@
 
   const OUT_MS = 520;
 
+  // 兜底：加载页卡住时不会永远挡住界面。启动/进入/退出各自最长等待，到点强制收尾
+  const WATCH = { boot: 12000, enter: 60000, exit: 30000 };
+
   function cleanup() {
-    clearTimeout(holdTimer); clearTimeout(finTimer);
-    holdTimer = finTimer = null;
     if (pctRaf) { cancelAnimationFrame(pctRaf); pctRaf = 0; }
     const el = root;
     if (el) {
@@ -125,7 +132,10 @@
   }
 
   // 打开加载页。opts.scene：boot | enter | exit；opts.onDone：关闭后执行；
-  // opts.onReady：加载页画出来之后执行，返回的函数在关闭后执行（用于把建城这类同步重活推到画面出现之后）
+  // opts.onReady：加载页画出来之后执行，返回的函数在关闭后执行（用于把建城这类同步重活推到画面出现之后）。
+  // 关闭时机由加载本身决定：进度条快速跑满后立刻关闭，不再固定显示几秒。
+  // 给了 onReady 就在它返回（加载完成）后收尾；没给就立刻收尾。
+  // 返回句柄：done() 手动标记加载完成
   function open(opts) {
     opts = opts || {};
     const sc = SCENES[opts.scene] || SCENES.boot;
@@ -133,33 +143,53 @@
     closing = onDone || null;
     finished = false;
     const ui = mount(opts.title);
-    if (!ui) { finished = true; closing = null; if (onDone) onDone(); return; }
+    if (!ui) { finished = true; closing = null; if (onDone) onDone(); return { done: function () {} }; }
     const tipEl = ui.tipEl, barFill = ui.barFill, pctEl = ui.pctEl;
-    // 两段式：先慢速爬到 warmPct，再快速收尾到 100%，最后留一小段满格
+    let ready = false, closed = false, boot = 0, pct = 0;
     barFill.style.transition = 'width ' + sc.warm + 'ms cubic-bezier(.3,.05,.55,.95)';
     requestAnimationFrame(function () { requestAnimationFrame(function () { barFill.style.width = sc.warmPct + '%'; }); });
-    watchPct(barFill.parentNode, barFill, pctEl);
-    finTimer = setTimeout(function () {
-      barFill.style.transition = 'width ' + sc.fin + 'ms cubic-bezier(.55,.05,.25,1)';
-      barFill.style.width = '100%';
-    }, sc.warm);
-    // 计时器先挂上：提示渲染出错也不能让加载页关不掉
-    holdTimer = setTimeout(finish, sc.hold);
+    pct = sc.warmPct;
+    watchPct(barFill.parentNode, barFill, pctEl, function () { return pct; });
     const tipList = opts.tips || sc.tips;
     if (opts.skippable !== false) {
-      onKey = function (e) { if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') finish(); };
+      onKey = function (e) { if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') done(); };
       document.addEventListener('keydown', onKey, true);
     }
     try { setTips(tipEl, tipList); } catch (e) { console.error(e); }
+    // 卡住兜底：无论谁没来报「加载完成」，到点都强制收尾，加载页不会永远盖着界面
+    boot = setTimeout(done, WATCH[opts.scene] || WATCH.boot);
+    // 加载完成：把进度条补到 100%（快速收尾），满格后立刻关闭
+    function done() {
+      if (ready || closed) return;
+      ready = true;
+      if (boot) { clearTimeout(boot); boot = 0; }
+      try {
+        barFill.style.transition = 'width ' + sc.fin + 'ms cubic-bezier(.55,.05,.25,1)';
+        barFill.style.width = '100%';
+      } catch (e) { console.error(e); }
+      pct = 100;
+      setTimeout(close, sc.fin);
+    }
+    function close() {
+      if (closed) return;
+      closed = true;
+      finish();
+    }
     if (opts.onReady) {
+      // 双重 rAF 之后再跑重活：先让加载页画出来，进度条的起始段动画同时进行
       requestAnimationFrame(function () {
         requestAnimationFrame(function () {
+          if (closed) return;
           let after = null;
           try { after = opts.onReady(); } catch (e) { console.error(e); }
           if (typeof after === 'function') { const prev = closing; closing = function () { if (prev) prev(); after(); }; }
+          done();
         });
       });
     }
+    // 没给 onReady 的场景（例如退出菜单要保留游戏状态）：立刻算加载完成，只跑「快速跑满 → 关闭」
+    else done();
+    return { done: done };
   }
 
   CM.LoadPage = {
@@ -169,8 +199,10 @@
     isOpen: function () { return !!root; },
     SCENES: SCENES,
     platform: platform,
+    initial: null,
   };
 
-  // 启动时立即挂遮罩：主脚本还要跑一长串初始化，等它调用 show() 时主界面可能已经画出来了
-  open({ scene: 'boot', skippable: false, onDone: function () { if (CM.onLoadPageDone) CM.onLoadPageDone(); } });
+  // 启动时立即挂遮罩：主脚本还要跑一长串初始化，等它调用 show() 时主界面可能已经画出来了。
+  // main.js 初始化写完会调用 initial.done() 收尾；这里另外有 WATCH.boot 兜底
+  CM.LoadPage.initial = open({ scene: 'boot', skippable: false, onDone: function () { if (CM.onLoadPageDone) CM.onLoadPageDone(); } });
 })(window.CM = window.CM || {});
