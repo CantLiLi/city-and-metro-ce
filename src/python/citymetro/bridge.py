@@ -14,7 +14,7 @@ import webbrowser
 
 import webview
 
-from citymetro import paths, storage
+from citymetro import paths, perf, prefs, storage
 from citymetro.about import APP_NAME, VERSION
 
 log = logging.getLogger('citymetro')
@@ -48,7 +48,7 @@ class ShellApi:
         if window is None:
             return None
         if mode == 'save':
-            dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, '城市与地铁-进度.cmsave.json'
+            dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, '城市与地铁社区版-进度.cmsave.json'
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
         # pywebview 的对话框会阻塞调用线程（主线程），必须与窗口生命周期错开
@@ -120,6 +120,14 @@ class ShellApi:
         except Exception as exc:
             return {'ok': False, 'error': str(exc)}
         return {'ok': True}
+
+    def set_gpu(self, enabled):
+        # GPU 加速由内核启动参数决定，网页只能把它记下来，下次启动才生效
+        return prefs.set_gpu(enabled)
+
+    def perf_stats(self, want_gpu=True):
+        # 右下角监控面板每秒问一次：本软件各进程的处理器、内存与显卡占用
+        return perf.snapshot(bool(want_gpu))
 
     def quit_app(self):
         # 只登记意图：关窗与存档等待都在 main.py 的退出线程里做，避免在 JS 调用线程里销毁窗口

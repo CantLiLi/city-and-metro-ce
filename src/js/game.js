@@ -176,7 +176,7 @@
   };
 
   // 月度处理（分步执行，避免画面卡顿）
-  Game.prototype.monthGen = function* () {
+  Game.prototype.monthGen = function* (par) {
     const y = this.clock.y, m = this.clock.m, city = this.city, model = this.model;
     // 城市更新前停止旧预测，避免分步刷新后恢复到旧需求或旧路网的计算中。
     if (this.draft) this.invalidatePrediction('城市正在更新，请在结算完成后重新计算预测');
@@ -240,7 +240,7 @@
     // 编译与模型刷新分多步执行；this.compiled 与模型网络在同一步内一起替换
     const C = M.compile(this.net, city);
     yield;
-    yield* model.refreshCityGen(C);
+    yield* model.refreshCityGen(C, par);
     this.compiled = C;
     if (this.macro && CM.Macro) CM.Macro.sample(this);   // 本月的岗位与交通效率（年度 GDP 取全年平均）
     yield;
@@ -295,6 +295,7 @@
     const td = Math.min(this.clock.d, U.daysInMonth(ty, tm));
     const snap = this.snapshotMetrics();
     const total = Math.max(1, months * 30);
+    this.lastJump = { months: months, from: [this.clock.y, this.clock.m], to: [ty, tm] };
     this.jumping = { months: months, target: [ty, tm, td], from: [this.clock.y, this.clock.m, this.clock.d], snap: snap, progress: 0, total: total, gen: this.jumpGen(ty, tm, td, months, total) };
     this.prevSpeed = this.speed;
     this.speed = 0;
@@ -309,11 +310,12 @@
       n++;
       this.jumping.progress = Math.min(0.98, n / total);
       if (crossed) {
-        yield* this.monthGen();
+        yield* this.monthGen(true);
         const mi = this.ym();
         // 短跳每月两类都求解；长跳每月轮流求解工作日与周末（每类每 2 个月更新一次，与单一日类型时的更新频率相同）
-        if (months <= 3 || U.ymIndex(this.clock.y, this.clock.m) * 32 + this.clock.d >= tgt) yield* this.model.solveGen(1);
-        else yield* this.model.solveGen(1, [mi % 2 === 0 ? 'wd' : 'we']);
+        // 求解时把起点需求计算分片到多核（par=true），由 stepJump 等待结果再继续
+        if (months <= 3 || U.ymIndex(this.clock.y, this.clock.m) * 32 + this.clock.d >= tgt) yield* this.model.solveGen(1, null, true);
+        else yield* this.model.solveGen(1, [mi % 2 === 0 ? 'wd' : 'we'], true);
       }
       if ((n & 7) === 0) yield;
     }
@@ -321,6 +323,8 @@
   };
   Game.prototype.stepJump = function () {
     const j = this.jumping, t0 = performance.now();
+    // 有一片小区需求正在 Worker 池里算：本帧不再推进，等它回来（同一个 gen 会从等待点继续）
+    if (j.wait) return;
     while (performance.now() - t0 < 14) {
       const r = j.gen.next();
       if (r.done) {
@@ -329,6 +333,13 @@
         this.recordHistoryIfNeeded();
         const res = { from: j.from, to: [this.clock.y, this.clock.m, this.clock.d], before: j.snap, after: this.snapshotMetrics(), failed: this.econ.failed };
         this.emit('jumpDone', res);
+        return;
+      }
+      if (r.value && r.value.parWait) {
+        const self = this, p = r.value.parWait;
+        j.wait = p;
+        p.then(function () { if (self.jumping === j) j.wait = null; }).catch(function () { if (self.jumping === j) j.wait = null; });
+        this.emit('jumpProgress', j.progress);
         return;
       }
     }

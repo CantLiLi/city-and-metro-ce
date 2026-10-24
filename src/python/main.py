@@ -12,7 +12,7 @@ import webview
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from citymetro import paths, storage, window
+from citymetro import paths, prefs, storage, window
 from citymetro.about import APP_ID, APP_NAME, VERSION
 from citymetro.bridge import ShellApi, bridge_script
 from citymetro.single_instance import InstanceLock
@@ -176,7 +176,7 @@ def main():
         private_mode=False,
         storage_path=storage.profile_dir(),
         debug=bool(os.environ.get('CM_DEBUG')),
-        localization={'global.quitConfirmation': '确定要退出城市与地铁吗？'},
+        localization={'global.quitConfirmation': '确定要退出城市与地铁社区版吗？'},
         icon=window.window_icon(),
     )
     lock.release()
@@ -188,6 +188,7 @@ def build_window():
     src_dir = paths.find_src_dir()
     size, min_size = window.window_size()
     dark = window.dark_mode()
+    window.apply_graphics_mode(prefs.gpu_enabled())
     log.info('启动 %s %s, src=%s, window=%dx%d, dark=%s',
              APP_ID, VERSION, src_dir, size[0], size[1], dark)
 
@@ -238,7 +239,7 @@ def show_error(message):
     webview.create_window(
         APP_NAME,
         html='<body style="font:16px/1.7 system-ui;padding:2.5rem;color:#243">'
-        '<b>无法启动城市与地铁</b><br>' + message + '</body>',
+        '<b>无法启动城市与地铁社区版</b><br>' + message + '</body>',
         width=width,
         height=240,
     )

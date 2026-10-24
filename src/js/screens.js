@@ -22,6 +22,7 @@
   };
   const eraOf = function (mp) { return Math.floor(mp.cfg.START.y / 10) * 10; };
   const eraName = function (e) { return e + ' 年代'; };
+  const REPO_ISSUES = 'https://github.com/CantLiLi/city-and-metro-ce/issues';
 
   // ======================== 开始界面 ========================
   // 标题装饰：线路、车站与城市剪影
@@ -41,8 +42,9 @@
         ic(icon), h('span', { class: 'lb' }, label), opts.sub ? h('span', { class: 'sub' }, opts.sub) : null, ic('chev', 18, 'chev'));
     };
     const title = h('h1', { class: 'start-title' }, '城市', h('span', { class: 'yu' }, '与'), '地铁');
+    const edition = h('div', { class: 'start-edition' }, 'Community Edition');
     const wrap = h('div', { class: 'start-wrap' },
-      title, h('div', { html: TITLE_DECO }),
+      title, edition, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
         btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),        btn('clock', '继续游戏', function () { if (latest) self.loadSlot(latest.slotId); }, { disabled: !latest, sub: latest ? ((CM.MAPS[latest.map || 'gz'] || {}).name || '') + ' · ' + latest.date[0] + '年' + latest.date[1] + '月' : '暂无存档' }),
         btn('gear', '设置', function () { self.showSettings(); }),
@@ -51,7 +53,8 @@
       !storageOk ? h('div', { class: 'callout bad', style: { marginTop: '14px' } }, ic('error'), h('div', { class: 'ct' }, '当前浏览器禁止本地存储，进度将无法自动保存。')) : null,
       h('div', { class: 'start-foot' }, '规划地铁、改变出行、塑造城市。', h('br'),
         h('a', { href: 'LICENSE.txt', target: '_blank', rel: 'noopener' }, '© 2026 VinsonFung · 仅限非商业使用'), h('br'),
-        h('a', { href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, '地图 © OpenStreetMap 贡献者 · ODbL'), ' · v' + CFG.GAME_VERSION));
+        h('a', { href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, '地图 © OpenStreetMap 贡献者 · ODbL'), ' · v' + CFG.GAME_VERSION),
+      h('div', { class: 'start-foot start-feedback' }, h('a', { href: REPO_ISSUES, target: '_blank', rel: 'noopener' }, ic('help', 13), '遇到问题？点此反馈')));
     // 右上角：更新公告 + 深浅模式（同一组按钮）
     const news = h('button', { class: 'corner-btn' + (newsSeen() ? '' : ' dot'), 'data-tip': '更新公告', 'aria-label': '更新公告', onclick: function () { self.showNews(function () { self.showStart(); }); } }, ic('megaphone'));
     this.startTheme = h('button', { class: 'corner-btn', 'aria-label': '切换深浅模式', onclick: function () { self.toggleTheme(); } });

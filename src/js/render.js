@@ -31,7 +31,7 @@
       },
       shadow2d: 'rgba(70,100,140,0.10)', bldStroke: 'rgba(100,130,170,0.16)', parkTree: 'rgba(125,180,125,0.5)',
       road: { local: '#ffffff', localCase: '#dee5ee', coll: '#ffffff', collCase: '#d0dbe7', art: '#ffffff', artCase: '#bfccdc', exp: '#f8fafd', expCase: '#a9b9cd', expLine: 'rgba(170,186,208,0.55)', bridgeCase: '#93a3b9', tunnel: 'rgba(140,156,178,0.45)', rail: '#ffffff', railCase: '#a5b1c2' },
-      lockFill: 'rgba(226,233,241,0.62)', lockHatch: 'rgba(150,166,188,0.2)',
+      lockFill: 'rgba(206,216,229,0.7)', lockHatch: 'rgba(133,150,175,0.24)',
       ink: '#1c2c45', halo: 'rgba(255,255,255,0.92)', district: '#58708f', landmarkInk: '#36557d', roadInk: '#7a8ca6', lockInk: '#7a889e',
       stFill: '#ffffff', stInter: '#25334a', isoShadow: 'rgba(80,110,150,0.10)', roofOld: [[226, 232, 240], [214, 222, 232]], roofInd: [222, 228, 236],
       tree: [[134, 188, 128], [112, 170, 112]], trunk: '#8f9c85', elevCase: 'rgba(90,112,145,0.45)', lineCase: 'rgba(255,255,255,0.96)', pier: '#a9b5c6',
@@ -59,7 +59,7 @@
       },
       shadow2d: 'rgba(0,0,0,0.32)', bldStroke: 'rgba(140,170,210,0.14)', parkTree: 'rgba(70,130,100,0.55)',
       road: { local: '#2b384b', localCase: '#162030', coll: '#324157', collCase: '#131c2a', art: '#3d4f68', artCase: '#0f1723', exp: '#4b6080', expCase: '#0e1520', expLine: 'rgba(150,180,220,0.3)', bridgeCase: '#080d15', tunnel: 'rgba(110,130,160,0.4)', rail: '#5a6678', railCase: '#0c121b' },
-      lockFill: 'rgba(8,12,20,0.5)', lockHatch: 'rgba(110,128,156,0.16)',
+      lockFill: 'rgba(8,12,20,0.56)', lockHatch: 'rgba(116,134,164,0.22)',
       ink: '#e6edf7', halo: 'rgba(12,18,28,0.88)', district: '#8ea2bd', landmarkInk: '#a9c4e8', roadInk: '#8d9db3', lockInk: '#95a3b7',
       stFill: '#ffffff', stInter: '#0e1622', isoShadow: 'rgba(0,0,0,0.28)', roofOld: [[78, 90, 108], [70, 80, 98]], roofInd: [72, 82, 98],
       tree: [[52, 108, 82], [42, 92, 70]], trunk: '#3e4a44', elevCase: 'rgba(0,0,0,0.6)', lineCase: 'rgba(10,16,26,0.92)', pier: '#4a566a',
@@ -71,7 +71,9 @@
   };  let TH = THEMES.light, GROUND = TH.ground, PAL = TH.pal;
 
   function Renderer(canvas) {
+    // 屏幕画布始终按默认方式取 2D 上下文（浏览器据此走 GPU）；关闭加速时整帧画在软件画布上，再整块拷过来
     this.cv = canvas; this.ctx = canvas.getContext('2d');
+    this.gpu = true; this.soft = null;
     this.dpr = 1; this.w = 0; this.h = 0;
     this.cam = { cx: 30, cy: 40, zoom: 13, tz: 13, anchor: null, view: 0, t: 0, under: 0, tu: 0, fly: null };
     this.ground = new Map(); this.iso = new Map(); this.cachePx = 0;
@@ -339,6 +341,27 @@
     this.dpr = dpr; this.w = w; this.h = h;
     this.cv.width = Math.round(w * dpr); this.cv.height = Math.round(h * dpr);
     this.cv.style.width = w + 'px'; this.cv.style.height = h + 'px';
+    // 软件画布跟屏幕画布同尺寸，整块拷贝时不做缩放
+    if (this.soft) { this.soft.width = this.cv.width; this.soft.height = this.cv.height; }
+  };
+  // GPU 加速开关：开启时直接画在屏幕画布上；关闭时画到要求 willReadFrequently 的画布上，
+  // 浏览器会把这张画布交给 CPU 光栅化（显卡驱动有问题或帧率异常时的退路）。切换立即生效，无需重载。
+  Renderer.prototype.setGpu = function (on) {
+    on = on !== false;
+    if (on === this.gpu) return;
+    this.gpu = on;
+    if (on) { this.soft = null; this.ctx = this.cv.getContext('2d'); return; }
+    this.soft = makeCanvas(this.cv.width || 1, this.cv.height || 1);
+    this.ctx = this.soft.getContext('2d', { willReadFrequently: true });
+  };
+  // 软件模式下每帧结束时把离屏画面整块拷到屏幕画布
+  Renderer.prototype.present = function () {
+    if (!this.soft) return;
+    const ctx = this.cv.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.soft, 0, 0);
   };
 
   // ---------------- 相机 ----------------
@@ -369,7 +392,7 @@
   };
   Renderer.prototype.panBy = function (dx, dy) {
     const d = this.screenToWorldDelta(dx, dy);
-    this.cam.cx -= d.x; this.cam.cy -= d.y; this.cam.fly = null; this.clampCam(); this.computeTransform();
+    this.cam.cx -= d.x; this.cam.cy -= d.y; this.cam.fly = null; this.cam.anchor = null; this.clampCam(); this.computeTransform();
   };
   Renderer.prototype.zoomAt = function (sx, sy, factor) {
     const c = this.cam;

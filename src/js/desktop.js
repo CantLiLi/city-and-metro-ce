@@ -11,7 +11,7 @@
     if (!api || typeof api[name] !== 'function') return Promise.reject(new Error('桌面接口不可用'));
     return Promise.resolve(api[name].apply(api, args || []));
   };
-  const info = { isDesktop: isDesktop, call: call, name: '城市与地铁', version: '' };
+  const info = { isDesktop: isDesktop, call: call, name: '城市与地铁社区版', version: '' };
   CM.desktop = info;
 
   info.exportJSON = function (text, filename) {
@@ -37,6 +37,11 @@
   };
 
   info.openDataDir = function () { return isDesktop() ? call('open_data_dir') : Promise.reject(new Error('仅桌面版可用')); };
+  // 显卡模式：外壳在下次启动时按这个值给内核加参数（关闭 GPU 加速时走软件渲染）
+  info.setGpu = function (on) {
+    if (!isDesktop()) return Promise.resolve(false);
+    return call('set_gpu', [!!on]).then(function (r) { return !!(r && r.ok); }, function () { return false; });
+  };
   info.openDoc = function (name) { return isDesktop() ? call('open_doc', [name]) : Promise.reject(new Error('仅桌面版可用')); };
   info.openExternal = function (url) { return isDesktop() ? call('open_external', [url]) : Promise.resolve(false); };
   // 由外壳关闭窗口：外壳会先等 __cmDesktopClose 把进度写完再销毁窗口

@@ -1,4 +1,5 @@
-城市与地铁 / City and Metro
+城市与地铁社区版（City and Metro Community Edition）
+基于 VinsonFung《城市与地铁》的社区版本
 非商业使用许可证 1.0 / Non-Commercial Use License 1.0
 
 Copyright (c) 2026 VinsonFung. All rights reserved.

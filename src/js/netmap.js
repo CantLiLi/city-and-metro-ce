@@ -780,7 +780,7 @@
       c.font = '800 ' + (30 * sc) + 'px ' + font; c.fillText((D.city || '') + (isGeo ? '地铁地理线网图' : '地铁线路示意图'), M0, 56 * sc);
       c.font = (15 * sc) + 'px ' + font; c.fillStyle = '#5d6b80';
       let nSt = 0; for (const id in net.stations) if (M.stationLines(net, id).length) nSt++;
-      c.fillText('游戏时间 ' + g.clock.y + ' 年 ' + g.clock.m + ' 月' + (useDraft ? '（含建设草案）' : '') + ' · ' + lines.length + ' 条线路 · ' + nSt + ' 座车站 · 《城市与地铁》', M0, 84 * sc);
+      c.fillText('游戏时间 ' + g.clock.y + ' 年 ' + g.clock.m + ' 月' + (useDraft ? '（含建设草案）' : '') + ' · ' + lines.length + ' 条线路 · ' + nSt + ' 座车站 · 《城市与地铁社区版》', M0, 84 * sc);
       c.drawImage(img, (cw - W * sc) / 2, headH, W * sc, H * sc);
       // 线路图例
       let y = headH + H * sc + 18 * sc;

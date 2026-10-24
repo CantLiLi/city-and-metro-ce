@@ -93,9 +93,11 @@
     return true;
   };
   Tools.prototype.onDown = function (e) {
-    const g = this.game(); if (!g || this.ui.blocking()) return;
+    const g = this.game(); if (!g) return;
     try { if (this.R.cv.setPointerCapture) this.R.cv.setPointerCapture(e.pointerId); } catch (err) { /* 指针已失效时忽略 */ }
     this.ptr = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: false, shift: e.shiftKey, alt: e.altKey, t: performance.now() };
+    // 结算动画、统计/网络图等遮挡期间：仍允许平移地图，只是不响应点击与建设
+    if (this.ui.blocking()) { this.ptr.blocked = true; return; }
     if (e.button === 1) { this.ptr.pan = true; e.preventDefault(); return; }
     // 延长手柄：进入绘线，拖到目标位置松开即连线（只点击则从该端点开始逐站绘制）
     const ext = e.button === 0 ? this.pickExtend(e.clientX, e.clientY) : null;
@@ -124,6 +126,7 @@
   Tools.prototype.onUp = function (e) {
     const g = this.game(); const p = this.ptr; this.ptr = null;
     if (!g || !p) return;
+    if (p.blocked) return;
     if (this.drag) { const ch = this.drag.changed; this.drag = null; g.endLive(ch); if (ch) sfx('place'); return; }
     if (p.extend) { if (p.moved && this.tool === 'line' && this.chain) this.onClick(e.clientX, e.clientY, false); return; }
     if (p.pan && p.moved) return;

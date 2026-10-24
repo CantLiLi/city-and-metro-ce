@@ -73,7 +73,7 @@
       const b = h('button', { class: 'sbtn' + (n === 0 ? ' pz' : ''), 'data-tip': tip, 'data-key': key, onclick: function () { if (n === 0) self.togglePause(); else self.setSpeed(n); } }, n === 0 ? ic('pause') : label);
       self.tbtns[id] = b; return b;
     };
-    const jmp = function (id, label, n, tip) { const b = h('button', { class: 'jbtn', 'data-tip': tip, onclick: function () { self.jump(n); } }, label); self.tbtns[id] = b; return b; };
+    const jmp = function (id, label, n, tip) { const b = h('button', { class: 'jbtn', 'data-tip': tip, onclick: function () { if (typeof n === 'function') n(); else self.jump(n); } }, label); self.tbtns[id] = b; return b; };
     // 右上操作按钮
     this.hbtns = {};
     const hb = function (key, icon, tip, onclick, keyHint) { const b = h('button', { class: 'hbtn', 'data-tip': tip, 'data-key': keyHint || null, onclick: onclick }, ic(icon)); self.hbtns[key] = b; return b; };
@@ -85,10 +85,10 @@
     planBtn.appendChild(this.planCnt);
     this.top = h('header', { id: 'hudTop', class: 'hud hidden' },
       h('div', { class: 'cluster glass citybar' },
-        h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁' })),
+        h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁社区版' })),
         datePill,
         h('div', { class: 'speed' }, spd('pause', '', 0, '暂停 / 继续', '空格'), spd('s1', '1×', 1, '正常速度', '1'), spd('s2', '3×', 2, '3 倍速', '2'), spd('s3', '8×', 3, '8 倍速', '3')),
-        h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'))),
+        h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'), jmp('custom', '+N月', function () { self.jumpCustom(); }, '自定义推进的月份数（同样按月度结算，结束后显示变化）'))),
       h('div', { class: 'spacer' }),
       h('div', { class: 'cluster glass metrics' },
         pill('money', '资金', 'coin', 'b-gold'), pill('econ', '经济增长', 'trend', 'b-violet', 'opt2'), pill('pop', '人口', 'people', 'b-blue', 'opt2'), pill('share', '地铁分担率', 'metro', 'b-teal', 'opt3'),
@@ -180,7 +180,13 @@
     this.renderDock();
     this.layoutHud();
     window.addEventListener('resize', function () { self.layoutHud(); });
-    CM.Settings.on(function (k) { if (k === 'uiScale') { self.layoutHud(); requestAnimationFrame(function () { self.renderToolbar(); }); } if (k === 'theme') self.renderThemeBtns(); });
+    CM.Settings.on(function (k) {
+      if (k === 'uiScale') {
+        self.layoutHud();
+        requestAnimationFrame(function () { self.renderToolbar(); if (self.dropdown && self.dropdown._place) self.dropdown._place(); });
+      }
+      if (k === 'theme') self.renderThemeBtns();
+    });
     this.renderThemeBtns();
   };
   // 消息与提示条居中于地图未被遮挡的区域（右侧面板打开时向左让开，避免挡住面板上的分页）
@@ -653,6 +659,50 @@
     const g = this.g(); if (!g) return;
     if (g.econ.failed) { this.showFailure(g.econ.failed); return; }
     if (!g.startJump(n)) this.toast('正在结算，请稍候', 'info');
+  };
+  // 自定义推进：确认后走与 +1月 / +1年 完全相同的结算流程
+  UI.prototype.jumpCustom = function () {
+    const g = this.g(); if (!g) return;
+    if (g.econ.failed) { this.showFailure(g.econ.failed); return; }
+    if (g.jumping || g.pending) { this.toast('正在结算，请稍候', 'info'); return; }
+    const self = this;
+    const prevCls = this.screen.className;
+    const prev = prevCls.indexOf('hidden') >= 0 ? null : Array.from(this.screen.childNodes);
+    const prevEsc = this.screenEsc;
+    const restore = function () {
+      if (prev) { self.screen.innerHTML = ''; self.screen.className = prevCls + ' noanim'; prev.forEach(function (n) { self.screen.appendChild(n); }); self.screenEsc = prevEsc; }
+      else self.closeScreen();
+    };
+    const input = h('input', { type: 'range', min: '0', max: '999', step: '1', value: '12', style: { flex: '1', accentColor: 'var(--accent)' } });
+    const valueEl = h('b', { style: { fontVariantNumeric: 'tabular-nums' } }, '');
+    const sync = function () {
+      const n = parseInt(input.value, 10) || 0;
+      let s = n + ' 个月';
+      if (n >= 12) s += '（' + Math.floor(n / 12) + ' 年' + (n % 12 ? ' ' + (n % 12) + ' 个月' : '') + '）';
+      valueEl.textContent = s;
+    };
+    input.addEventListener('input', sync);
+    input.addEventListener('change', sync);
+    const chips = [1, 3, 6, 12, 60, 120].map(function (n) {
+      return h('button', { class: 'btn sm', onclick: function () { input.value = String(n); sync(); input.focus(); } }, n >= 12 ? (n / 12) + ' 年' : n + ' 个月');
+    });
+    const ok = function () {
+      const n = parseInt(input.value, 10);
+      if (!isFinite(n) || n < 1) { self.toast('请选择大于 0 的月份数', 'bad'); input.focus(); return; }
+      restore(); self.jump(n);
+    };
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ok(); } });
+    const card = h('div', { class: 'card', style: { width: 'min(420px, calc(100vw - 32px))' } },
+      this.cardHead('hourglass', 'b-blue', '自定义推进'),
+      h('div', { class: 'note', style: { fontSize: '13px' } }, '拖动滑条选择要前进的月份数（0–999）。确认后按与「+1 月 / +1 年」相同的月度结算推进，结束后显示这段时间的变化。'),
+      h('div', { class: 'field' }, h('label', null, '前进月数'),
+        h('div', { class: 'row', style: { gap: '10px' } }, input),
+        h('div', { style: { textAlign: 'right', marginTop: '2px' } }, valueEl)),
+      h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', marginBottom: '4px' } }, chips),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: restore }, '取消'), h('button', { class: 'btn primary', onclick: ok }, '推进')));
+    this.openScreen(card, restore);
+    sync();
+    setTimeout(function () { input.focus(); }, 30);
   };
   // 切换工具：不再占用右侧面板，工具选项显示在底部工具条上方
   UI.prototype.onToolChange = function (t) {
@@ -1275,7 +1325,7 @@
     const narrowItem = function (icon, label, fn) { const b = item(icon, label, fn); b.classList.add('dd-narrow'); return b; };
     const g = this.g();
     const dd = h('div', { class: 'dropdown' },
-      h('div', { class: 'dd-head' }, h('img', { src: 'resources/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
+      h('div', { class: 'dd-head' }, h('img', { src: 'resources/logo-white.png', alt: '' }), h('div', null, h('b', null, g ? g.name : '城市与地铁社区版'), h('div', { class: 'tiny muted' }, g ? (g.econ.isFree() ? '自由建造' : '经营挑战') + ' · ' + g.clock.y + '年' + g.clock.m + '月' : ''), g ? h('div', { class: 'tiny ' + (self.save.state === 'error' ? 'bad' : (self.isSaved() ? 'good' : 'muted')) }, self.saveStatusText()) : null)),
       item('save', '保存进度', function () { self.manualSave(); }),
       item('folder', '读取存档', function () { self.showSaveManager(true); }),
       h('hr'),
@@ -1650,7 +1700,7 @@
     // 主界面（开始界面）里用滑出卡片；游戏内设置仍是一张普通全屏弹窗
     const asSheet = !inGame;
     const back = function () { if (asSheet) self.closeSheet(); else self.closeScreen(); };
-    const row = function (icon, title, ctl, desc) { return h('div', { class: 'set-row' }, h('span', { class: 'set-ico' }, ic(icon)), h('div', { class: 'grow' }, h('div', { class: 'set-t' }, title), desc ? h('div', { class: 'set-d' }, desc) : null), ctl); };
+    const row = function (icon, title, ctl, desc, cls) { return h('div', { class: 'set-row' + (cls ? ' ' + cls : '') }, h('span', { class: 'set-ico' }, ic(icon)), h('div', { class: 'grow' }, h('div', { class: 'set-t' }, title), desc ? h('div', { class: 'set-d' }, desc) : null), ctl); };
     const toggle = function (key, onChange) {
       const b = h('button', { class: 'switch' + (S.get(key) ? ' on' : ''), role: 'switch', 'aria-checked': S.get(key) ? 'true' : 'false', 'data-silent': '1', onclick: function () {
         S.set(key, !S.get(key)); b.classList.toggle('on', !!S.get(key)); b.setAttribute('aria-checked', S.get(key) ? 'true' : 'false'); snd('toggle'); if (onChange) onChange();
@@ -1671,6 +1721,13 @@
       btns.forEach(function (b) { c.appendChild(b); });
       return c;
     };
+    // 界面缩放：0.5–1.5 倍滑动条。拖动只更新 --uiz，松手才广播（否则每帧重排导致闪烁）
+    const scaleVal = h('span', { class: 'set-val' }, Math.round(S.get('uiScale') * 100) + '%');
+    const scaleIn = h('input', {
+      type: 'range', min: 0.5, max: 1.5, step: 0.05, value: Math.min(1.5, S.get('uiScale')), 'aria-label': '界面大小',
+      oninput: function (e) { S.preview('uiScale', +e.target.value); scaleVal.textContent = Math.round(e.target.value * 100) + '%'; },
+      onchange: function () { S.commit('uiScale'); snd('good'); },
+    });
     // 三路音量：总音量（含界面音效）、列车音效、城市环境音；关闭音效时一并变灰
     const volRows = [];
     const volRow = function (key, icon, title, desc) {
@@ -1681,10 +1738,24 @@
       volRows.push(r);
       return r;
     };
+    // 运行监控：总开关决定显不显示，四个分项各自决定显示哪个数值
+    const mgRows = [];
+    const monRow = function (key, icon, title, desc) {
+      const r = row(icon, title, toggle(key), desc, 'dim' + (S.get('monitor') ? '' : ' off'));
+      mgRows.push(r);
+      return r;
+    };
     const body = h('div', { class: 'set-body single' },
-      row('expand', '界面大小', seg('uiScale', [[0.9, '小'], [1, '标准'], [1.15, '大']])),
+      row('expand', '界面大小', h('div', { class: 'set-slider' }, scaleIn, scaleVal), '按倍率缩放游戏内界面与主菜单', 'scale-row'),
       row('label', '地图标注', seg('labels', [['all', '全部'], ['stations', '仅车站'], ['none', '关闭']])),
       row('car', '车辆与行人', toggle('agents'), '关闭后交通模拟照常进行，只是不显示运动的车辆和行人'),
+      row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '用显卡渲染画面；关闭后用处理器（CPU）渲染，显卡驱动异常、花屏时可以关掉，但可能引起动画不流畅、帧率变低。切换后需重启游戏生效'),
+      row('clock', '最大帧率', seg('fpsLimit', [[0, '不限'], [30, '30'], [60, '60'], [90, '90'], [120, '120'], [144, '144']]), '限制画面每秒最多绘制多少帧；调低更省电，调高更流畅'),
+      row('radar', '显示监控信息', toggle('monitor', function () { mgRows.forEach(function (r) { r.classList.toggle('off', !S.get('monitor')); }); }), '在右下角显示本软件的运行占用，可逐项选择显示哪些数值'),
+      monRow('monCpu', 'pulse', 'CPU 占用', '本软件所有进程占整机处理器的比例'),
+      monRow('monRam', 'chart', '内存占用', '本软件所有进程占用的内存合计'),
+      monRow('monGpu', 'bolt', 'GPU 占用', '本软件占用显卡引擎的比例；网页版拿不到进程占用，会显示为 —'),
+      monRow('monFps', 'timer', '帧率', '当前画面每秒绘制的帧数'),
       row('sound', '声音', toggle('sound', function () { volRows.forEach(function (r) { r.classList.toggle('off', !S.get('sound')); }); })),
       volRow('volume', 'sound', '总音量'),
       volRow('trainVol', 'train', '列车音效', '列车行驶、进出站与车门提示；跟随列车时更突出'),
@@ -1694,7 +1765,7 @@
       h('div', { class: 'card-head' }, h('span', { class: 'badge b-slate' }, ic('gear')), h('h2', null, '设置'), h('span', { class: 'grow' }), h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: back }, ic('close'))),
       body,
       h('div', { class: 'set-foot' },
-        h('span', { class: 'muted tiny grow' }, '城市与地铁 v' + CFG.GAME_VERSION + ' · 地图 © OpenStreetMap 贡献者'),
+        h('span', { class: 'muted tiny grow' }, '城市与地铁社区版 v' + CFG.GAME_VERSION + ' · 地图 © OpenStreetMap 贡献者'),
         h('button', { class: 'btn sm ghost', onclick: function () {
           if (asSheet) self.sheetConfirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
           else self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
@@ -1822,7 +1893,7 @@
   };
   UI.prototype.loadSlot = function (slotId) {
     const self = this;
-    this.showLoading('正在读取存档…');
+    // 不弹旧式「正在读取存档」白卡：读盘完成后紧接着就是加载页，两张卡会连续闪
     CM.Save.load(slotId).then(function (data) { CM.loadGame(data); }, function (e) {
       snd('error');
       self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '无法载入'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档与当前进度未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
@@ -1833,7 +1904,12 @@
   UI.prototype.backToMenu = function (after) {
     const self = this;
     const g = this.g();
-    const go = function () { CM.endGame(); if (typeof after === 'function') after(); else self.showStart(); };
+    const go = function () {
+      const next = function () { CM.endGame(); if (typeof after === 'function') after(); else self.showStart(); };
+      // 退出地图的加载页：先把游戏状态收掉再建界面，加载页盖住这段切换
+      if (CM.LoadPage && CM.LoadPage.open) CM.LoadPage.open({ scene: 'exit', onDone: next });
+      else next();
+    };
     if (!g) { go(); return; }
     const leave = function () {
       if (g.speed > 0) self.setSpeed(0);   // 先暂停，保证保存的就是离开时的状态
@@ -1916,10 +1992,15 @@
   UI.prototype.showJump = function () {
     const g = this.g(), j = g.jumping;
     this.jumpBar = h('i', { style: { width: '2%' } });
+    this.jumpPct = h('b', { class: 'jump-pct' }, '2%');
     const t = j.target;
-    this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'progress', style: { marginTop: '14px', height: '9px' } }, this.jumpBar)), null);
+    this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)), null);
   };
-  UI.prototype.updateJump = function (p) { if (this.jumpBar) this.jumpBar.style.width = Math.round(p * 100) + '%'; };
+  UI.prototype.updateJump = function (p) {
+    const v = Math.max(0, Math.min(100, Math.round((p || 0) * 100)));
+    if (this.jumpBar) this.jumpBar.style.width = v + '%';
+    if (this.jumpPct) this.jumpPct.textContent = v + '%';
+  };
   // 推进完成报告：推进一个月给出简短消息（可展开完整报告）；推进一年直接显示报告。
   // 报告：期间时间轴（大事标记）· 城市与交通指标卡（前 → 后与变化）· 城市经济 · 财政收支（经营挑战）· 任务 · 期间大事
   UI.prototype.showJumpResult = function (r) {

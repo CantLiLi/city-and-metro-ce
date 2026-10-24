@@ -4,6 +4,8 @@
   const CFG = CM.CFG;
   const canvas = document.getElementById('map');
   const R = new CM.Renderer(canvas);
+  // 显卡模式只在启动时决定一次：关闭时改画到要求频繁读取的画布（浏览器按软件光栅化处理）
+  if (CM.Settings.get('gpu') === false) R.setGpu(false);
   const ui = new CM.UI(R);
   const tools = new CM.Tools(R, ui);
   ui.tools = tools;
@@ -128,17 +130,53 @@
   CM.newGame = function (opts) {
     if (CM.Soundscape) CM.Soundscape.reset();
     const mp = CM.MAPS[opts.map] || CM.MAPS.gz;
-    ui.showLoading('正在生成 ' + mp.cfg.START.y + ' 年的' + mp.data.city + '，并计算居民出行…');
-    setTimeout(function () {
-      try { CM.useMap(mp.id); start(CM.Game.create(opts), true); } catch (e) { CM.useMap(CM.game ? CM.game.mapId : 'gz'); fail(e, '创建新游戏'); }
-    }, 60);
+    // 加载页期间完成生成，动画走完再切换到游戏画面，避免建图卡住时露出空地图
+    if (!CM.LoadPage) {
+      ui.showLoading('正在生成 ' + mp.cfg.START.y + ' 年的' + mp.data.city + '，并计算居民出行…');
+      setTimeout(function () {
+        try { CM.useMap(mp.id); start(CM.Game.create(opts), true); } catch (e) { CM.useMap(CM.game ? CM.game.mapId : 'gz'); fail(e, '创建新游戏'); }
+      }, 60);
+      return;
+    }
+    // 同样是先出加载页再建城：建城是同步的重活，放在加载页画出来之后
+    CM.LoadPage.open({
+      scene: 'enter',
+      onReady: function () {
+        let game = null, err = null;
+        try { CM.useMap(mp.id); game = CM.Game.create(opts); } catch (e) { err = e; if (CM.game) CM.useMap(CM.game.mapId || 'gz'); }
+        return function () {
+          if (err) { fail(err, '创建新游戏'); return; }
+          ui.closeScreen();
+          start(game, true);
+        };
+      },
+    });
   };
   CM.loadGame = function (data) {
     if (CM.Soundscape) CM.Soundscape.reset();
-    ui.showLoading('正在载入存档并恢复城市与交通状态…');
-    setTimeout(function () {
-      try { CM.useMap((data.meta && data.meta.map) || 'gz'); start(CM.Game.restore(data), false); } catch (e) { CM.useMap(CM.game ? CM.game.mapId : 'gz'); fail(e, '载入存档'); }
-    }, 60);
+    if (!CM.LoadPage) {
+      ui.showLoading('正在载入存档并恢复城市与交通状态…');
+      setTimeout(function () {
+        try { CM.useMap((data.meta && data.meta.map) || 'gz'); start(CM.Game.restore(data), false); } catch (e) { CM.useMap(CM.game ? CM.game.mapId : 'gz'); fail(e, '载入存档'); }
+      }, 60);
+      return;
+    }
+    // 先让加载页画出来再恢复存档：恢复是同步的重活，放在它后面才不会「点一下没反应」
+    CM.LoadPage.open({
+      scene: 'enter',
+      onReady: function () {
+        let game = null, err = null;
+        try {
+          CM.useMap((data.meta && data.meta.map) || 'gz');
+          game = CM.Game.restore(data);
+        } catch (e) { err = e; if (CM.game) CM.useMap(CM.game.mapId || 'gz'); }
+        return function () {
+          if (err) { fail(err, '载入存档'); return; }
+          ui.closeScreen();
+          start(game, false);
+        };
+      },
+    });
   };
   CM.endGame = function () {
     if (CM.Soundscape) CM.Soundscape.reset();
@@ -167,11 +205,24 @@
     previewCamera(0);
   };
 
-  let last = performance.now(), fpsAcc = 0, fpsN = 0;
+  let last = performance.now(), pending = 0, gate = 0, fpsAcc = 0, fpsN = 0;
   function frame(t) {
-    const workStarted = performance.now();
-    const dt = Math.min(0.1, Math.max(0, (t - last) / 1000));
+    requestAnimationFrame(frame);
+    const elapsed = Math.max(0, t - last);
     last = t;
+    // 最大帧率：按屏刷的整数倍跳帧。每轮只扣掉一个间隔、余量留到下一轮，
+    // 否则高刷屏上只能按「几个刷新周期」取整（144Hz 屏要 3 个周期才够 1/60 秒，结果只有 48 帧）
+    const limit = +CM.Settings.get('fpsLimit') || 0;
+    pending += elapsed;
+    if (limit > 0) {
+      const step = 1000 / limit;
+      gate += elapsed;
+      if (gate < step) return;
+      gate = gate >= step * 3 ? 0 : gate - step;
+    } else gate = 0;
+    const dt = Math.min(0.1, pending / 1000);
+    pending = 0;
+    const workStarted = performance.now();
     const g = CM.game;
     if (g) {
       try { g.update(dt); } catch (e) { console.error(e); }
@@ -183,13 +234,13 @@
       previewCamera(dt);
       try { CM.agents.updatePreview(dt, preview, R); } catch (e) { console.error(e); }
     }
-    try { R.render(dt, ui); } catch (e) { console.error(e); }
+    try { R.render(dt, ui); R.present(); } catch (e) { console.error(e); }
     try { CM.Soundscape.tick(dt); } catch (e) { console.error(e); }
     ui.tick(dt);
+    if (CM.Monitor) CM.Monitor.tick(dt);
     R.noteFrameTime(performance.now() - workStarted);
     fpsAcc += dt; fpsN++;
     if (fpsAcc > 1) { R.stats.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
-    requestAnimationFrame(frame);
   }
   window.addEventListener('beforeunload', function () { if (CM.game && !ui.isSaved()) ui.doAutosave(); });
   window.addEventListener('resize', function () { R.resize(); });
@@ -207,7 +258,6 @@
   // 先显示开始界面，再在下一帧之后生成背景城市，地图淡入（打开不卡顿）
   canvas.classList.add('map-intro');
   CM.onLoadPageDone = function () { canvas.classList.add('map-in'); };
-  CM.LoadPage.show();
   CM.Save.init().then(function () { ui.showStart(); }, function () { ui.showStart(); });
   setTimeout(function () {
     if (!preview) { try { preview = makePreview(); } catch (e) { console.error(e); } }

@@ -490,7 +490,7 @@
   // 时间切片版本：每 16 个起点让出一次；结果在最后一次性替换 this.od
   // 生产约束的重力模型：各目的的出行总量只由居住人口与出行率决定，设施只改变去向（不凭空增加出行）；
   // 枢纽接驳由设施给定（外生的铁路与航空旅客），按人口与岗位分布到全市
-  Model.prototype.buildDemandGen = function* () {
+  Model.prototype.buildDemandGen = function* (par) {
     const Z = this.Z, y = this.year, c = CFG.choice, T = CFG.trips, Fac = CM.Fac;
     const fn = this.fn, F = fn.F, NZ = fn.NZ;
     const L1 = U.interp(c.distDecayHW, y), L2 = U.interp(c.distDecayHO, y);
@@ -542,7 +542,21 @@
       w: [new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z)],
       wf: [null, new Float64Array(F), new Float64Array(F), new Float64Array(F), new Float64Array(F)],
       scores: new Float64Array(Z), s: new Float64Array(5), kk: new Float64Array(5), cand: new Int32Array(Z), candF: new Int32Array(Math.max(1, F)),
-      out: ob, n: 0, tot: new Float64Array(NPK) };
+      out: ob, n: 0, tot: new Float64Array(NPK), per: per };
+    // 各起点之间互相独立，可以分给多个 Worker 并行算；不可用或有片失败时回退到下面的串行循环
+    if (par && CM.SimPar && CM.SimPar.ready()) {
+      const self = this;
+      this.parOd = null;
+      yield { parWait: CM.SimPar.demand(D).then(function (r) { self.parOd = r; }) };
+      const r = this.parOd;
+      this.parOd = null;
+      if (r) {
+        this._odBufs[this._odFlip] = r.buf;
+        this.od = { start: r.start, dest: r.dest, t: r.t, tot: r.tot, F: F, NZ: NZ, key: fn.key };
+        this.version++;
+        return;
+      }
+    }
     const start = new Int32Array(Z + 1);
     for (let i = 0; i < Z; i++) {
       if (i > 0 && (i & 15) === 0) yield;
@@ -556,11 +570,11 @@
   };
   // 分步版本（月度处理中使用，避免单帧长时间停顿）。进行期间暂停实时求解与预测（见 step），
   // 使其不会读到新旧混合的小区/需求/路网状态；计算结果与一次性执行相同。
-  Model.prototype.refreshCityGen = function* (C) {
+  Model.prototype.refreshCityGen = function* (C, par) {
     this.refreshing = true;
     try {
       this.buildZones();
-      yield* this.buildDemandGen();
+      yield* this.buildDemandGen(par);
       if (this.city.roadVersion !== this.roadVer) { this.syncRoad(); yield; }
       if (this.net || C) this.setNetwork(C || this.net.C, true); // 步行网络与覆盖随城市变化重算
       this.gen = null;
@@ -963,10 +977,17 @@
       perMin: IND.perMin, capSh: IND.cap.sh, capLz: IND.cap.lz,
       carDem: carDem, hasCar: hasCar, S: S, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
       zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP };
+    // 起点需求计算可以分片并行：跳月等批量推进时交给 Worker 池（见 sim-par.js），
+    // 驱动方（jump 的推进循环）会 await 这个 parWait 再继续；实时循环与预测不传 par，仍是原来的分步循环。
     let cnt = 0;
-    for (let i = 0; i < Z; i++) {
-      odOrigin(K, i);
-      if ((++cnt & 7) === 0) yield;
+    const par = opts.par && CM.SimPar && CM.SimPar.ready() ? CM.SimPar.run(K, Z, this.od) : null;
+    if (par) {
+      yield { parWait: par };
+    } else {
+      for (let i = 0; i < Z; i++) {
+        odOrigin(K, i);
+        if ((++cnt & 7) === 0) yield;
+      }
     }
     st.trips = S[0]; st.metro = S[1]; st.car = S[2]; st.timeSum = S[3]; st.carTime = S[4]; st.metroTime = S[5]; st.fare = S[6]; st.metroPkm = S[7]; st.carPkm = S[8]; st.vkt = S[9];
     st.commTrips = S[10]; st.commTime = S[11]; st.ind = S[12]; st.indM = S[13];
@@ -1112,10 +1133,10 @@
     const g = this.solveGen(cycles, dts);
     for (let r = g.next(); !r.done; r = g.next()) { /* run */ }
   };
-  Model.prototype.solveGen = function* (cycles, dts) {
+  Model.prototype.solveGen = function* (cycles, dts, par) {
     this.wake();
     dts = dts || DT;
-    for (let c = 0; c < cycles; c++) for (const dt of dts) for (let p = 0; p < NP; p++) { yield* this.iterate(this.net, this.ctxs[dt].per[p], p, { fullSkim: c === 0 }); }
+    for (let c = 0; c < cycles; c++) for (const dt of dts) for (let p = 0; p < NP; p++) { yield* this.iterate(this.net, this.ctxs[dt].per[p], p, { fullSkim: c === 0, par: par }); }
     this.computeDaily();
     this.gen = null;
   };
@@ -1421,4 +1442,6 @@
     return gen;
   };
   Model.prototype.cancelPredict = function () { this.predJob = null; };
+  // 多核并行：把需求生成与出行分配的源码交给 sim-par.js，Worker 里跑的是同一份实现
+  if (CM.SimPar) CM.SimPar.setKernel(odOrigin.toString(), demandOrigin.toString(), odBuffer.toString(), odGrow.toString());
 })(window.CM);

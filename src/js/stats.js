@@ -301,17 +301,31 @@
     return el;
   }
   // 与约一年前比较；better: 'up' 越大越好 / 'down' 越小越好
-  function delta(H, key, better, fmt) {
+  // refIdx：本次推进的起点在 H 中的下标（推进完成后到玩家再往前走之前生效，见 jumpRef）
+  function delta(H, key, better, fmt, refIdx) {
     const n = H.length; if (n < 2) return null;
-    const cur = H[n - 1][key]; let k = Math.max(0, n - 13);
+    const cur = H[n - 1][key];
+    let k = refIdx >= 0 && refIdx < n - 1 ? refIdx : Math.max(0, n - 13);
     while (k < n - 1 && (H[k][key] == null)) k++;
     const prev = H[k][key];
     if (cur == null || prev == null || k >= n - 1) return null;
     const dv = cur - prev;
-    const span = n - 1 - k >= 12 ? '较一年前' : '较 ' + H[k].y + '年' + H[k].m + '月';
-    if (Math.abs(dv) < 1e-9) return { text: span + ' 持平', cls: 'muted' };
+    const span = n - 1 - k;
+    const spanTxt = span === 12 ? '较一年前'
+      : (span >= 24 && span % 12 === 0 ? '较' + (span / 12) + '年前' : '较 ' + H[k].y + '年' + H[k].m + '月');
+    if (Math.abs(dv) < 1e-9) return { text: spanTxt + ' 持平', cls: 'muted' };
     const good = better === 'up' ? dv > 0 : dv < 0;
-    return { text: span + ' ' + (dv > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(dv)), cls: good ? 'good' : 'bad' };
+    return { text: spanTxt + ' ' + (dv > 0 ? '▲ ' : '▼ ') + fmt(Math.abs(dv)), cls: good ? 'good' : 'bad' };
+  }
+  // 本次推进刚结束、玩家还没继续走时间时，对比基准取推进起点（否则按一周年前）
+  function jumpRef(g, H) {
+    const L = g.lastJump;
+    if (!L || !H.length) return -1;
+    if (g.clock.y !== L.to[0] || g.clock.m !== L.to[1]) return -1;
+    for (let i = H.length - 1; i >= 0; i--) {
+      if (!H[i].live && H[i].y === L.from[0] && H[i].m === L.from[1]) return i;
+    }
+    return -1;
   }
 
   // ---------- 各页 ----------
@@ -351,16 +365,17 @@
 
   function pageOverview(g, el) {
     const H = timeline(g), P = pal(), cur = H[H.length - 1], free = g.econ.isFree();
+    const ref = jumpRef(g, H);
     const grid = h('div', { class: 'kpi-grid' });
-    const last36 = function (k) { return pick(H.slice(-37), k); };
+    const spanVals = function (k) { return pick(H.slice(ref >= 0 ? ref : Math.max(0, H.length - 37)), k); };
     grid.append(
-      kpi({ icon: 'train', badge: 'b-teal', label: '地铁日客运量', value: U.fmtPeople(cur.riders), unit: '人次', vals: last36('riders'), delta: delta(H, 'riders', 'up', U.fmtPeople), onclick: function () { go('traffic'); } }),
-      kpi({ icon: 'metro', badge: 'b-teal', label: '地铁分担率', value: U.fmtPct(cur.share, 1), vals: last36('share'), delta: delta(H, 'share', 'up', function (v) { return (v * 100).toFixed(1) + ' 个百分点'; }), onclick: function () { go('traffic'); } }),
-      kpi({ icon: 'car', badge: cur.cong < 1.25 ? 'b-green' : (cur.cong < 1.6 ? 'b-orange' : 'b-red'), label: '道路拥堵指数', value: cur.cong.toFixed(2), vals: last36('cong'), delta: delta(H, 'cong', 'down', function (v) { return v.toFixed(2); }), onclick: function () { go('traffic'); } }),
-      kpi({ icon: cur.sat >= 60 ? 'smile' : (cur.sat >= 40 ? 'meh' : 'frown'), badge: cur.sat >= 60 ? 'b-green' : (cur.sat >= 40 ? 'b-orange' : 'b-red'), label: '市民满意度', value: Math.round(cur.sat), unit: '/ 100', vals: last36('sat'), delta: delta(H, 'sat', 'up', function (v) { return v.toFixed(1); }) }),
-      kpi({ icon: 'people', badge: 'b-blue', label: '城市人口', value: U.fmtPeople(cur.pop), vals: last36('pop'), delta: delta(H, 'pop', 'up', U.fmtPeople) }),
-      free ? kpi({ icon: 'station', badge: 'b-slate', label: '车站 · 覆盖人口', value: String(cur.stations), unit: '站 · ' + U.fmtPct(cur.coverage, 0), vals: last36('coverage'), delta: delta(H, 'coverage', 'up', function (v) { return (v * 100).toFixed(1) + ' 个百分点'; }) })
-        : kpi({ icon: 'coin', badge: 'b-gold', label: '可用资金', value: U.fmtMoney(cur.funds), vals: last36('funds'), delta: delta(H, 'funds', 'up', function (v) { return U.fmtMoney(v); }), onclick: function () { go('finance'); } }));
+      kpi({ icon: 'train', badge: 'b-teal', label: '地铁日客运量', value: U.fmtPeople(cur.riders), unit: '人次', vals: spanVals('riders'), delta: delta(H, 'riders', 'up', U.fmtPeople, ref), onclick: function () { go('traffic'); } }),
+      kpi({ icon: 'metro', badge: 'b-teal', label: '地铁分担率', value: U.fmtPct(cur.share, 1), vals: spanVals('share'), delta: delta(H, 'share', 'up', function (v) { return (v * 100).toFixed(1) + ' 个百分点'; }, ref), onclick: function () { go('traffic'); } }),
+      kpi({ icon: 'car', badge: cur.cong < 1.25 ? 'b-green' : (cur.cong < 1.6 ? 'b-orange' : 'b-red'), label: '道路拥堵指数', value: cur.cong.toFixed(2), vals: spanVals('cong'), delta: delta(H, 'cong', 'down', function (v) { return v.toFixed(2); }, ref), onclick: function () { go('traffic'); } }),
+      kpi({ icon: cur.sat >= 60 ? 'smile' : (cur.sat >= 40 ? 'meh' : 'frown'), badge: cur.sat >= 60 ? 'b-green' : (cur.sat >= 40 ? 'b-orange' : 'b-red'), label: '市民满意度', value: Math.round(cur.sat), unit: '/ 100', vals: spanVals('sat'), delta: delta(H, 'sat', 'up', function (v) { return v.toFixed(1); }, ref) }),
+      kpi({ icon: 'people', badge: 'b-blue', label: '城市人口', value: U.fmtPeople(cur.pop), vals: spanVals('pop'), delta: delta(H, 'pop', 'up', U.fmtPeople, ref) }),
+      free ? kpi({ icon: 'station', badge: 'b-slate', label: '车站 · 覆盖人口', value: String(cur.stations), unit: '站 · ' + U.fmtPct(cur.coverage, 0), vals: spanVals('coverage'), delta: delta(H, 'coverage', 'up', function (v) { return (v * 100).toFixed(1) + ' 个百分点'; }, ref) })
+        : kpi({ icon: 'coin', badge: 'b-gold', label: '可用资金', value: U.fmtMoney(cur.funds), vals: spanVals('funds'), delta: delta(H, 'funds', 'up', function (v) { return U.fmtMoney(v); }, ref), onclick: function () { go('finance'); } }));
     el.appendChild(grid);
     const cg = h('div', { class: 'chart-grid' });
     cg.append(

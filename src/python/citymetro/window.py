@@ -202,6 +202,25 @@ def apply_titlebar_theme(hwnd, dark):
         log.debug('设置标题栏主题失败', exc_info=True)
 
 
+def apply_graphics_mode(gpu):
+    """把「GPU 加速」翻译成 WebView2 内核参数。
+
+    WebView2 的浏览器参数只能在创建环境之前给，所以这项改动下次启动才生效。
+    pywebview 自己会传 ElasticOverscroll 和文件访问两项，这里一并带上：环境变量与
+    代码里的 AdditionalBrowserArguments 谁生效都不会丢功能。
+    """
+    if sys.platform != 'win32':
+        return
+    args = ['--disable-features=ElasticOverscroll', '--allow-file-access-from-files']
+    if gpu:
+        # 混合显卡机器上让内核优先要独立显卡；不支持的版本会直接忽略这个开关
+        args.append('--force_high_performance_gpu')
+    else:
+        args.append('--disable-gpu')
+    os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = ' '.join(args)
+    log.info('显卡模式: %s', 'GPU' if gpu else 'CPU')
+
+
 def set_macos_on_top(on):
     """macOS 上改窗口置顶：pywebview 的 Cocoa 后端没有 on_top，只能直接改 NSWindow 的 level。
 
