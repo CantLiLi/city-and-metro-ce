@@ -95,13 +95,13 @@
 | [PRD](./PRD.md) | 当前玩法、交互、兼容与验收要求 |
 | [地图设计指南](./地图设计指南.md) | 地图选区、数据、历史、经营校准与接入标准 |
 | [部署说明](./部署说明.md) | Cloudflare 原生 GitHub 部署、发布记录与实际验证范围 |
-| [js/news.js](./js/news.js) | 游戏内面向玩家的更新公告 |
-| [js/maps.js](./js/maps.js) / [js/config.js](./js/config.js) | 地图登记与共用参数 |
-| [src/python/main.py](./src/python/main.py) | 桌面外壳入口（pywebview 窗口与存档时机） |
+| [js/data/news.js](../src/js/data/news.js) | 游戏内面向玩家的更新公告 |
+| [js/data/maps.js](../src/js/data/maps.js) / [js/core/config.js](../src/js/core/config.js) | 地图登记与共用参数 |
+| [src/python/main.py](../src/python/main.py) | 桌面外壳入口（pywebview 窗口与存档时机） |
 
-运行资源位于 `index.html`、`css/`、`js/`、`img/`；各城场景使用 `data_*.js`，地理使用 `geo_*.js`。
+运行资源位于 `index.html`、`css/`、`js/`、`img/`。`js/` 下按功能分目录：`core/`（工具、配置、入口）、`data/`（地图与地理，各城场景 `data_*.js`、地理 `geo_*.js`）、`sim/`（城市与经营模拟）、`render/`（渲染与动态对象）、`ui/`（界面与页面）、`audio/`（声音）、`platform/`（存档、桌面适配、监控与空闲）；`css/` 依次为 `base`（主题变量与全局）、`hud`（顶栏与面板）、`screens`（全屏界面）、`settings`（设置与卡片）、`layout`（视图图层与滑出卡片）、`maps`（选图与引导）、`windows`（全屏窗口）、`responsive`（窄屏与触屏）、`economy`（财政经济）、`misc`（设施与监控），按此顺序在 `index.html` 引入以保持层叠。
 
-桌面外壳的代码在 `src/python/`：`main.py` 负责窗口与关闭时的存档等待，`citymetro/bridge.py` 提供文件对话框与读写接口，`src/js/desktop.js` 是前端侧的适配层。浏览器里打开时这套适配层自动退回到原来的网页逻辑。
+桌面外壳的代码在 `src/python/`：`main.py` 负责窗口与关闭时的存档等待，`citymetro/bridge.py` 提供文件对话框与读写接口，`src/js/platform/desktop.js` 是前端侧的适配层。浏览器里打开时这套适配层自动退回到原来的网页逻辑。
 
 
 ## 已知边界

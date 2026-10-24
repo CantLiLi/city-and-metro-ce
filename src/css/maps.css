@@ -1,0 +1,129 @@
+/* 地图选择、新手引导、列车跟随、里程碑 */
+/* ---------------- 地图选择 ---------------- */
+.card.mapsel { width: min(940px, calc(100vw - 32px)); }
+.map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; margin-top: 4px; }
+.map-card { display: flex; flex-direction: column; padding: 0; border: 1.5px solid var(--line-strong); border-radius: 16px; overflow: hidden; background: var(--surface-solid); text-align: left; cursor: pointer; color: var(--text); transition: border-color .18s, box-shadow .2s, transform .22s var(--spring); }
+.map-card:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(36, 66, 104, 0.14); }
+.map-card.on { border-color: var(--accent); box-shadow: var(--ring), 0 12px 28px rgba(36, 66, 104, 0.14); }
+.map-thumb { position: relative; aspect-ratio: 16 / 10; background: var(--hover); overflow: hidden; }
+.map-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s var(--ease); }
+.map-card:hover .map-thumb img { transform: scale(1.04); }
+.map-badge { position: absolute; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; background: rgba(15, 118, 110, 0.92); color: #fff; font-size: 12px; font-weight: 700; }
+.map-badge .ico { width: 14px; height: 14px; }
+.map-meta { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px 12px; }
+.map-meta b { font-size: 15.5px; }
+.map-meta small { font-size: 12px; color: var(--muted); }
+.map-meta small.faint { color: var(--faint); }
+.map-detail { margin-top: 16px; padding: 16px 18px; border-radius: 16px; background: var(--hover); animation: riseIn .35s var(--ease) both; }
+.map-dh { display: flex; align-items: center; gap: 10px; }
+.map-dh h3 { margin: 0; font-size: 19px; }
+.map-desc { margin: 8px 0 10px; font-size: 13.5px; line-height: 1.65; }
+.map-facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.map-facts > div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--surface-solid); font-size: 12px; }
+.map-facts b { font-size: 13.5px; }
+.map-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.map-mode { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface-solid); color: var(--text); text-align: left; cursor: pointer; transition: transform .2s var(--spring), box-shadow .2s, border-color .18s; }
+.map-mode:hover:not([disabled]) { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 8px 20px rgba(36, 66, 104, 0.12); }
+.map-mode b { display: block; font-size: 14.5px; }
+.map-mode small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+.map-mode > .ico { width: 16px; height: 16px; color: var(--faint); flex: none; }
+.map-mode .badge { width: 36px; height: 36px; border-radius: 11px; }
+.map-mode.primary { background: var(--grad); border-color: transparent; color: #fff; box-shadow: 0 8px 20px rgba(43, 100, 156, 0.3); }
+.map-mode.primary small, .map-mode.primary > .ico { color: rgba(255, 255, 255, 0.86); }
+.map-mode.primary .badge { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.map-mode[disabled] { opacity: .5; cursor: not-allowed; }
+@media (max-width: 640px) { .map-actions { grid-template-columns: 1fr; } .map-facts { grid-template-columns: 1fr 1fr; } }
+/* ---------------- 新手教程：引导卡片 ---------------- */
+#coach { position: fixed; top: 76px; left: 78px; width: 312px; z-index: 22; padding: 12px 14px 12px; border-radius: 16px; display: flex; flex-direction: column; gap: 8px; zoom: var(--uiz, 1); animation: riseIn .35s var(--ease) both; }
+#coach.mini { width: 236px; gap: 6px; padding-bottom: 10px; }
+#coach .co-head { display: flex; align-items: center; gap: 8px; }
+#coach .co-head .iconbtn { width: 26px; height: 26px; }
+#coach .co-head .iconbtn .ico { width: 15px; height: 15px; }
+#coach .co-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: rgba(15, 118, 110, 0.12); color: #0f766e; font-size: 11.5px; font-weight: 700; }
+:root[data-theme="dark"] #coach .co-badge { background: rgba(45, 212, 191, 0.14); color: #5eead4; }
+#coach .co-badge .ico { width: 13px; height: 13px; }
+#coach .co-step { font-size: 12px; color: var(--muted); font-weight: 600; }
+#coach .co-bar { height: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
+#coach .co-bar i { display: block; height: 100%; background: var(--grad); border-radius: 3px; transition: width .5s var(--ease); }
+#coach .co-title { display: flex; align-items: center; gap: 6px; font-size: 16px; font-weight: 800; }
+#coach .co-check { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #16a34a; color: #fff; animation: popIn .45s var(--spring); }
+#coach .co-check .ico { width: 14px; height: 14px; }
+#coach .co-body { font-size: 13px; line-height: 1.65; }
+#coach .co-hint { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); line-height: 1.5; }
+#coach .co-hint .ico { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+#coach .co-acts { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+#coach .co-done { color: #16a34a; font-weight: 800; font-size: 13px; }
+#coach .co-mini { font-size: 13px; font-weight: 700; }
+#coach.ok { border-color: rgba(22, 163, 74, 0.45); }
+body.has-coach #feed { left: max(50%, calc(420px * var(--uiz, 1) + 160px)); }
+body.has-coach #legendCard { top: calc(84px + var(--coach-h, 0px) * var(--uiz, 1)); max-height: calc((100vh - 200px) / var(--uiz, 1) - var(--coach-h, 0px)); }
+.coach-target { position: relative; z-index: 2; animation: coachPulse 1.3s ease-in-out infinite; }
+@keyframes coachPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.7), 0 0 0 2px rgba(20, 184, 166, 0.9); } 50% { box-shadow: 0 0 0 9px rgba(20, 184, 166, 0), 0 0 0 2px rgba(20, 184, 166, 0.9); } }
+@media (max-width: 720px) { #coach { left: 70px; width: min(300px, calc(100vw - 86px)); } }
+
+/* ---------------- 列车跟随 ---------------- */
+#followCard { position: fixed; left: 0; right: 0; margin: 0 auto; bottom: 16px; z-index: 24; width: min(560px, calc(100vw - 24px)); padding: 12px 14px; border-radius: 18px; display: flex; flex-direction: column; gap: 8px; zoom: var(--uiz, 1); animation: riseIn .35s var(--ease) both; }
+#followCard .fc-head { display: flex; align-items: center; gap: 10px; }
+#followCard .fc-num { min-width: 30px; height: 26px; padding: 0 7px; border-radius: 8px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px; }
+#followCard .fc-line { font-weight: 800; font-size: 15px; }
+#followCard .fc-dir { font-size: 13px; color: var(--muted); }
+#followCard .fc-status { font-size: 14px; font-weight: 600; }
+#followCard .fc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+#followCard .fc-grid > div { display: flex; flex-direction: column; gap: 1px; padding: 6px 9px; border-radius: 10px; background: var(--hover); font-size: 11.5px; color: var(--muted); }
+#followCard .fc-grid b { font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+#followCard .fc-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#followCard .fc-acts kbd { margin-left: 4px; }
+body.following #toolbar, body.following #buildStack { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(20px); }
+body.cinema #hudTop, body.cinema #dock, body.cinema #legendCard, body.cinema #zoomCtl, body.cinema #rightPanel, body.cinema #toolbar, body.cinema #buildStack, body.cinema #feed, body.cinema #coach { opacity: 0 !important; pointer-events: none !important; }
+#hudTop, #dock, #legendCard, #zoomCtl, #feed, #coach { transition: opacity .35s var(--ease); }
+body.cinema #followCard { width: max-content; max-width: calc(100vw - 24px); min-width: 300px; padding: 9px 16px; background: rgba(12, 20, 32, 0.55); border-color: transparent; color: #fff; backdrop-filter: blur(6px); }
+body.cinema #followCard .fc-grid, body.cinema #followCard .fc-acts { display: none; }
+body.cinema #followCard .fc-dir, body.cinema #followCard .fc-hint { color: rgba(255, 255, 255, 0.78); }
+#followCard .fc-hint { display: none; font-size: 11.5px; }
+body.cinema #followCard .fc-hint { display: block; }
+@media (max-width: 640px) { #followCard .fc-grid { grid-template-columns: 1fr 1fr; } }
+/* ---------------- 统计：里程碑 ---------------- */
+.ms-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 18px; border-radius: 16px; background: linear-gradient(120deg, rgba(240, 167, 43, 0.16), rgba(30, 111, 217, 0.08)); border: 1px solid rgba(240, 167, 43, 0.3); }
+.ms-medal { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: radial-gradient(circle at 35% 30%, #ffd66b, #e89a12 70%); box-shadow: 0 6px 16px rgba(232, 154, 18, 0.4), inset 0 -3px 6px rgba(0, 0, 0, 0.12); flex: none; }
+.ms-count { font-size: 15px; color: var(--muted); }
+.ms-count b { font-size: 30px; color: var(--text); margin-right: 2px; }
+.ms-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.ms-cats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+.ms-cats span, .ms-chips button { display: inline-flex; align-items: center; gap: 5px; }
+.ms-cats i, .ms-chips i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.ms-cats b { color: var(--text); }
+.ms-sec { font-size: 13px; font-weight: 800; margin: 18px 0 8px; color: var(--text); }
+.ms-next { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.ms-goal { padding: 11px 13px; border-radius: 13px; background: var(--surface-solid); border: 1px solid var(--line); }
+.ms-gh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ms-gi { display: inline-grid; }
+.ms-gt { font-size: 15px; font-weight: 700; margin: 4px 0 7px; font-variant-numeric: tabular-nums; }
+.ms-bar { height: 7px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.ms-bar i { display: block; height: 100%; border-radius: 5px; transition: width .6s var(--ease); }
+.ms-chips { display: flex; flex-wrap: wrap; gap: 6px; font-weight: 600; }
+.ms-chips button { border: 1px solid var(--line-strong); background: var(--surface-solid); color: var(--text); border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; }
+.ms-chips button.on { border-color: var(--accent); box-shadow: var(--ring); }
+.ms-tl { display: flex; flex-direction: column; gap: 4px; }
+.ms-year { display: flex; gap: 8px; align-items: flex-start; padding-bottom: 10px; }
+.ms-items { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.ms-yl { width: 58px; flex: none; font-size: 17px; font-weight: 900; color: var(--muted); padding-top: 6px; position: sticky; top: 0; }
+.ms-item { display: flex; gap: 12px; align-items: flex-start; position: relative; animation: riseIn .4s var(--ease) both; }
+.ms-item::before { content: ''; position: absolute; left: 15px; top: 30px; bottom: -14px; width: 2px; background: var(--line); }
+.ms-year:last-child .ms-item:last-child::before { display: none; }
+.ms-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center; color: #fff; background: var(--mc); box-shadow: 0 0 0 3px var(--surface-solid), 0 3px 8px rgba(0, 0, 0, 0.15); position: relative; z-index: 1; }
+.ms-card { flex: 1; min-width: 0; padding: 9px 13px 10px; border-radius: 13px; background: var(--surface-solid); border: 1px solid var(--line); }
+.ms-t { font-weight: 800; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ms-d { font-size: 12.5px; color: var(--text); opacity: .85; margin-top: 3px; line-height: 1.5; }
+.ms-w { font-size: 11.5px; color: var(--faint); margin-top: 4px; }
+.ms-item.big .ms-dot { width: 40px; height: 40px; margin-left: -4px; box-shadow: 0 0 0 3px var(--surface-solid), 0 0 0 7px color-mix(in srgb, var(--mc) 22%, transparent), 0 4px 12px rgba(0, 0, 0, 0.18); }
+.ms-item.big .ms-card { border-color: color-mix(in srgb, var(--mc) 45%, transparent); background: linear-gradient(120deg, color-mix(in srgb, var(--mc) 10%, var(--surface-solid)), var(--surface-solid) 60%); }
+.ms-item.big .ms-t { font-size: 15.5px; }
+.ms-item.origin .ms-dot { background: var(--faint); }
+.ms-link { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 13px; margin: 2px 0 12px; border-radius: 14px; border: 1px solid rgba(240, 167, 43, 0.35); background: linear-gradient(120deg, rgba(240, 167, 43, 0.14), transparent 70%); color: var(--text); text-align: left; cursor: pointer; transition: transform .2s var(--spring), box-shadow .2s; }
+.ms-link:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(232, 154, 18, 0.18); }
+.ms-link b { display: block; font-size: 14px; }
+.ms-link small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ms-link > .ico { width: 16px; height: 16px; color: var(--faint); }
+.ms-medal.sm { width: 36px; height: 36px; }
+
+

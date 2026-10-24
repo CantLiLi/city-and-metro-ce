@@ -33,7 +33,7 @@ Copyright (c) 2026 VinsonFung. All rights reserved.
 法律赋予的强制性权利与法定例外不受本许可证限制。
 
 5. 第三方材料
-OpenStreetMap 及其衍生地理数据库（包括 js/geo_gz.js 中的地理数据）
+OpenStreetMap 及其衍生地理数据库（包括 js/data/geo_gz.js 中的地理数据）
 继续按 Open Database License (ODbL) 1.0 提供。
 本项目的非商业条款不限制第三方原许可已授予的权利，也不能被用来
 对 ODbL 数据追加禁商或其他不兼容条件。

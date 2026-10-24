@@ -9,8 +9,8 @@ License: Open Data Commons Open Database License (ODbL) 1.0
 License URL: https://opendatacommons.org/licenses/odbl/1-0/
 Included license text: licenses/ODbL-1.0.txt
 
-js/geo_gz.js (Guangzhou), js/geo_hz.js (Hangzhou), js/geo_hk.js (Hong Kong)
-and js/geo_tk.js (Tokyo) contain preprocessed OpenStreetMap geographic data,
+js/data/geo_gz.js (Guangzhou), js/data/geo_hz.js (Hangzhou), js/data/geo_hk.js (Hong Kong)
+and js/data/geo_tk.js (Tokyo) contain preprocessed OpenStreetMap geographic data,
 including waterways, roads, railways, green areas, boundaries and place names.
 That database remains available under ODbL 1.0. The game's non-commercial
 license does not add restrictions to rights already granted under ODbL.

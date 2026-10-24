@@ -175,7 +175,7 @@ def main():
     webview.start(
         private_mode=False,
         storage_path=storage.profile_dir(),
-        debug=bool(os.environ.get('CM_DEBUG')),
+        debug=False,
         localization={'global.quitConfirmation': '确定要退出城市与地铁社区版吗？'},
         icon=window.window_icon(),
     )

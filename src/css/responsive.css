@@ -1,0 +1,151 @@
+/* 窄屏与触屏：手机平板重排、触屏交互、财政账本 */
+/* ======================================================================
+   手机与平板：窄屏重新排布（顶栏两行、详情改为底部抽屉、窗口全屏、选图上下排列）
+   ====================================================================== */
+@media (max-width: 760px) {
+  #hudTop { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; flex-wrap: wrap; gap: 6px; }
+  #hudTop .spacer { display: none; }
+  .citybar { flex: 1 1 100%; min-width: 0; padding: 4px; gap: 4px; }
+  .citybar .speed { margin-left: auto; }
+  .brand { width: 36px; height: 36px; border-radius: 11px; }
+  .brand img { width: 28px; height: 28px; }
+  .pill { height: 38px; padding: 3px 8px 3px 4px; gap: 6px; }
+  .pill .badge { width: 26px; height: 26px; }
+  .pill .v { font-size: 13.5px; }
+  .dayring { width: 30px; height: 30px; }
+  .dayring .ico { inset: 7px; width: 16px; height: 16px; }
+  .speed .sbtn { height: 30px; min-width: 32px; padding: 0 6px; }
+  .cluster.metrics { flex: 1 1 0; padding: 3px; }
+  .cluster.actions { padding: 3px; }
+  .hbtn { width: 36px; height: 38px; }
+  .hbtn.wide-only { display: none; }
+  #dock { top: calc(104px + env(safe-area-inset-top)); left: 8px; width: 46px; padding: 4px; gap: 2px; max-height: calc(100vh - 260px); }
+  #dock .dockbtn { width: 38px; height: 34px; border-radius: 10px; }
+  #dock .dockbtn .ico { width: 19px; height: 19px; }
+  #legendCard { top: calc(104px + env(safe-area-inset-top)); left: 60px; width: min(268px, calc(100vw - 70px)); }
+  #rightPanel { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 62vh; border-radius: 20px 20px 0 0; z-index: 14; padding-bottom: env(safe-area-inset-bottom); }
+  #rightPanel.closed { transform: translateY(calc(100% + 24px)); }
+  #rightPanel::before { content: ''; position: absolute; top: 6px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: var(--line-strong); }
+  #toolbar { bottom: calc(10px + env(safe-area-inset-bottom)); padding: 4px; border-radius: 18px; }
+  .tbtn { width: 46px; height: 46px; border-radius: 14px; }
+  .tind { top: 4px; height: calc(100% - 8px); border-radius: 14px; }
+  #buildStack { bottom: calc(68px + env(safe-area-inset-bottom)); max-width: calc(100vw - 16px); }
+  #draftbar { max-width: calc(100vw - 16px); overflow-x: auto; }
+  #zoomCtl { left: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 3px; }
+  #zoomCtl button { width: 36px; height: 34px; }
+  #feed { top: calc(110px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
+  #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
+  .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
+  #coach { top: calc(104px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; }
+  body.has-coach #feed { left: 50%; top: auto; bottom: 140px; }
+  .search-pop { left: 8px !important; right: 8px !important; width: auto; }
+  .dropdown { max-width: calc(100vw - 16px); }
+  #screen { place-items: center; }
+  .card { width: calc(100vw - 16px); max-height: calc(100vh - 16px); padding: 18px 16px; }
+  /* 开始界面 */
+  #screen.start { background: linear-gradient(180deg, rgba(239, 245, 250, 0.94) 0%, rgba(239, 245, 250, 0.82) 60%, rgba(239, 245, 250, 0.55) 100%); place-items: center; }
+  :root[data-theme="dark"] #screen.start { background: linear-gradient(180deg, rgba(15, 23, 36, 0.94) 0%, rgba(15, 23, 36, 0.8) 60%, rgba(15, 23, 36, 0.5) 100%); }
+  .start-wrap { margin: 0 auto; width: calc(100vw - 40px); max-width: 420px; }
+  .start-title { font-size: 46px; }
+  .start-edition { font-size: 12.5px; letter-spacing: 2px; }
+  .title-deco { margin-bottom: 22px; }
+  .start-btn { height: 54px; font-size: 16.5px; }
+  .start-corner { top: calc(12px + env(safe-area-inset-top)); left: 12px; }
+  /* 选择地图：上方横向列表，下方详情 */
+  .card.msel { width: calc(100vw - 12px); height: calc(100vh - 12px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); padding: 0; }
+  .msel-left { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 12px 10px; gap: 9px; }
+  .msel-list { flex-direction: row; overflow-x: auto; overflow-y: hidden; flex: none; margin: 0 -12px; padding: 2px 12px 6px; }
+  .msel-item { width: 236px; }
+  .msel-thumb { width: 72px; height: 54px; }
+  .msel-note { display: none; }
+  .msel-scroll, .brief-scroll { padding: 12px 12px 8px; }
+  .msel-hero, .brief-hero { height: 150px; }
+  .msel-hero-tx h2, .brief-hero-tx h2 { font-size: 23px; }
+  .msel-feats, .brief-modes { grid-template-columns: 1fr; }
+  .msel-dwrap > .map-actions { padding: 8px 10px 10px; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .msel-dwrap .map-mode { padding: 8px 10px; gap: 8px; }
+  .msel-dwrap .map-mode small { display: none; }
+  .msel-dwrap .map-mode b { font-size: 13px; }
+  .msel-dwrap .map-mode .badge { width: 30px; height: 30px; border-radius: 9px; }
+  .msel-dwrap .map-mode > .ico { display: none; }
+  .msel-frow .fchips { flex-wrap: nowrap; overflow-x: auto; }
+  .msel-frow { align-items: center; }
+  .brief-acts { padding: 10px 12px 12px; }
+  .brief-acts > .tiny { flex-basis: 100%; }
+  /* 统计、线路示意图：全屏 */
+  .stats-win { width: 100vw; height: 100vh; border-radius: 0; }
+  .stats-head { flex-wrap: wrap; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; gap: 8px; }
+  .tabs { order: 5; margin-left: 0; width: 100%; overflow-x: auto; }
+  .tabs > button { flex: 1 0 auto; justify-content: center; padding: 7px 10px; }
+  .stats-body { padding: 12px 12px 18px; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi .val { font-size: 20px; }
+  .book-area { gap: 6px; }
+  .book-nav { width: 34px; height: 34px; }
+  .pg { padding: 16px 16px 14px; }
+  .pg-title { font-size: 19px; }
+  .ms-head2 .fchips { width: 100%; }
+  .nm-win .stats-head .btn.sm { display: none; }
+}
+@media (max-width: 760px) and (max-height: 620px) { #dock { max-height: calc(100vh - 200px); } }
+/* 触屏：没有悬停，不显示按钮提示气泡；地图缩放按钮可用双指代替，只保留「全图」 */
+@media (pointer: coarse) {
+  #uitip { display: none !important; }
+  .pausechip kbd, .pausechip .muted { display: none; }
+  .search-pop .srch-in kbd { display: none; }
+  #zoomCtl button[data-tip="放大"], #zoomCtl button[data-tip="缩小"] { display: none; }
+}
+
+/* 地理线网：保留原始地形轮廓，使用淡色让线路与车站保持清晰 */
+#netmap { --nm-water: #dcecf8; --nm-water-edge: #c3dcf0; --nm-green: #e6f2e2; --nm-wlabel: #6f9cc4; }
+:root[data-theme="dark"] #netmap { --nm-water: #1c3249; --nm-water-edge: #24405d; --nm-green: #1c2c26; --nm-wlabel: #6f95bd; }
+.nm-water { fill: var(--nm-water); stroke: none; }
+.nm-river path { stroke: var(--nm-water); }
+.nm-river .nm-river-area { fill: var(--nm-water); stroke: none; }
+.nm-green { fill: var(--nm-green); opacity: .65; }
+.nm-terrain.simple .nm-green { opacity: .4; }
+.nm-wlabel { font-size: 12.5px; font-style: italic; letter-spacing: 2px; fill: var(--nm-wlabel); pointer-events: none; }
+.nm-svg.focusing .nm-terrain { opacity: .6; }
+.nm-tools .hbtn.on { color: var(--accent); background: var(--accent-soft); }
+.nm-tools .hbtn:disabled { opacity: .35; cursor: not-allowed; background: transparent; box-shadow: none; transform: none; }
+@media (max-width: 760px) { .nm-win .nm-legend { display: none; } }
+@media (max-width: 760px) {
+  .nm-bar .nm-chips { flex-wrap: nowrap; max-height: none; overflow-x: auto; }
+  .nm-chips .nm-chip { flex: none; }
+  .nm-canvas { margin: 8px; }
+}
+
+/* ---------- 财政：账本分组、债券、债务与流水 ---------- */
+.fl-g { margin-top: 10px; padding: 8px 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+.fl-h { font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 4px; }
+.fl-g.in .fl-h { color: var(--good); } .fl-g.fin .fl-h { color: #7c5cd6; } .fl-g.out .fl-h { color: var(--warn); } .fl-g.debt .fl-h { color: var(--bad); }
+.tbl-wrap { overflow-x: auto; }
+.tag.fin { background: rgba(124, 92, 214, 0.14); color: #7c5cd6; margin-left: 6px; }
+.bond-row { padding: 8px 0 10px; border-bottom: 1px solid var(--line); }
+.bond-bar { height: 8px; border-radius: 5px; background: var(--surface-3); overflow: hidden; margin: 6px 0 4px; }
+.bond-bar i { display: block; height: 100%; border-radius: 5px; background: var(--grad); transition: width .4s var(--ease); }
+.debt-card { padding: 9px 11px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-solid); margin: 6px 0; }
+.flow-list { display: flex; flex-direction: column; }
+.flow-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; align-items: baseline; padding: 5px 2px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.flow-d { color: var(--faint); font-variant-numeric: tabular-nums; }
+.flow-a { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card.bond-dlg { width: min(560px, calc(100vw - 32px)); }
+.bond-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
+.bond-kind { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 13px; border-radius: 14px; border: 1.5px solid var(--line-strong); background: var(--surface-solid); color: var(--text); cursor: pointer; transition: border-color .18s, box-shadow .2s, transform .22s var(--spring); }
+.bond-kind:hover:not([disabled]) { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.bond-kind.on { border-color: var(--accent); box-shadow: var(--ring); }
+.bond-kind[disabled] { opacity: .5; cursor: not-allowed; }
+.bond-kind b { font-size: 15px; } .bond-kind small { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.bk-rate { font-size: 20px; font-weight: 800; color: var(--accent); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.bk-rate small { font-size: 11px; font-weight: 500; }
+@media (max-width: 760px) { .bond-kinds { grid-template-columns: 1fr; } .flow-row { grid-template-columns: 64px 1fr auto; } }
+/* ===== 经济小知识（教程 / 操作说明） ===== */
+.card.eg-card { width: min(560px, 94vw); max-height: 88vh; overflow: auto; }
+.eg { display: flex; flex-direction: column; gap: 10px; }
+.eg-sec { border: 1px solid var(--line, rgba(0,0,0,.08)); border-radius: 12px; padding: 10px 12px; }
+.eg-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.eg-h .badge { width: 26px; height: 26px; border-radius: 8px; }
+.eg ul { margin: 0; padding-left: 20px; }
+.eg li { font-size: 13px; line-height: 1.65; }
+

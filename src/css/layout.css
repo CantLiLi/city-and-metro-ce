@@ -1,0 +1,187 @@
+/* 布局：视图图层、开始界面舞台与滑出卡片、工具坞 */
+/* ---------- 平滑切换（主题、界面大小） ---------- */
+.map-snap { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; transition: opacity .55s ease; }
+.theme-fade, .theme-fade *, .theme-fade *::before, .theme-fade *::after { transition: background-color .5s ease, color .5s ease, border-color .5s ease, box-shadow .5s ease, fill .5s ease, stroke .5s ease !important; }
+
+/* ---------- 1.3：左侧视图与图层、图层列表、工具选项条、草案栏 ---------- */
+#dock { gap: 4px; }
+.dockbtn.layerbtn.on { color: #fff; background: var(--lc, var(--accent)); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); }
+.dropdown .dd-title { font-size: 11px; font-weight: 700; color: var(--muted); padding: 6px 10px 4px; letter-spacing: .5px; }
+.layer-menu { min-width: 250px; transform-origin: left top; }
+.layer-menu > button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; padding: 7px 9px; border-radius: 10px; cursor: pointer; text-align: left; color: var(--text); }
+.layer-menu > button:hover { background: var(--hover); }
+.layer-menu > button.on { background: var(--accent-soft); }
+.layer-menu .lm-ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: #fff; flex: none; }
+.layer-menu .lm-ico .ico { width: 17px; height: 17px; }
+.layer-menu .lm-tx { display: flex; flex-direction: column; gap: 1px; }
+.layer-menu .lm-tx b { font-size: 13px; }
+.layer-menu .lm-tx span { font-size: 11px; color: var(--muted); }
+.layer-menu .lm-check { color: var(--accent); }
+.layer-menu .lm-off { border-top: 1px solid var(--line) !important; border-radius: 0 0 10px 10px !important; color: var(--muted) !important; margin-top: 4px; }
+.layer-menu .lm-off .ico { width: 17px; height: 17px; margin: 0 6px 0 7px; }
+
+#buildStack { left: 50%; bottom: 90px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+#buildStack.hidden { transform: translateX(-50%) translateY(12px); }
+#buildStack > * { pointer-events: auto; animation: riseIn .26s var(--ease); }
+#buildStack > .hidden { display: none !important; }
+#toolopts { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; border-radius: 16px; white-space: nowrap; max-width: calc(100vw / var(--uiz, 1) - 40px); overflow-x: auto; }
+.to-grp { display: flex; align-items: center; gap: 6px; }
+.to-k { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.to-hint { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); padding-right: 4px; }
+.to-hint .ico { width: 16px; height: 16px; color: var(--accent); }
+.to-sep { width: 1px; height: 22px; background: var(--line-strong); flex: none; }
+.seg-ctl.sm { padding: 2px; border-radius: 10px; }
+.seg-ctl.sm button { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.seg-ctl button .dot { width: 9px; height: 9px; }
+#draftbar .db-main { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; border-radius: 11px; cursor: pointer; color: var(--text); font: inherit; }
+#draftbar .db-main:hover { background: var(--hover); }
+#draftbar .db-sep { width: 1px; height: 22px; background: var(--line-strong); margin: 0 2px; }
+#draftbar .btn.ghost.danger:hover { background: var(--bad-soft); }
+#draftbar .iconbtn[disabled] { opacity: .35; cursor: default; }
+
+/* 设置：单页 */
+.card.settings { width: min(520px, calc(100vw - 32px)); padding: 20px 22px 16px; }
+.set-body.single { max-height: none; overflow: visible; padding: 0; margin-top: 4px; }
+.set-body.single .set-row { padding: 10px 2px; }
+/* 缩放滑动条的容器要和音量条一样宽，否则拖动时行宽随百分比文字跳动 */
+.set-row.scale-row .set-slider { width: 200px; }
+.set-slider { width: 120px; transition: opacity .25s; }
+.set-slider.off { opacity: .35; pointer-events: none; }
+.set-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+/* 设置一级页：三个分类入口 */
+.set-body.single .set-row.link { cursor: pointer; margin: 2px -8px; padding: 12px 8px; border-bottom: 0; border-radius: 12px; transition: background .15s; }
+.set-body.single .set-row.link:hover { background: var(--hover); }
+.set-body.single .set-row.link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.set-row .row-chev { flex: none; display: grid; place-items: center; color: var(--muted); }
+.set-row .row-chev .ico { width: 18px; height: 18px; transform: rotate(180deg); }
+.card-head .iconbtn.hide { display: none; }
+
+.tag.xfer { background: var(--navy); color: #fff; font-weight: 700; }
+:root[data-theme="dark"] .tag.xfer { background: #e5ecf6; color: #0f1724; }
+
+/* 开始界面右上角的深浅模式按钮；设置中的音量行 */
+.start-root { display: contents; }
+/* 舞台：主菜单与地图详情共用左侧这一块，切换时交叉淡入 */
+.start-stage { display: grid; align-content: center; justify-items: start; margin-left: max(6vw, 28px); width: min(400px, calc(100vw - 56px)); transition: width .3s var(--ease); }
+.start-stage > .start-wrap { grid-area: 1 / 1; margin-left: 0; width: 100%; transition: opacity .2s var(--ease), transform .3s var(--ease); }
+/* 详情展开时主菜单不参与布局，舞台高度只看详情 */
+.start-stage > .start-wrap.gone { opacity: 0; transform: translateX(-10px); pointer-events: none; visibility: hidden; position: absolute; width: 0; height: 0; overflow: hidden; }
+/* 详情与主菜单叠在同一格：舞台高度取两者中较高的，不做过渡 */
+.msel-pane { grid-area: 1 / 1; display: flex; min-height: 0; opacity: 0; transform: translateX(-14px); transition: opacity .24s var(--ease), transform .3s var(--ease); pointer-events: none; }
+.msel-pane.in { opacity: 1; transform: none; pointer-events: auto; }
+.msel-pane > .msel-dwrap { flex: 1; min-height: 0; animation: cardIn .38s var(--spring) both; }
+/* 详情展开时舞台变宽，容纳地图详情的两栏排版 */
+.start-stage:has(.msel-pane) { width: min(760px, calc(100vw - 56px)); }
+/* 滑出卡片里的地图列表：窄卡里去掉原两栏布局的左栏边框与整卡高度 */
+.msel-sheet { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
+.msel-sheet .msel-head { padding: 0 2px; }
+.msel-sheet .msel-list { margin: 0 -6px; padding: 2px 6px 4px; }
+.msel-sheet .msel-thumb { width: 84px; height: 58px; }
+.msel-sheet .msel-it b { font-size: 14.5px; }
+.msel-sheet .msel-note { display: none; }
+.card.msel-card { display: flex; flex-direction: column; height: min(640px, calc(100vh - 48px)); width: min(430px, calc(100vw - 32px)); padding: 18px 16px 14px; overflow: hidden; outline: none; }
+/* 详情在左侧舞台上按视口高度铺开，底部操作区固定，中间内容滚动。
+   外观与右侧滑出的卡片一致：同圆角、同边框、同层级阴影 */
+.start-stage .msel-dwrap { height: min(620px, calc(100vh - 96px)); max-height: calc(100vh - 96px); border-radius: 20px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(36, 66, 104, 0.2); background: var(--surface-solid); }
+.start-stage .msel-scroll { padding: 16px 18px 8px; border-radius: 19px 19px 0 0; }
+.start-stage .msel-hero { height: 156px; border-radius: 12px; }
+.start-stage .msel-hero-tx h2 { font-size: 25px; }
+.start-stage .msel-actbar { padding: 10px 18px 14px; }
+/* 滑出卡片：开始界面里点「开始 / 设置 / 退出」时，卡片从右侧滑进来，主菜单留在左边不动。
+   两列网格：左列是主菜单，右列放卡片；列宽瞬间就位、不做过渡，
+   只有卡片自己做位移+淡入（两重动画叠加会看起来像「先闪一下再动」） */
+#screen.start.sheet-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); place-items: center; justify-items: start; padding-right: max(3vw, 16px); }
+#screen.start.sheet-open > .start-sheet { justify-self: center; }
+.start-sheet { position: relative; justify-self: center; align-self: center; padding: 4px; }
+/* 卡片默认停在起点（右侧偏外、透明），插入时不会先在终点露一帧；
+   .sheet-in 把它滑到原位。只动位移和不透明度，不缩放 */
+.start-sheet > .card { --sheet-from: 160px; width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); animation: none; transform: translateX(var(--sheet-from)); opacity: 0; }
+.start-sheet > .card.solo { width: min(420px, calc(100vw - 32px)); }
+.start-sheet.sheet-in > .card { transition: transform .46s var(--ease), opacity .32s var(--ease); transform: translateX(0); opacity: 1; }
+.start-sheet.sheet-settled > .card { transform: translateX(0); opacity: 1; }
+.start-sheet.sheet-leave > .card { transition: transform .26s var(--ease), opacity .22s var(--ease); transform: translateX(var(--sheet-from)); opacity: 0; }
+/* 主菜单让到左边：卡片出场时主菜单轻微右移、略压暗，形成叠放关系而不是遮挡 */
+.start-root.sheet-beside .start-wrap { transition: transform .34s var(--ease), opacity .3s var(--ease); transform: translateX(6px); opacity: .72; }
+.start-root.sheet-beside .start-corner { opacity: .5; transition: opacity .3s var(--ease); }
+/* 卡片离场：主菜单同步恢复，不再等到卡片收完才一下子弹回来 */
+#screen.start.sheet-leaving .start-root .start-wrap { transition: transform .34s var(--ease), opacity .3s var(--ease), filter .3s var(--ease); }
+#screen.start.sheet-leaving .start-root .start-corner { transition: opacity .3s var(--ease); }
+/* 卡片里的二次确认：叠在卡片正中，不盖暗幕也不跑出视口 */
+.sheet-ask { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(30, 52, 84, .18); border-radius: 20px; animation: askFade .18s var(--ease) both; }
+.sheet-ask > .card { width: min(340px, 100%); box-shadow: 0 18px 44px rgba(36, 66, 104, .26); animation: askIn .24s var(--spring) both; }
+.sheet-ask.out { animation: askOut .18s var(--ease) both; }
+@keyframes askFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes askIn { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes askOut { from { opacity: 1; } to { opacity: 0; } }
+/* 窄屏：卡片改为从下方滑出、叠在主菜单之上（此时本来就放不下两列），主菜单退到后面 */
+@media (max-width: 900px) {
+  #screen.start.sheet-open { grid-template-columns: minmax(0, 1fr); }
+  .start-sheet { position: absolute; inset: 0; display: grid; place-items: center; padding: 8px; }
+  /* 窄屏放不下两列：卡片从下往上滑，主菜单退到后面 */
+  .start-sheet > .card { --sheet-from: 0px; transform: translateY(40px); max-height: calc(100vh - 24px); }
+  .start-sheet.sheet-in > .card { transform: translateY(0); }
+  .start-sheet.sheet-settled > .card { --sheet-from: 0px; transform: translateY(0); }
+  .start-sheet.sheet-leave > .card { transform: translateY(40px); }
+  .start-root.sheet-beside .start-wrap { transform: none; opacity: .28; filter: blur(2px); }
+  /* 卡片铺满整屏时让开角落按钮的位置：直接收起来，避免压在卡片标题上 */
+  #screen.start.sheet-open .start-corner { opacity: 0; pointer-events: none; }
+  /* 窄屏只有一列：详情铺满，卡片盖在上面；详情本身仍可滚动 */
+  .start-stage, .start-stage:has(.msel-pane) { width: calc(100vw - 32px); margin: 0 auto; }
+  .start-stage .msel-dwrap { height: calc(100vh - 40px); max-height: calc(100vh - 40px); }
+  .card.msel-card { height: calc(100vh - 40px); width: calc(100vw - 32px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .start-sheet > .card, .start-sheet.sheet-in > .card, .start-sheet.sheet-leave > .card, .sheet-ask, .sheet-ask.out { transition-duration: .01ms; animation-duration: .01ms; }
+  .start-root.sheet-beside .start-wrap { transition: none; }
+}
+.start-theme { position: fixed; top: 18px; right: 18px; width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform .2s var(--spring), background .2s; }
+.start-theme:hover { transform: translateY(-1px) rotate(-12deg); }
+.start-theme .ico { width: 20px; height: 20px; }
+.set-row.vol-row { transition: opacity .25s; }
+.set-row.vol-row.off { opacity: .4; pointer-events: none; }
+.set-row.vol-row .set-slider { width: 200px; }
+
+/* 线路示意图 1.4：线型、换乘标示、图例 */
+.nm-elev { fill: none; stroke: #fff; stroke-width: 2.2; }
+.nm-surf { fill: none; stroke: rgba(255, 255, 255, 0.95); stroke-width: 3; stroke-dasharray: 2 5; stroke-linecap: butt; }
+.nm-walk path, .nm-walk-p { fill: none; stroke: var(--nm-xfer); stroke-width: 3; stroke-dasharray: 2 4; stroke-linecap: round; opacity: .8; }
+.nm-walk path { stroke-width: 2; opacity: .55; }
+.nm-st { fill: var(--surface-solid); stroke-width: 3.2; cursor: pointer; }
+.nm-st.x { stroke: var(--nm-xfer); stroke-width: 3.4; }
+.nm-st.w { stroke: var(--nm-xfer); stroke-width: 2.6; stroke-dasharray: 3.2 2.2; }
+/* 换乘站标志与地图一致：白底 + 深色外环 + 各线路颜色分段内环 + ⇄ */
+#netmap { --nm-ring: #25334a; }
+:root[data-theme="dark"] #netmap { --nm-ring: #0e1622; }
+.nm-x { cursor: pointer; }
+.nm-xo { fill: #fff; stroke: var(--nm-ring); stroke-width: 3.3; transition: stroke-width .15s; }
+.nm-x:hover .nm-xo { stroke-width: 4.6; }
+.nm-xa { fill: none; stroke-width: 2.3; }
+.nm-xg { fill: none; stroke: var(--nm-ring); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.nm-st { fill: #fff; }
+.nm-tools { display: inline-flex; gap: 2px; padding: 2px; border-radius: 12px; background: var(--hover); }
+.nm-tools .hbtn { width: 32px; height: 32px; }
+.nm-tools .hbtn .ico { width: 17px; height: 17px; }
+.nm-win .stats-head .btn.sm { gap: 6px; }
+@media (max-width: 760px) { .nm-hint { display: none; } }
+.nm-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 10px 16px 0; flex-wrap: wrap; }
+.nm-bar .nm-chips { padding: 0; flex-basis: 100%; max-height: 72px; overflow-y: auto; }
+.nm-legend { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.nm-legend > span { display: inline-flex; }
+.nm-lg-gap { width: 8px; }
+.nm-label { font-size: 20px; }
+#netmap { --nm-xfer: #1b365c; }
+
+/* 首次打开：地图在开始界面显示后淡入 */
+#map.map-intro { opacity: 0; transition: opacity .9s ease; }
+#map.map-intro.map-in { opacity: 1; }
+
+/* 窗口较矮时左侧工具坞改为紧凑尺寸，保证 4 个视图 + 6 个图层按钮都能显示 */
+#dock { max-height: calc((100vh - 230px) / var(--uiz, 1)); }
+@media (max-height: 860px) {
+  #dock { width: 48px; padding: 5px; gap: 2px; top: 70px; }
+  #dock .dockbtn { width: 38px; height: 34px; border-radius: 10px; }
+  #dock .dockbtn .ico { width: 19px; height: 19px; }
+  #dock .dock-sep { margin: 3px 0 2px; }
+  #legendCard { left: 70px; top: 70px; }
+  #zoomCtl button { width: 34px; height: 32px; }
+}

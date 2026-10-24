@@ -19,55 +19,66 @@
       if (s && s.uiScale) document.documentElement.style.setProperty('--uiz', String(s.uiScale));
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/hud.css">
+  <link rel="stylesheet" href="css/screens.css">
+  <link rel="stylesheet" href="css/settings.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/maps.css">
+  <link rel="stylesheet" href="css/windows.css">
+  <link rel="stylesheet" href="css/responsive.css">
+  <link rel="stylesheet" href="css/economy.css">
+  <link rel="stylesheet" href="css/misc.css">
 </head>
 <body>
   <canvas id="map" aria-label="城市地图"></canvas>
   <div id="app"></div>
   <noscript>本游戏需要启用 JavaScript。</noscript>
-  <script src="js/util.js"></script>
-  <script src="js/loadpage.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/news.js"></script>
-  <script src="js/geo_gz.js"></script>
-  <script src="js/geo.js"></script>
-  <script src="js/data_gz.js"></script>
-  <script src="js/data_tutorial.js"></script>
-  <script src="js/geo_hz.js"></script>
-  <script src="js/data_hz.js"></script>
-  <script src="js/geo_hk.js"></script>
-  <script src="js/data_hk.js"></script>
-  <script src="js/geo_tk.js"></script>
-  <script src="js/data_tk.js"></script>
-  <script src="js/geo_tp.js"></script>
-  <script src="js/data_tp.js"></script>
-  <script src="js/maps.js"></script>
-  <script src="js/facility.js"></script>
-  <script src="js/city.js"></script>
-  <script src="js/metro.js"></script>
-  <script src="js/sim-par.js"></script>
-  <script src="js/sim.js"></script>
-  <script src="js/economy.js"></script>
-  <script src="js/macro.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/milestones.js"></script>
-  <script src="js/save.js"></script>
-  <script src="js/render.js"></script>
-  <script src="js/agents.js"></script>
-  <script src="js/icons.js"></script>
-  <script src="js/settings.js"></script>
-  <script src="js/sound.js"></script>
-  <script src="js/soundscape.js"></script>
-  <script src="js/tools.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/screens.js"></script>
-  <script src="js/pages.js"></script>
-  <script src="js/stats.js"></script>
-  <script src="js/netmap.js"></script>
-  <script src="js/follow.js"></script>
-  <script src="js/tutorial.js"></script>
-  <script src="js/desktop.js"></script>
-  <script src="js/monitor.js"></script>
-  <script src="js/main.js"></script>
+  <script src="js/core/util.js"></script>
+  <script src="js/core/loadpage.js"></script>
+  <script src="js/core/config.js"></script>
+  <script src="js/data/news.js"></script>
+  <script src="js/data/geo_gz.js"></script>
+  <script src="js/data/geo.js"></script>
+  <script src="js/data/data_gz.js"></script>
+  <script src="js/data/data_tutorial.js"></script>
+  <script src="js/data/geo_hz.js"></script>
+  <script src="js/data/data_hz.js"></script>
+  <script src="js/data/geo_hk.js"></script>
+  <script src="js/data/data_hk.js"></script>
+  <script src="js/data/geo_tk.js"></script>
+  <script src="js/data/data_tk.js"></script>
+  <script src="js/data/geo_tp.js"></script>
+  <script src="js/data/data_tp.js"></script>
+  <script src="js/data/maps.js"></script>
+  <script src="js/sim/facility.js"></script>
+  <script src="js/sim/city.js"></script>
+  <script src="js/sim/metro.js"></script>
+  <script src="js/sim/sim-par.js"></script>
+  <script src="js/sim/sim.js"></script>
+  <script src="js/sim/economy.js"></script>
+  <script src="js/sim/macro.js"></script>
+  <script src="js/sim/game.js"></script>
+  <script src="js/sim/milestones.js"></script>
+  <script src="js/platform/save.js"></script>
+  <script src="js/render/render.js"></script>
+  <script src="js/render/agents.js"></script>
+  <script src="js/ui/icons.js"></script>
+  <script src="js/core/settings.js"></script>
+  <script src="js/audio/sound.js"></script>
+  <script src="js/audio/soundscape.js"></script>
+  <script src="js/ui/tools.js"></script>
+  <script src="js/ui/ui.js"></script>
+  <script src="js/ui/screens.js"></script>
+  <script src="js/ui/pages.js"></script>
+  <script src="js/ui/stats.js"></script>
+  <script src="js/ui/netmap.js"></script>
+  <script src="js/ui/follow.js"></script>
+  <script src="js/ui/tutorial.js"></script>
+  <script src="js/render/cache.js"></script>
+  <script src="js/platform/desktop.js"></script>
+  <script src="js/platform/monitor.js"></script>
+  <script src="js/platform/idle.js"></script>
+  <script src="js/core/main.js"></script>
 </body>
 </html>

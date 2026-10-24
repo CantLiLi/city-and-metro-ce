@@ -257,3 +257,35 @@ def set_macos_app_name(name):
         NSProcessInfo.processInfo().setProcessName_(name)
     except Exception:
         log.debug('设置进程显示名失败', exc_info=True)
+
+
+# ---------------- 窗口方式：普通窗口 / 窗口化全屏 ----------------
+# 必须走 pywebview 自己的窗口接口：它的 winforms / cocoa 后端会把这些调用切回界面线程
+# （Control.Invoke / AppHelper.callAfter）。改成从网页的 JS 线程直接动原生窗口的话，
+# 窗口状态随后会被界面线程按它自己的记录改回去，界面上看着就是「按了没反应」。
+
+_window_mode = {'mode': 'window'}
+
+
+def _set_fullscreen(win, on):
+    if bool(_window_mode['mode'] != 'window') == on:
+        return
+    win.toggle_fullscreen()
+
+
+def set_window_mode(win, mode):
+    """切换窗口方式。mode: window 普通窗口 | max 窗口化全屏。"""
+    mode = str(mode or 'window')
+    if mode not in ('window', 'max'):
+        return {'ok': False, 'error': '未知的窗口方式'}
+    if win is None:
+        return {'ok': False, 'error': '窗口未就绪'}
+    try:
+        _set_fullscreen(win, mode != 'window')
+        if mode == 'window':
+            win.restore()
+    except Exception as exc:
+        log.warning('切换窗口方式失败: %s', exc, exc_info=True)
+        return {'ok': False, 'error': str(exc)}
+    _window_mode['mode'] = mode
+    return {'ok': True, 'mode': mode}

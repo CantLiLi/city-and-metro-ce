@@ -29,3 +29,10 @@ def profile_dir():
 
 def log_path():
     return os.path.join(data_dir(), 'shell.log')
+
+
+def cache_dir():
+    """渲染派生数据的缓存目录：可随时删除重建，与存档无关。"""
+    path = os.path.join(data_dir(), 'cache')
+    os.makedirs(path, exist_ok=True)
+    return path

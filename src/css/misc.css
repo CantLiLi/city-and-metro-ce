@@ -1,0 +1,70 @@
+/* 设施、图层分组、统计口径、方案面板、运行监控 */
+/* ======================== v1.9：设施、图层分组、统计口径 ======================== */
+.dock-sep.thin { width: 22px; margin: 3px 0 2px; opacity: .55; }
+.dot.ring { background: transparent; border: 3px solid currentColor; box-sizing: border-box; width: 12px; height: 12px; }
+.legend .seg-ctl { flex-wrap: wrap; row-gap: 4px; }
+.legend .seg-ctl button { flex: 1 1 auto; }
+.tk-basis { display: flex; gap: 5px; align-items: center; margin-top: 5px; line-height: 1.4; }
+.tk-basis .ico { width: 12px; height: 12px; flex: none; opacity: .8; }
+.tag .ico { width: 13px; height: 13px; vertical-align: -2px; }
+.chg .ico { width: 14px; height: 14px; vertical-align: -2px; color: var(--muted); }
+.tbl td .ico { width: 14px; height: 14px; vertical-align: -2px; color: var(--muted); }
+.tbl tr.clickable { cursor: pointer; }
+.tbl tr.clickable:hover td { background: var(--hover); }
+.tbl td small { font-size: 11px; }
+
+/* ======================== 方案面板 ======================== */
+.pl-new { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 2px; padding: 6px; border-radius: 13px; background: var(--surface-3); }
+.pl-newbtn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-solid); cursor: pointer; text-align: left; transition: background .18s, border-color .18s; }
+.pl-newbtn:hover { background: var(--hover); border-color: var(--accent); }
+.pl-newbtn .badge { width: 28px; height: 28px; border-radius: 9px; flex: none; }
+.pl-newbtn b { font-size: 13px; display: block; }
+.pl-list { margin-top: 6px; }
+.pl-card { position: relative; padding: 10px 11px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); margin: 8px 0; cursor: pointer; transition: border-color .2s, box-shadow .2s; }
+.pl-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.pl-top { display: flex; gap: 9px; align-items: center; }
+.pl-top .badge { width: 32px; height: 32px; border-radius: 10px; flex: none; }
+.pl-name { font-size: 13.5px; cursor: text; border-bottom: 1px dashed transparent; }
+.pl-name:hover { border-bottom-color: var(--line); }
+.pl-input { width: 100%; font: inherit; font-size: 13.5px; font-weight: 700; padding: 2px 5px; border-radius: 7px; border: 1px solid var(--accent); background: var(--surface-solid); color: var(--text); }
+.pl-cost { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.pl-cost .ico { width: 13px; height: 13px; opacity: .8; }
+.pl-sum { margin: 6px 0 0; }
+.pl-cf { display: flex; align-items: center; gap: 3px; margin-top: 4px; padding: 0; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.pl-cf:hover { text-decoration: underline; }
+.pl-cfh { margin: 3px 0 0 15px; }
+.pl-cf .ico { width: 12px; height: 12px; }
+.pl-ops { display: flex; align-items: center; gap: 5px; row-gap: 5px; flex-wrap: wrap; margin-top: 9px; }
+.pl-foot { display: flex; align-items: center; gap: 5px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* ======================== 运行监控（右下角） ======================== */
+#perf { position: fixed; right: 12px; bottom: 12px; z-index: 8; display: none; flex-direction: column; gap: 1px; padding: 6px 9px; border-radius: 10px; background: rgba(15, 22, 34, 0.74); color: #eaf1f9; font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; pointer-events: none; zoom: var(--uiz, 1); }
+#perf.on { display: flex; }
+#perf .perf-row { display: flex; align-items: baseline; gap: 12px; justify-content: space-between; }
+#perf .perf-row.hide { display: none; }
+#perf .perf-k { opacity: .6; letter-spacing: .04em; }
+#perf .perf-v { min-width: 52px; text-align: right; font-weight: 600; }
+#perf .perf-spark { display: block; width: 100%; margin-top: 2px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); }
+#perf .perf-chart { margin-top: 3px; }
+#perf .perf-chart.hide { display: none; }
+#perf .perf-cap { display: block; font-size: 10px; opacity: .5; letter-spacing: .05em; }
+/* 浮动小窗：可拖动、可收回；标题栏只在浮动时出现 */
+#perf .perf-bar { display: none; align-items: center; justify-content: space-between; gap: 10px; margin: -4px -9px 4px; padding: 2px 4px 2px 9px; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+#perf.float { pointer-events: auto; right: auto; bottom: auto; z-index: 60; width: 148px; padding-top: 2px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 0 0 1px rgba(255, 255, 255, .08); }
+#perf.float .perf-bar { display: flex; cursor: grab; }
+#perf.float .perf-bar:active { cursor: grabbing; }
+#perf .perf-title { font-size: 11px; opacity: .65; letter-spacing: .06em; }
+#perf .perf-x { border: 0; padding: 0 2px; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1; opacity: .55; cursor: pointer; }
+#perf .perf-x:hover { opacity: 1; }
+.set-row.dim.off { opacity: .45; }
+/* 监控项勾选表单：缩进到标题下方，两列排开 */
+.mon-form { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 0 0 10px 46px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); transition: opacity .2s; }
+.mon-form.off { opacity: .45; pointer-events: none; }
+.mon-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: background .15s; }
+.mon-item:hover { background: var(--hover); }
+.mon-item input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; cursor: pointer; }
+/* 通用勾选行：线路页里挑轨道用 */
+.chk-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: background .15s; }
+.chk-row:hover { background: var(--hover); }
+.chk-row input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; cursor: pointer; flex: none; }
+
