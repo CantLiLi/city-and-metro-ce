@@ -340,14 +340,14 @@
       case 'station': {
         if (st) { ui.select({ kind: 'station', id: st }); break; }
         if (seg) {
-          const r = g.edit((net) => M.splitSegment(net, seg, w.x, w.y, { size: this.stationSize, type: this.buildType }, g.city));
+          const r = g.edit((net) => M.splitSegment(net, seg, w.x, w.y, { size: this.stationSize, type: this.buildType }, g.city), { tag: g.planActive, own: true });
           if (r.station) ui.select({ kind: 'station', id: r.station });
           break;
         }
         const chk = M.checkSite(g.city, w.x, w.y, this.buildType);
         if (!chk.ok) { ui.toast('不能在此建站：' + chk.msg, 'bad'); break; }
         let id = null;
-        g.edit((net) => { id = M.addStation(net, w.x, w.y, { size: this.stationSize, type: this.buildType }, g.city); });
+        g.edit((net) => { id = M.addStation(net, w.x, w.y, { size: this.stationSize, type: this.buildType }, g.city); }, { tag: g.planActive, own: true });
         sfx('place');
         this.R.addFx('ripple', w.x, w.y);
         ui.select({ kind: 'station', id: id });
@@ -400,14 +400,14 @@
         return;
       }
       if (seg) {
-        const r = g.edit(function (net) { return M.splitSegment(net, seg, w.x, w.y, opts, g.city); });
+        const r = g.edit(function (net) { return M.splitSegment(net, seg, w.x, w.y, opts, g.city); }, { tag: g.planActive, own: true });
         if (r.station) { this.chain = r.station; this.bends = []; if (!this.lineLock) this.lineChoice = 'new'; ui.renderToolOpts(); }
         return;
       }
       const chk = M.checkSite(g.city, w.x, w.y, this.buildType);
       if (!chk.ok) { ui.toast('不能在此建站：' + chk.msg, 'bad'); return; }
       let id = null;
-      g.edit(function (net) { id = M.addStation(net, w.x, w.y, opts, g.city); });
+      g.edit(function (net) { id = M.addStation(net, w.x, w.y, opts, g.city); }, { tag: g.planActive, own: true });
       sfx('place');
       this.R.addFx('ripple', w.x, w.y);
       this.chain = id; this.bends = []; this.lineChoice = 'new';
@@ -432,9 +432,11 @@
       if (to === from) return { error: '不能连接到同一车站' };
       const res = M.addSegment(net, lid, from, to, bends, self.buildType);
       if (res.error) return res;
-      return { lid: lid, to: to };
-    });
+      return { lid: lid, to: to, line: lid };
+    }, { tag: g.planActive, own: true });
     if (r.error) { ui.toast(r.error, 'bad'); return; }
+    // 当前方案新建线路时记下它，方案卡片可以显示完整度并正确迁移线路
+    if (r.line && g.planActive && g.plansById[g.planActive]) { const _p = g.plansById[g.planActive]; _p.lineId = r.line; _p.evalVer = -1; }
     sfx('lay');
     {
       const net0 = this.net(), sg0 = M.findSeg(net0, r.lid, from, r.to), ln0 = net0.lines[r.lid];

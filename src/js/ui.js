@@ -22,7 +22,7 @@
   // 详情页图标与配色
   const PAGE_ICON = {
     build: ['hammer', 'b-blue'], station: ['station', 'b-teal'], line: ['route', 'b-blue'], road: ['car', 'b-orange'], zone: ['map', 'b-slate'],
-    finance: ['coin', 'b-gold'], tasks: ['flag', 'b-violet'], date: ['clock', 'b-teal'], saves: ['save', 'b-blue'], help: ['help', 'b-slate'], data: ['info', 'b-slate'],
+    finance: ['coin', 'b-gold'], tasks: ['flag', 'b-violet'], plans: ['layers', 'b-blue'], date: ['clock', 'b-teal'], saves: ['save', 'b-blue'], help: ['help', 'b-slate'], data: ['info', 'b-slate'],
     metric: ['chart', 'b-blue'], multi: ['layers', 'b-blue'], facility: ['pin', 'b-orange'],
   };
   const METRIC_ICON = { pop: ['people', 'b-blue'], share: ['metro', 'b-teal'], cong: ['car', 'b-orange'], commute: ['timer', 'b-violet'], sat: ['smile', 'b-green'] };
@@ -80,6 +80,9 @@
     this.taskCnt = h('span', { class: 'cnt' }, '0');
     const taskBtn = hb('tasks', 'flag', '任务', function () { self.openTop('tasks'); });
     taskBtn.appendChild(this.taskCnt);
+    this.planCnt = h('span', { class: 'cnt' }, '0');
+    const planBtn = hb('plans', 'layers', '方案：分步规划要建设的车站、线路与调整', function () { self.openTop('plans'); });
+    planBtn.appendChild(this.planCnt);
     this.top = h('header', { id: 'hudTop', class: 'hud hidden' },
       h('div', { class: 'cluster glass citybar' },
         h('div', { class: 'brand' }, h('resources', { src: 'resources/logo-white.png', alt: '城市与地铁' })),
@@ -93,6 +96,7 @@
       h('div', { class: 'cluster glass actions' },
         hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
         taskBtn,
+        planBtn,
         hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
         hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
         hb('settings', 'gear', '设置', function () { self.showSettings(); }),
@@ -443,6 +447,9 @@
       c[k].el.classList.toggle('on', on);
     }
     this.hbtns.tasks.classList.toggle('on', !!top && top.kind === 'tasks');
+    this.hbtns.plans.classList.toggle('on', !!top && top.kind === 'plans');
+    const np = g.plans ? g.plans.length : 0;
+    this.planCnt.textContent = np; this.planCnt.style.display = np ? '' : 'none';
   };
   function fmtHM(t) { if (!t) return ''; const d = new Date(t); return U.pad2(d.getHours()) + ':' + U.pad2(d.getMinutes()); }
   // 存档状态：注明已保存的是哪个游戏时刻，避免把旧快照当作当前进度
@@ -801,7 +808,7 @@
   UI.prototype.refreshObjectPage = function () {
     const top = this.stack[this.stack.length - 1];
     if (!top) return;
-    if (['build', 'station', 'line', 'multi'].indexOf(top.kind) < 0) return;
+    if (['build', 'station', 'line', 'multi', 'plans'].indexOf(top.kind) < 0) return;
     const a = document.activeElement;
     if (a && this.rBody.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) { this._pendingRefresh = true; return; }
     this.renderPage(false);
@@ -816,29 +823,33 @@
     const el = this.rBody.querySelector('.cf-list');
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
-  UI.prototype.confirmDraft = function () {
+  UI.prototype.confirmDraft = function (pid) {
     const g = this.g();
     // 记录新增的线路、车站与区段，用于建成反馈
     const dn = g.draft ? g.draft.net : null, on = g.net;
+    const built = pid ? g.planOverlay(pid) : null;
+    const inPlan = function (key) { return !built || built.stations[key] || built.segs[key] || built.lines[key]; };
     const newLines = [], newSt = [], newSeg = [];
     if (dn) {
-      for (const id in dn.lines) if (!on.lines[id]) newLines.push(dn.lines[id]);
-      for (const id in dn.stations) if (!on.stations[id]) newSt.push(dn.stations[id]);
-      for (const id in dn.segments) if (!on.segments[id]) newSeg.push(dn.segments[id]);
+      for (const id in dn.lines) if (!on.lines[id] && inPlan(id)) newLines.push(dn.lines[id]);
+      for (const id in dn.stations) if (!on.stations[id] && inPlan(id)) newSt.push(dn.stations[id]);
+      for (const id in dn.segments) if (!on.segments[id] && inPlan(id)) newSeg.push(dn.segments[id]);
     }
-    const r = g.confirmDraft();
-    if (!r.ok) { this.toast(r.reason, 'bad'); snd('error'); return; }
-    snd('build');
-    const R = this.R, net = g.net;
-    for (const s of newSeg) {
-      const ln = net.lines[s.line]; if (!ln || !net.segments[s.id]) continue;
-      try { R.addFx('trace', 0, 0, { pts: M.segGeom(net, net.segments[s.id], g.city).pts, color: ln.color }); } catch (e) { /* 几何不可用时跳过 */ }
-    }
-    newSt.forEach(function (s, k) { const ln = M.stationLines(net, s.id).map(function (l) { return net.lines[l]; })[0]; R.addFx('burst', s.x, s.y, { color: ln ? ln.color : '#2f6fb6', delay: 0.25 + k * 0.08 }); });
-    if (newLines.length) {
-      const L = newLines[0];
-      const n = M.lineTopo(net, L.id).stations.length;
-      this.celebrate(L.name + ' 开通运营', n + ' 座车站 · 乘客正在规划新的出行路线', L.color);
+    const r = g.confirmDraft(pid);
+    if (r.error) { this.toast(r.error, 'bad'); snd('error'); return; }
+    if (r.ok) {
+      snd('build');
+      const R = this.R, net = g.net;
+      for (const s of newSeg) {
+        const ln = net.lines[s.line]; if (!ln || !net.segments[s.id]) continue;
+        try { R.addFx('trace', 0, 0, { pts: M.segGeom(net, net.segments[s.id], g.city).pts, color: ln.color }); } catch (e) { /* 几何不可用时跳过 */ }
+      }
+      newSt.forEach(function (s, k) { const ln = M.stationLines(net, s.id).map(function (l) { return net.lines[l]; })[0]; R.addFx('burst', s.x, s.y, { color: ln ? ln.color : '#2f6fb6', delay: 0.25 + k * 0.08 }); });
+      if (newLines.length) {
+        const L = newLines[0];
+        const n = M.lineTopo(net, L.id).stations.length;
+        this.celebrate(L.name + ' 开通运营', n + ' 座车站 · 乘客正在规划新的出行路线', L.color);
+      }
     }
     this.tools.chain = null; this.tools.bends = [];
     this.hoverConflict = null;
@@ -872,7 +883,7 @@
     let label = '';
     if (t.kind === 'station') { const s = net.stations[t.id]; if (!s) return; label = '车站「' + s.name + '」'; }
     else { const sg = net.segments[t.id]; if (!sg) return; label = '轨道 ' + (net.lines[sg.line] ? net.lines[sg.line].name + ' ' : '') + net.stations[sg.a].name + '—' + net.stations[sg.b].name; }
-    const r = g.edit(function (n) { return { notes: t.kind === 'station' ? M.removeStation(n, t.id) : M.removeSegment(n, t.id) }; });
+    const r = g.edit(function (n) { return { notes: t.kind === 'station' ? M.removeStation(n, t.id) : M.removeSegment(n, t.id) }; }, { tag: g.planActive, own: true });
     if (r && r.error) { this.toast(r.error, 'bad'); return; }
     snd('demolish');
     this.toast('已在草案中拆除' + label + (imp && imp.lines.length ? '：' + imp.lines.slice(0, 3).join('；') + (imp.lines.length > 3 ? ' 等' : '') : ''), 'info');
@@ -899,11 +910,11 @@
     if (fix.op === 'restoreStation') {
       const o = g.net.stations[fix.station];
       if (!o) return;
-      g.edit(function (n) { const s = n.stations[fix.station]; if (s) { s.x = o.x; s.y = o.y; s.type = o.type; } });
+      g.edit(function (n) { const s = n.stations[fix.station]; if (s) { s.x = o.x; s.y = o.y; s.type = o.type; } }, { tag: g.planActive, own: true });
       this.toast('已撤回「' + o.name + '」的位置与建设方式修改', 'good');
       return;
     }
-    const r = g.edit(function (n) { return M.applyFix(n, fix); });
+    const r = g.edit(function (n) { return M.applyFix(n, fix); }, { tag: g.planActive, own: true });
     if (r && r.error) { this.toast(r.error, 'bad'); return; }
     if (r && r.notes) for (const n of r.notes) this.toast(n, 'info');
     this.toast('已在草案中应用：' + fix.label, 'good');
@@ -988,6 +999,10 @@
       if (open && top.kind === 'tasks') { this.closePanel(); return; }
       this.taskTab = 'active';
       this.openPage('tasks', 'active', { root: true });
+    }
+    else if (key === 'plans') {
+      if (open && top.kind === 'plans') { this.closePanel(); return; }
+      this.openPage('plans', null, { root: true });
     }
     else if (key === 'save') this.openPage('saves', null, { toggle: true, root: true });
     else this.openPage('metric', key, { toggle: true, root: true });
@@ -1270,7 +1285,8 @@
       narrowItem(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', document.documentElement.dataset.theme === 'dark' ? '浅色模式' : '深色模式', function () { self.toggleTheme(); }),
       narrowItem('gear', '设置', function () { self.showSettings(); }),
       h('hr'),
-      item('home', '返回主菜单', function () { self.backToMenu(); }));
+      item('home', '返回主菜单', function () { self.backToMenu(); }),
+      CM.desktop && CM.desktop.isDesktop() ? item('power', '退出游戏', function () { self.quitGame(); }) : null);
     document.body.appendChild(dd);
     this.dropdown = dd;
     // 矮窗口内保留菜单自身的滚动区域；窗口或界面缩放后重新跟随菜单按钮定位。
@@ -1492,13 +1508,19 @@
     this.openScreen(h('div', { class: 'card', style: { width: 'min(380px, calc(100vw - 32px))' } }, h('div', { class: 'loading' }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '' }), h('div', { class: 'muted' }, text))));
   };
   // 开始界面、选择地图、开局简报与更新公告见 screens.js
-  // 退出：网页无法强制关闭自己打开的标签页时，给出提示
+  // 退出：桌面版交给外壳关窗口（外壳会先等进度写盘）；网页无法强制关闭自己打开的标签页，给出提示
   UI.prototype.quitGame = function () {
     const self = this;
-    this.confirm('退出游戏？', '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。', '退出', function () {
+    const desktop = !!(CM.desktop && CM.desktop.isDesktop());
+    this.confirm('退出游戏？', desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。', '退出', function () {
+      if (desktop) { CM.desktop.quit(); return; }
       try { window.close(); } catch (e) { /* ignore */ }
-      setTimeout(function () { if (!window.closed) self.openScreen(h('div', { class: 'card', style: { width: 'min(420px, calc(100vw - 32px))', textAlign: 'center' } }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: function () { self.showStart(); } }, '返回主菜单'))), function () { self.showStart(); }); }, 120);
+      setTimeout(function () { if (!window.closed) self.showQuitFallback(); }, 120);
     }, false, 'power');
+  };
+  UI.prototype.showQuitFallback = function () {
+    const self = this;
+    this.openScreen(h('div', { class: 'card', style: { width: 'min(420px, calc(100vw - 32px))', textAlign: 'center' } }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: function () { self.showStart(); } }, '返回主菜单'))), function () { self.showStart(); });
   };
   // ======================== 设置 ========================
   // 设置：单页，只保留常用项；控件就地更新（不整页重绘），主题与界面大小平滑过渡

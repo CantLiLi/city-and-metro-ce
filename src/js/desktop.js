@@ -39,4 +39,9 @@
   info.openDataDir = function () { return isDesktop() ? call('open_data_dir') : Promise.reject(new Error('仅桌面版可用')); };
   info.openDoc = function (name) { return isDesktop() ? call('open_doc', [name]) : Promise.reject(new Error('仅桌面版可用')); };
   info.openExternal = function (url) { return isDesktop() ? call('open_external', [url]) : Promise.resolve(false); };
+  // 由外壳关闭窗口：外壳会先等 __cmDesktopClose 把进度写完再销毁窗口
+  info.quit = function () {
+    if (!isDesktop()) return Promise.resolve(false);
+    return call('quit_app').then(function (r) { return !!(r && r.ok); }, function () { return false; });
+  };
 })(window.CM);

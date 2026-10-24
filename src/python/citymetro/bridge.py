@@ -121,6 +121,13 @@ class ShellApi:
             return {'ok': False, 'error': str(exc)}
         return {'ok': True}
 
+    def quit_app(self):
+        # 只登记意图：关窗与存档等待都在 main.py 的退出线程里做，避免在 JS 调用线程里销毁窗口
+        if self.window is None:
+            return {'ok': False, 'error': '窗口未就绪'}
+        self.close_requested.set()
+        return {'ok': True}
+
 
 def bridge_script():
     payload = json.dumps({'name': APP_NAME, 'version': VERSION}, ensure_ascii=False)

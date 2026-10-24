@@ -12,17 +12,19 @@ import webview
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from citymetro import paths, storage
+from citymetro import paths, storage, window
 from citymetro.about import APP_ID, APP_NAME, VERSION
 from citymetro.bridge import ShellApi, bridge_script
 from citymetro.single_instance import InstanceLock
 
 WINDOW_TITLE = APP_NAME + ' v' + VERSION
-WINDOW_SIZE = (1440, 900)
-MIN_SIZE = (960, 640)
 ENGINE_TIMEOUT = 15
 SAVE_TIMEOUT = 20
 APP_USER_MODEL_ID = 'CityAndMetro.' + APP_ID
+
+# 与 index.html 的 theme-color 同色，避免载入瞬间闪白；深色值取自页面深色背景
+BG_LIGHT = '#eaf1f7'
+BG_DARK = '#14191f'
 
 log = logging.getLogger('citymetro')
 
@@ -80,6 +82,8 @@ def flush_and_destroy(window):
         log.debug('destroy 失败', exc_info=True)
 
 
+# 关窗只有一条路径：主线程只做登记，存档等待与销毁都放在后台线程，
+# 前端「退出」调用 quit_app 与点窗口关闭按钮都走这里，保证不会出现两次关闭或丢掉存档。
 def make_on_closing(window, state):
     def on_closing():
         if state['closing']:
@@ -89,6 +93,16 @@ def make_on_closing(window, state):
         return False
 
     return on_closing
+
+
+def watch_quit_request(window, api, state):
+    """前端点「退出」时 api.quit_app 只登记请求，存档等待统一在这里做。"""
+    while not api.close_requested.wait(0.2):
+        pass
+    if state['closing']:
+        return
+    state['closing'] = True
+    flush_and_destroy(window)
 
 
 def setup_logging():
@@ -148,7 +162,7 @@ def main():
         return 0
 
     try:
-        window, state = build_window()
+        app_window, state = build_window()
     except RuntimeError as exc:
         log.exception('启动失败: %s', exc)
         lock.release()
@@ -160,59 +174,69 @@ def main():
         storage_path=storage.profile_dir(),
         debug=bool(os.environ.get('CM_DEBUG')),
         localization={'global.quitConfirmation': '确定要退出城市与地铁吗？'},
-        icon=window_icon(),
+        icon=window.window_icon(),
     )
     lock.release()
     log.info('正常退出')
     return 0
 
 
-def window_icon():
-    """Windows 的 WinForms Icon 只认 .ico；macOS 用 NSImage 直接解码 PNG 更稳，且 384px 够 Retina。"""
-    name = 'favicon.ico' if sys.platform == 'win32' else 'logo-navy.png'
-    path = os.path.join(paths.image_dir(), name)
-    return path if os.path.isfile(path) else None
-
-
 def build_window():
     src_dir = paths.find_src_dir()
-    log.info('启动 %s %s, src=%s', APP_ID, VERSION, src_dir)
+    size, min_size = window.window_size()
+    dark = window.dark_mode()
+    log.info('启动 %s %s, src=%s, window=%dx%d, dark=%s',
+             APP_ID, VERSION, src_dir, size[0], size[1], dark)
+
     api = ShellApi()
-    window = webview.create_window(
+    app_window = webview.create_window(
         WINDOW_TITLE,
         url=os.path.join(src_dir, 'index.html'),
         js_api=api,
-        width=WINDOW_SIZE[0],
-        height=WINDOW_SIZE[1],
-        min_size=MIN_SIZE,
+        width=size[0],
+        height=size[1],
+        min_size=min_size,
         text_select=True,
         confirm_close=False,
-        background_color='#eaf1f7',
+        background_color=BG_DARK if dark else BG_LIGHT,
     )
-    api.bind(window)
-    state = {'closing': False}
+    api.bind(app_window)
+    state = {'closing': False, 'dark': dark}
 
     def on_loaded():
-        if not wait_for_engine(window):
+        apply_window_chrome(state)
+        if not wait_for_engine(app_window):
             log.error('前端未在 %ss 内就绪', ENGINE_TIMEOUT)
             return
         try:
-            window.evaluate_js(bridge_script())
+            app_window.evaluate_js(bridge_script())
         except Exception:
             log.exception('注入桌面外壳信息失败')
         log.info('前端就绪, renderer=%s', webview.renderer)
 
-    window.events.loaded += on_loaded
-    window.events.closing += make_on_closing(window, state)
-    return window, state
+    app_window.events.loaded += on_loaded
+    app_window.events.closing += make_on_closing(app_window, state)
+    threading.Thread(target=watch_quit_request, args=(app_window, api, state), daemon=True).start()
+    return app_window, state
+
+
+def apply_window_chrome(state):
+    """窗口显示后再动原生窗口：标题栏主题要句柄，macOS 的 level 要等消息循环转起来。"""
+    if sys.platform == 'darwin':
+        window.set_macos_on_top(bool(state.get('on_top', False)))
+        return
+    hwnd = window.window_handle()
+    if hwnd:
+        window.apply_titlebar_theme(hwnd, bool(state.get('dark')))
 
 
 def show_error(message):
+    width = min(620, round(window.window_size()[0][0] * 0.5))
     webview.create_window(
         APP_NAME,
         html='<body style="font:16px/1.7 system-ui;padding:2.5rem;color:#243">'
         '<b>无法启动城市与地铁</b><br>' + message + '</body>',
-        width=620,
+        width=width,
         height=240,
     )
     webview.start()

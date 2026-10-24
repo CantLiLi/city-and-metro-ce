@@ -1586,3 +1586,30 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 .tbl tr.clickable { cursor: pointer; }
 .tbl tr.clickable:hover td { background: var(--hover); }
 .tbl td small { font-size: 11px; }
+
+/* ======================== 方案面板 ======================== */
+.pl-add { flex: none; width: 30px; height: 30px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--accent); display: grid; place-items: center; cursor: pointer; transition: background .18s, border-color .18s, transform .18s; }
+.pl-add:hover { background: var(--hover); }
+.pl-add.on { background: var(--accent); border-color: var(--accent); color: #fff; transform: rotate(45deg); }
+.pl-add .ico { width: 17px; height: 17px; }
+.pl-new { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 2px; padding: 6px; border-radius: 13px; background: var(--surface-3); }
+.pl-newbtn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-solid); cursor: pointer; text-align: left; transition: background .18s, border-color .18s; }
+.pl-newbtn:hover { background: var(--hover); border-color: var(--accent); }
+.pl-newbtn .badge { width: 28px; height: 28px; border-radius: 9px; flex: none; }
+.pl-newbtn b { font-size: 13px; display: block; }
+.pl-list { margin-top: 6px; }
+.pl-card { position: relative; padding: 10px 11px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); margin: 8px 0; transition: border-color .2s, box-shadow .2s; }
+.pl-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.pl-top { display: flex; gap: 9px; align-items: center; }
+.pl-top .badge { width: 32px; height: 32px; border-radius: 10px; flex: none; }
+.pl-name { font-size: 13.5px; cursor: text; border-bottom: 1px dashed transparent; }
+.pl-name:hover { border-bottom-color: var(--line); }
+.pl-input { width: 100%; font: inherit; font-size: 13.5px; font-weight: 700; padding: 2px 5px; border-radius: 7px; border: 1px solid var(--accent); background: var(--surface-solid); color: var(--text); }
+.pl-cost { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.pl-cost .ico { width: 13px; height: 13px; opacity: .8; }
+.pl-sum { margin: 6px 0 0; }
+.pl-cf { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
+.pl-cf .ico { width: 12px; height: 12px; }
+.pl-ops { display: flex; align-items: center; gap: 5px; margin-top: 9px; }
+.pl-foot { display: flex; align-items: center; gap: 5px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+

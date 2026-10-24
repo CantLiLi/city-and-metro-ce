@@ -1188,6 +1188,111 @@
     return box;
   };
 
+  // ======================== 页面：方案 ========================
+  // 草案里的改动分成若干方案，各自独立修改、各自显示所需资金；确认某个方案只建它那部分，
+  // 其余方案自动去掉已被建成的部分。全部方案确认完或放弃后草案结束。
+  const PLAN_KIND = {
+    station: ['station', '站点', '新建或改造车站的方案'],
+    line: ['route', '线路', '把车站连成线路的方案'],
+    adjust: ['pencil', '调整', '搬迁、改建、拆除既有设施的方案'],
+  };
+  UI.prototype.page_plans = function () {
+    const g = this.g(), self = this, el = h('div', { class: 'pl-page' });
+    const d = g.draft;
+    if (!d) {
+      el.appendChild(this.callout('info', 'info', '还没有建设草案。点下面的 + 新建一个方案，或用底部的「建站」「绘线」工具开始规划；确认前不会扣费。'));
+    }
+    // 新建方案
+    const picker = h('div', { class: 'pl-new hidden' },
+      Object.keys(PLAN_KIND).map(function (k) {
+        const K = PLAN_KIND[k];
+        return h('button', { class: 'pl-newbtn', onclick: function () { self.newPlan(k); } }, h('span', { class: 'badge b-blue' }, ic(K[0])), h('div', { class: 'grow' }, h('b', null, '新建' + K[1] + '方案'), h('div', { class: 'tiny muted' }, K[2])));
+      }));
+    const addBtn = h('button', { class: 'pl-add', 'data-tip': '新建方案', onclick: function () { picker.classList.toggle('hidden'); addBtn.classList.toggle('on'); } }, ic('plus'));
+    el.appendChild(h('div', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
+      h('b', { class: 'grow' }, '建设方案'), addBtn));
+    el.appendChild(picker);
+    if (!d) return { title: '建设方案', el: el };
+    // 方案列表
+    const list = h('div', { class: 'pl-list' });
+    if (!g.plans.length) list.appendChild(h('div', { class: 'note' }, '草案里还没有方案。点 + 新建，之后的修改会记在这个方案里。'));
+    for (const p of g.plans) list.appendChild(this.planCard(p));
+    el.appendChild(list);
+    // 还没有归属方案的改动
+    const ev = g.draftEval();
+    const loose = [];
+    for (const t of ev.changes.add) if (g.planOwner(g.stationKeyByAdd(t)) === null) loose.push(t);
+    if (loose.length) {
+      el.appendChild(this.callout('warn', 'warn', '有 ' + loose.length + ' 项改动不属于任何方案：' + loose.slice(0, 3).join('；') + (loose.length > 3 ? ' 等' : '') + '。它们会随「确认全部」一起建成，也可以先归到某个方案。'));
+    }
+    // 结算状态
+    const can = g.canConfirm();
+    el.appendChild(h('div', { class: 'pl-foot' },
+      h('button', { class: 'btn sm ghost danger', onclick: function () { self.discardDraft(); } }, ic('trash'), '放弃草案'),
+      h('span', { class: 'grow' }),
+      h('button', { class: 'btn sm', 'data-tip': '打开草案详情：变更清单、费用明细与效果预测', onclick: function () { self.openPage('build', null); } }, '草案详情'),
+      h('button', { class: 'btn sm primary', 'data-tip': can.ok ? '把所有方案的改动一次建成' : can.reason, disabled: !can.ok, onclick: function () { self.confirmDraft(); } }, ic('hammer'), '确认全部 ' + U.fmtMoney(ev.total))));
+    return { title: '建设方案', el: el };
+  };
+  UI.prototype.planCard = function (p) {
+    const g = this.g(), self = this;
+    const K = PLAN_KIND[p.kind] || PLAN_KIND.adjust;
+    const ov = g.planOverlay(p.id);
+    const val = ov ? ov.val : null;
+    const nAdd = val ? val.changes.add.length : 0, nMod = val ? val.changes.mod.length : 0, nDel = val ? val.changes.del.length : 0;
+    const c = h('div', { class: 'pl-card' + (g.planActive === p.id ? ' on' : '') });
+    // 标题行：类型、名称（可就地改名）、设为当前
+    const nameEl = h('b', { class: 'pl-name', 'data-tip': '点击改名' }, p.name || (K[1] + '方案'));
+    nameEl.addEventListener('click', function () {
+      const inp = h('input', { class: 'pl-input', value: p.name || K[1] + '方案', maxlength: 40 });
+      nameEl.replaceWith(inp); inp.focus(); inp.select();
+      const done = function (ok) { const v = ok ? inp.value : (p.name || K[1] + '方案'); g.planRename(p.id, v); self.renderPage(false); };
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); e.stopPropagation(); });
+      inp.addEventListener('blur', function () { done(true); });
+    });
+    c.appendChild(h('div', { class: 'pl-top' },
+      h('span', { class: 'badge ' + (g.planActive === p.id ? 'b-blue' : 'b-slate') }, ic(K[0])),
+      h('div', { class: 'grow' }, nameEl, h('div', { class: 'tiny muted' }, K[1] + '方案 · ' + p.createdAt + (p.touched ? '' : ' · 还没有改动'))),
+      h('span', { class: 'pl-cost' }, ic('coin'), U.fmtMoney(val ? val.total : 0))));
+    // 变更摘要
+    c.appendChild(h('div', { class: 'pl-sum tiny' + (nAdd + nMod + nDel ? '' : ' muted') }, nAdd + ' 新建 · ' + nMod + ' 修改 · ' + nDel + ' 拆除'));
+    if (val && val.conflicts.filter(function (x) { return ov.conflicts.indexOf(x) >= 0; }).length) {
+      c.appendChild(h('div', { class: 'pl-cf tiny bad' }, ic('warn'), ' 有 ' + ov.conflicts.length + ' 处冲突需先解决'));
+    }
+    if (p.notes && p.notes.length) for (const s of p.notes) c.appendChild(h('div', { class: 'tiny muted' }, '· ' + s));
+    // 操作
+    const canType = function () { return !g.draft || !g.draft.liveSnap; };
+    const conf = h('button', { class: 'btn sm primary', 'data-tip': '只建设本方案的内容', disabled: !canType() || !val || !(nAdd + nMod + nDel), onclick: function () { self.confirmDraft(p.id); } }, ic('hammer'), '确认建设');
+    c.appendChild(h('div', { class: 'pl-ops' },
+      h('button', { class: 'btn sm' + (g.planActive === p.id ? ' primary' : ' ghost'), 'data-tip': '设为当前方案：之后在地图上的修改都记在这个方案里', onclick: function () { self.pickPlan(p.id); } }, g.planActive === p.id ? '当前方案' : '设为当前'),
+      h('span', { class: 'grow' }),
+      h('button', { class: 'btn sm ghost danger', 'data-tip': '删除这个方案（草案里属于它的改动一并丢弃）', onclick: function () { self.delPlan(p.id); } }, ic('trash')),
+      conf));
+    return c;
+  };
+  // 设为当前方案：之后的修改记到它名下
+  UI.prototype.pickPlan = function (pid) {
+    const g = this.g(); if (!g) return;
+    g.planActive = pid;
+    this.toast('当前方案：' + (g.plansById[pid] ? (g.plansById[pid].name || '未命名方案') : ''), 'info');
+    this.renderPage(false);
+  };
+  UI.prototype.newPlan = function (kind) {
+    const g = this.g(); if (!g) return;
+    g.ensureDraft();
+    const p = g.planNew(kind, { name: '' });
+    this.renderDraftbar();
+    this.renderPage(false);
+    this.toast('已新建' + (PLAN_KIND[kind] ? PLAN_KIND[kind][1] : '') + '方案，之后的修改会记在它名下', 'good');
+    return p;
+  };
+  UI.prototype.delPlan = function (pid) {
+    const g = this.g(), self = this;
+    const p = g.plansById[pid]; if (!p) return;
+    const doIt = function () { g.planDel(pid); self.renderDraftbar(); self.renderPage(false); };
+    this.confirm('删除方案「' + (p.name || '未命名方案') + '」？', '草案里属于它的改动会一并丢弃，不产生费用。', '删除', doIt, true, 'trash');
+  };
+
   // ======================== 页面：任务 ========================
   // 分页：进行中 / 已完成 / 未完成。进行中的任务按剩余时间排序；每张卡片：类型图标、进度环、目标与当前值、
   // 连接任务的站点清单、连续月数、期限条（越临近越醒目）、奖励与未完成后果、定位入口
