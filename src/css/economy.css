@@ -145,8 +145,9 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 /* ---------- v1.8 推进完成报告 ---------- */
 .toast.has-act { padding-right: 10px; }
 .toast-act { flex: none; margin-left: 4px; }
-.card.jr { width: min(720px, calc(100vw - 32px)); padding: 20px 22px 16px; display: flex; flex-direction: column; overflow: hidden; }
-.card.jr .card-head { margin-bottom: 10px; }
+.card.jr { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 20px 22px 16px; display: flex; flex-direction: column; overflow: hidden; }
+.card.jr .card-head { margin-bottom: 10px; flex: none; }
+.card.jr .modal-actions { margin-top: 12px; flex: none; }
 .jr-scroll { overflow-y: auto; min-height: 0; flex: 1; margin: 0 -6px; padding: 0 6px; }
 .jr-tl { display: flex; align-items: flex-start; padding: 6px 4px 2px; margin-bottom: 4px; position: relative; }
 .jr-tl::before { content: ''; position: absolute; left: 10px; right: 10px; top: 13px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--accent-soft), var(--accent)); }
@@ -187,7 +188,7 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 .jr-ev { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 12.5px; border-bottom: 1px solid var(--line); }
 .jr-ed { width: 56px; flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
 .jr-ec { flex: none; font-size: 10.5px; font-weight: 700; padding: 0 6px; border-radius: 999px; border: 1px solid; }
-@media (max-width: 760px) { .jr-grid { grid-template-columns: 1fr 1fr; } .card.jr { padding: 16px 14px 12px; } }
+@media (max-width: 760px) { .jr-grid { grid-template-columns: 1fr 1fr; } .card.jr { padding: 16px 14px 12px; max-height: calc(100vh - 16px); } }
 .jr-tl { overflow: hidden; padding-bottom: 26px; line-height: 1.4; }
 .jr-m span { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); }
 .jr-m.first span { left: 0; transform: none; }

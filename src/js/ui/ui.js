@@ -354,7 +354,7 @@
     g.on('failed', function (f) { snd('fail'); if (!g.jumping) self.showFailure(f); });
     g.on('jump', function () { snd('whoosh'); self.showJump(); });
     g.on('jumpProgress', function (p) { self.updateJump(p); });
-    g.on('jumpDone', function (r) { snd('chime'); self.showJumpResult(r); self.scheduleAutosave(); if (r.failed) self.showFailure(r.failed); });
+    g.on('jumpDone', function (r) { snd('chime'); self.closeScreen(); self.showJumpResult(r); self.scheduleAutosave(); if (r.failed) self.showFailure(r.failed); });
     g.on('speed', function () { self.renderToolbar(); });
     // 里程碑：消息提示；重大节点弹出庆祝横幅（跳月 / 跳年期间只记录）
     g.on('milestone', function (r) {
@@ -2254,7 +2254,8 @@
     this.jumpBar = h('i', { style: { width: '2%' } });
     this.jumpPct = h('b', { class: 'jump-pct' }, '2%');
     const t = j.target;
-    this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)), null);
+    this.closeSheet();
+    this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)), null, 'jumping');
   };
   UI.prototype.updateJump = function (p) {
     const v = Math.max(0, Math.min(100, Math.round((p || 0) * 100)));
@@ -2266,6 +2267,7 @@
   UI.prototype.showJumpResult = function (r) {
     const g = this.g(), self = this, a = r.after;
     const months = (r.to[0] - r.from[0]) * 12 + (r.to[1] - r.from[1]);
+    this.closeScreen();
     this.lastReport = r;
     if (months <= 1 && !r.failed) {
       this.closeOverlay();
