@@ -348,7 +348,7 @@
   Game.prototype.ensureDraft = function () {
     if (!this.draft) {
       this.draft = { net: M.clone(this.net), undo: [], redo: [], ver: 1, evalVer: -1, eval: null, compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: [] };
-      if (!this.plans.length) this.autoPlan();
+
       this.emit('draft');
     }
     return this.draft;
@@ -394,12 +394,6 @@
     const d = this.draft; if (!d) return;
     d.coverage.push({ plan: own ? pid : null, own: !!own, keys: keys || null });
     if (own) { const p = this.plansById[pid]; if (p) p.touched = true; }
-  };
-  // 草案刚建立时全部改动归给新建的方案（否则玩家会看到重复的「顺便改动」）
-  Game.prototype.planPick = function () { return this.planActive && this.plansById[this.planActive] ? this.planActive : null; };
-  Game.prototype.autoPlan = function () {
-    const pid = this.planPick() || this.planNew().id;
-    this.attachPlan(pid, true);
   };
   // 拖动等连续编辑：开始时记一次撤销点
   Game.prototype.beginLive = function () { const d = this.ensureDraft(); d.liveSnap = JSON.stringify(d.net); d.livePlan = this.planActive; d.livePre = keySet(d.net); };
@@ -467,10 +461,23 @@
   };
   Game.prototype.planDel = function (pid) {
     const p = this.plansById[pid]; if (!p) return { error: '方案不存在' };
+    const d = this.draft;
+    if (d) {
+      // 只属于这个方案、别处也没用到的草案对象随之丢弃（否则轨道会悬空）
+      const mine = function (key) {
+        for (const c of d.coverage) if (c.plan && c.plan !== pid && c.keys && c.keys[key]) return false;
+        return true;
+      };
+      for (const k in d.net.segments) if (this.planOwner(k) === pid && mine(k)) delete d.net.segments[k];
+      for (const k in d.net.stations) if (this.planOwner(k) === pid && mine(k)) delete d.net.stations[k];
+      for (const k in d.net.segments) { const sg = d.net.segments[k]; if (!d.net.stations[sg.a] || !d.net.stations[sg.b]) delete d.net.segments[k]; }
+      d.coverage = d.coverage.filter(function (c) { return c.plan !== pid; });
+      d.ver++;
+    }
     this.plans = this.plans.filter(function (q) { return q.id !== pid; });
     delete this.plansById[pid];
-    const d = this.draft; if (d) d.coverage = d.coverage.filter(function (c) { return c.plan !== pid; });
     if (this.planActive === pid) this.planActive = this.plans.length ? this.plans[this.plans.length - 1].id : null;
+    if (d) this.invalidatePrediction();
     this.emit('draft');
     return { ok: true };
   };
@@ -531,22 +538,23 @@
     ov.line = p.lineId && ov.net.lines[p.lineId] ? p.lineId : null;
     return ov;
   };
-  // 方案的部分网络：正式网络 + 本方案自己的那部分改动（连带引用的车站，否则轨道悬空）
+  // 方案的部分网络：正式网络 + 本方案自己的那部分改动（连带引用的车站，否则轨道悬空）。
+  // 已建成的对象一律用正式网络里的那一份：草案里的副本只是历史，参数与引用都以正式网络为准。
   Game.prototype.subNet = function (ov) {
     const d = this.draft, off = this.net, t = d.net;
     const net = { stations: {}, segments: {}, lines: {}, nextId: t.nextId };
     for (const k in off.stations) net.stations[k] = off.stations[k];
     for (const k in off.segments) net.segments[k] = off.segments[k];
     for (const k in off.lines) net.lines[k] = off.lines[k];
-    for (const k in ov.stations) if (t.stations[k]) net.stations[k] = t.stations[k];
-    for (const k in ov.segs) if (t.segments[k]) net.segments[k] = t.segments[k];
-    for (const k in ov.lines) if (t.lines[k]) net.lines[k] = t.lines[k];
+    for (const k in ov.stations) if (t.stations[k] && !off.stations[k]) net.stations[k] = t.stations[k];
+    for (const k in ov.segs) if (t.segments[k] && !off.segments[k]) net.segments[k] = t.segments[k];
+    for (const k in ov.lines) if (t.lines[k] && !off.lines[k]) net.lines[k] = t.lines[k];
     // 本方案的轨道连到的车站（可能属于别的方案）：一并带上，费用里会算上它们；
     // 已是正式网络一部分的不再算（它们已建成，不属于任何一个草案里的新轨道）
     for (const k in ov.segs) {
       const sg = t.segments[k]; if (!sg) continue;
       for (const sk of [sg.a, sg.b]) if (t.stations[sk] && !off.stations[sk]) net.stations[sk] = t.stations[sk];
-      if (t.lines[sg.line]) net.lines[sg.line] = t.lines[sg.line];
+      if (t.lines[sg.line] && !off.lines[sg.line]) net.lines[sg.line] = t.lines[sg.line];
     }
     for (const k in ov.removals) delete net.stations[k];
     // 轨道连到的车站若已被拆掉，轨道随之作废（否则网络不完整）
@@ -615,7 +623,7 @@
       if (keep.stations[k] || keep.segments[k]) rekey['n:' + k] = 'b:' + k;
       adopt['n:' + k] = 1;
     }
-    for (const k in built) { delete keep.stations[k]; delete keep.segments[k]; }
+    // 建成后的对象留在草案里，只是与正式网络一致了（删掉会被求值当成拆除）
     for (const k in ov.removals) {
       delete keep.stations[k];
       if (this.net.stations[k]) adopt['b:' + k] = 1;
@@ -639,7 +647,11 @@
     }
     keep.nextId = d.net.nextId;
     // 剩下的改动与正式网络里已建成的对象分开编号，免得同一个 id 被当成既有对象的搬迁
-    const remap = this.rekeyDraft(keep, prev);
+    // 这次建成的对象已经进入正式网络：草案里与它们同键的副本直接去掉，剩下的才是还没建的部分
+    for (const k in built) {
+      if (this.net.stations[k] || this.net.segments[k] || this.net.lines[k]) { delete keep.stations[k]; delete keep.segments[k]; } else if (this.net.lines[k]) delete keep.lines[k];
+    }
+    const remap = this.rekeyDraft(keep, this.net);
     const ren = function (key) {
       const raw = key.slice(2), pfx = key.slice(0, 2);
       const nk = pfx === 'n:' ? (remap.st[raw] || remap.sg[raw]) : null;
@@ -670,7 +682,6 @@
       cov = d.coverage.filter(function (c) { return c.keys && Object.keys(c.keys).length; });
       if (!cov.length) cov = [{ plan: left.length ? left[left.length - 1].id : null, own: true, keys: rest, grp: null }];
     }
-    if (typeof process !== 'undefined' && process.env.DBG) console.log('DBG keep segs', Object.keys(keep.segments), 'st', Object.keys(keep.stations), 'cov', JSON.stringify(cov), 'plans', this.plans.filter(function(q){return q.id!==pid;}).map(function(q){return [q.name, JSON.stringify(q.pend), JSON.stringify(q.kept)];}));
     M.normalizeLines(keep);
     this.plans = this.plans.filter(function (x) { return x.id !== pid; });
     delete this.plansById[pid];
@@ -678,10 +689,8 @@
     // 这次确认的只是方案，草案本身要留住（撤销点重来）
     this.draft = { net: keep, undo: [], redo: [], ver: d.ver + 1, evalVer: -1, eval: null, compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: cov };
     // 最后一个方案建完、草案里不再有东西：直接结束草案
-    if (!this.plans.length && !Object.keys(keyDiff(keySet(keep), this.net)).length) {
-      const ev = this.draftEval();
-      if (ev && !ev.changed) { this.draft = null; this.emit('draft'); return r; }
-    }
+    if (!this.plans.length && !Object.keys(keep.stations).length && !Object.keys(keep.segments).length) { this.draft = null; this.emit('draft'); return r; }
+    if (!this.plans.length && !this.draftEval().changed) { this.draft = null; this.emit('draft'); return r; }
     this.invalidatePrediction();
     this.emit('draft');
     return r;

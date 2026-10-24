@@ -1530,13 +1530,11 @@
     this._sheetBack = opts.back || function () {
       if (typeof self.showStart === 'function') self.showStart({ noAnim: true });
     };
-    // 先让浏览器把卡片的静止态渲染一帧，再上 sheet-in：
-    // 同一帧里 append + 加类，关键帧的起始态会被合并掉，滑入就看不出来。
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        if (host.isConnected) host.classList.add('sheet-in');
-      });
-    });
+    // 卡片插入时已经是「起点」状态（见 style.css 的 .start-sheet > .card）。
+    // 先强制算一次布局把起点样式定下来，再加 sheet-in 过渡到原位；
+    // 不这么做的话浏览器可能把两次样式合并，卡片会直接在终点出现。
+    void host.offsetWidth;
+    host.classList.add('sheet-in');
     this._sheetTimer = setTimeout(function () {
       self._sheetTimer = null;
       host.classList.remove('sheet-in');

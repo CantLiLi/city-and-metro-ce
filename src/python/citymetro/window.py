@@ -1,7 +1,7 @@
 """桌面窗口的尺寸与平台特效。
 
-窗口大小按实际屏幕来：设计分辨率只在屏幕上放不下时才用来兜底缩放，
-不再写死 1440×900。
+窗口大小按实际屏幕来：先取屏幕的可用区域（扣掉菜单栏和 Dock / 任务栏），
+再把设计分辨率按屏幕的实际长宽比等比缩放进去，不留黑边也不写死 1440×900。
 """
 
 import ctypes
@@ -11,9 +11,10 @@ import sys
 
 log = logging.getLogger('citymetro')
 
-# 窗口四周留出的桌面空白比例，以及窗口最小尺寸相对屏幕的上限
-SCREEN_MARGIN = 0.06
-MAX_SCREEN_RATIO = 0.9
+# 窗口四周留出的桌面留白比例（左右各一份）
+SCREEN_MARGIN = 0.03
+# 最小尺寸最多占到可用区域的比例，macOS 的菜单栏 / Dock 再厚也不会顶出去
+SCREEN_FILL = 0.92
 DESIGN_SIZE = (1440, 900)
 MIN_WINDOW_SIZE = (960, 640)
 
@@ -36,26 +37,67 @@ def _main_screen():
     return screens[0]
 
 
+def _work_area(frame):
+    """屏幕比可用区域多吃掉的 (宽, 高)：macOS 是菜单栏和 Dock，Windows 是任务栏，取不到按 0 算。"""
+    total_w = int(getattr(frame, 'width', 0) or 0)
+    total_h = int(getattr(frame, 'height', 0) or 0)
+    work = getattr(frame, 'work_area', None)
+    if work is None:
+        return 0, 0
+    taken_w = total_w - int(getattr(work, 'width', 0) or 0)
+    taken_h = total_h - int(getattr(work, 'height', 0) or 0)
+    return max(0, taken_w), max(0, taken_h)
+
+
+def _windows_frame():
+    """标题栏加边框占掉多少逻辑像素 (宽, 高)，SPI 拿到的已经是逻辑像素，不用自己乘缩放比。"""
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    user32.AdjustWindowRectEx.argtypes = [
+        ctypes.POINTER(ctypes.wintypes.RECT),
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.BOOL,
+        ctypes.wintypes.DWORD,
+    ]
+    # WS_OVERLAPPEDWINDOW 带 WS_MAXIMIZEBOX，不带的话标题栏会被多算一次
+    frame = ctypes.wintypes.RECT(0, 0, 100, 100)
+    user32.AdjustWindowRectEx(ctypes.byref(frame), 0x00CF0000, False, 0x00040000)
+    return max(0, frame.right - frame.left - 100), max(0, frame.bottom - frame.top - 100)
+
+
 def window_size():
-    """按当前屏幕算出窗口大小与最小尺寸（pywebview 的逻辑像素，WinForms 自己按 DPI 换算）。"""
+    """按当前屏幕可用区域算出窗口大小与最小尺寸（pywebview 的逻辑像素，WinForms 自己按 DPI 换算）。"""
     try:
-        screen = _main_screen()
+        frame = getattr(_main_screen(), 'frame', None)
     except Exception:
         log.debug('读取屏幕信息失败，使用设计尺寸', exc_info=True)
-        screen = None
-    if screen is None:
+        frame = None
+    width = int(getattr(frame, 'width', 0) or 0)
+    height = int(getattr(frame, 'height', 0) or 0)
+    if width <= 0 or height <= 0:
         return DESIGN_SIZE, MIN_WINDOW_SIZE
 
-    width, height = int(screen.width), int(screen.height)
-    usable_w = round(width * (1 - SCREEN_MARGIN * 2))
-    usable_h = round(height * (1 - SCREEN_MARGIN * 2))
-    # 保持设计比例把可用区域铺满，屏幕大就等比放大，小就等比缩小
-    fit = min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1])
-    size = (round(DESIGN_SIZE[0] * fit), round(DESIGN_SIZE[1] * fit))
-    # 最小尺寸不能超过屏幕本身，否则窗口一旦缩小就再也拉不回来
+    # 先用系统给的可用区域，取不到就退回整屏再扣掉标题栏
+    taken_w, taken_h = _work_area(frame)
+    if taken_w == 0 and taken_h == 0 and sys.platform == 'win32':
+        try:
+            taken_w, taken_h = _windows_frame()
+        except Exception:
+            log.debug('读取窗口边框尺寸失败', exc_info=True)
+    usable_w = width * (1 - SCREEN_MARGIN * 2) - taken_w
+    usable_h = height * (1 - SCREEN_MARGIN * 2) - taken_h
+    # 可用区域小得连设计尺寸的四成都放不下，老老实实按设计尺寸来
+    if usable_w < DESIGN_SIZE[0] * 0.4 or usable_h < DESIGN_SIZE[1] * 0.4:
+        return DESIGN_SIZE, MIN_WINDOW_SIZE
+
+    # 保持设计比例把可用区域铺满：屏幕比 16:10 宽就按宽度对齐，比它窄就按高度对齐
+    scale = min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1])
+    size = (round(DESIGN_SIZE[0] * scale), round(DESIGN_SIZE[1] * scale))
+    # 最小尺寸不能超过屏幕可拖动区域，否则窗口一旦缩小就再也拉不回来
     min_size = (
-        min(MIN_WINDOW_SIZE[0], round(width * MAX_SCREEN_RATIO)),
-        min(MIN_WINDOW_SIZE[1], round(height * MAX_SCREEN_RATIO)),
+        min(MIN_WINDOW_SIZE[0], round(width * SCREEN_FILL) - taken_w),
+        min(MIN_WINDOW_SIZE[1], round(height * SCREEN_FILL) - taken_h),
     )
     return size, min_size
 

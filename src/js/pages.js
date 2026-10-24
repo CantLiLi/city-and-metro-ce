@@ -1218,10 +1218,17 @@
     if (!g.plans.length) list.appendChild(h('div', { class: 'note' }, '草案里还没有方案。点 + 新建，之后的修改会记在这个方案里。'));
     for (const p of g.plans) list.appendChild(this.planCard(p));
     el.appendChild(list);
-    // 还没有归属方案的改动
+    // 还没有归属方案的改动（只统计真正没人认领的）
     const ev = g.draftEval();
     const loose = [];
-    for (const t of ev.changes.add) if (g.planOwner(g.stationKeyByAdd(t)) === null) loose.push(t);
+    for (const key in d.net.stations) {
+      if (g.net.stations[key] || !d.net.stations[key]) continue;
+      if (g.planOwner(key) === null) loose.push('新建车站「' + d.net.stations[key].name + '」');
+    }
+    for (const key in d.net.segments) {
+      if (g.net.segments[key] || !d.net.segments[key]) continue;
+      if (g.planOwner(key) === null) loose.push('新建轨道 ' + (d.net.lines[d.net.segments[key].line] ? d.net.lines[d.net.segments[key].line].name : ''));
+    }
     if (loose.length) {
       el.appendChild(this.callout('warn', 'warn', '有 ' + loose.length + ' 项改动不属于任何方案：' + loose.slice(0, 3).join('；') + (loose.length > 3 ? ' 等' : '') + '。它们会随「确认全部」一起建成，也可以先归到某个方案。'));
     }
@@ -1426,12 +1433,13 @@
   // ======================== 页面：帮助 ========================
   UI.prototype.page_help = function () {
     const el = h('div');
-    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['1–9（线路选择框）', '起点同时是多条线路的端点时，选择要延长的线路'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图（可平滑缩放、导出 PNG）'], ['点击行驶中的列车', '跟随这列车；H 隐藏 / 显示界面，Esc 或拖动地图退出'], ['/', '搜索车站、线路、道路、区域与地名'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
+    const rows = [['鼠标左键拖动 / WASD / 方向键', '平移地图'], ['滚轮 / + −', '缩放'], ['V / B / L / E / X', '选择 / 建站 / 绘线 / 修改 / 拆除'], ['Shift + 点击（绘线）', '添加转弯点'], ['右键 / Enter（绘线）', '结束本次绘线（下次从线路端点开始会自动延长该线路）'], ['1–9（线路选择框）', '起点同时是多条线路的端点时，选择要延长的线路'], ['Backspace', '撤销转弯点或草案上一步'], ['Ctrl+Z / Ctrl+Y（或 Ctrl+Shift+Z）', '撤销 / 重做草案'], ['Ctrl + Enter', '确认建设草案'], ['Ctrl + Enter（方案面板内）', '确认当前方案'], ['Ctrl / Shift + 点击（选择、修改）', '多选车站或轨道，批量修改'], ['拖动线路端点的「+」', '直接延长所选线路'], ['空格', '暂停 / 继续（进入游戏时默认暂停）'], ['1 / 2 / 3', '1× / 3× / 8× 速度'], ['T / U', '切换 2D·2.5D / 地下视图'], ['G', '城市统计'], ['K', '线路示意图（可平滑缩放、导出 PNG）'], ['点击行驶中的列车', '跟随这列车；H 隐藏 / 显示界面，Esc 或拖动地图退出'], ['/', '搜索车站、线路、道路、区域与地名'], ['N', '切换浅色 / 深色模式'], ['M', '开关音效'], ['F', '显示全图'], ['Esc', '结束绘线 → 退出工具 → 收起面板']];
     const t = h('table', { class: 'tbl' });
     for (const r of rows) t.appendChild(h('tr', null, h('td', null, h('kbd', null, r[0])), h('td', { style: { textAlign: 'left' } }, r[1])));
     el.appendChild(t);
     el.appendChild(h('h3', null, '玩法提示'));
-    el.appendChild(h('div', { class: 'note' }, '界面：左上为日期与时间控制（暂停、速度、+1 月、+1 年）；右上为关键指标（资金、经济增长、人口、分担率、拥堵、满意度）与搜索、任务、统计、设置、菜单；左侧切换视图与图层；底部为建设工具；左下为缩放。点击指标打开对应详情：资金与经济增长共用「财政与经济」面板。'));
+    el.appendChild(h('div', { class: 'note' }, '界面：左上为日期与时间控制（暂停、速度、+1 月、+1 年）；右上为关键指标（资金、经济增长、人口、分担率、拥堵、满意度）与搜索、任务、方案、统计、设置、菜单；左侧切换视图与图层；底部为建设工具；左下为缩放。点击指标打开对应详情：资金与经济增长共用「财政与经济」面板。'));
+    el.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '方案：草案里的改动可以拆成多个方案（站点 / 线路 / 调整），每个方案单独显示要花多少钱、单独确认建设。确认一个方案只建它那部分，其它方案里已经随它建成的车站和轨道会自动去掉，剩下的留到以后再建。'));
     el.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, '1. 打开「人口密度」「道路拥堵」「出行方向」图层，找到出行集中的走廊。2. 用「绘线」连接主要起终点，车站间距 0.8–1.5 km 较常见。3. 查看右侧费用与效果预测，无冲突后确认建设，线路立即投入运营。4. 观察车站客流与道路变化，再升级车站、延长线路或建设换乘。绕行严重、换乘不便、过度拥挤或票价过高的线路吸引力有限。'));
     el.appendChild(h('h3', null, '设施、出行目的与工作日 / 周末'));
     el.appendChild(h('div', { class: 'note' }, '居民出行分为通勤、上学、购物、医疗、旅游休闲与交通枢纽接驳六类。火车站、机场、大学、医院、商圈、景点、公园、体育场馆等重要设施按真实位置与年代单独计算，点击地图上的设施（或在「设施出行需求」图层中点击圆点）可查看到访量、出行目的与附近车站；普通设施按片区汇总。工作日通勤、上学集中在早晚高峰，周末购物与休闲更多。火车站与机场的旅客量是给定的，修地铁只改变他们的接驳方式。'));
