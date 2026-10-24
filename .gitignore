@@ -28,4 +28,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 desktop-build/
+.tmp/
+
 

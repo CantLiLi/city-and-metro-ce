@@ -28,14 +28,17 @@ BG_DARK = '#14191f'
 
 log = logging.getLogger('citymetro')
 
-# 窗口关闭：先让前端把未保存的进度落盘（__cmDesktopClose 返回 Promise），再销毁窗口
+# 关窗要快，所以只等正在写的存档，不再催促自动保存：
+# 月度结算（g.pending / g.jumping）期间 doAutosave 一律返回「正在结算」，催它只会白等满整个 SAVE_TIMEOUT。
+# busy = 还有存档在写；clean = 不用等；dirty = 有未保存进度但这会儿存不了（结算中）。
 WAIT_SAVED_JS = (
     ';(function(){try{'
-    'var ui=window.CM&&window.CM.ui;if(!ui)return "idle";'
-    'if(!ui.g())return "idle";'
+    'var ui=window.CM&&window.CM.ui;if(!ui)return "clean";'
+    'var g=ui.g();if(!g)return "clean";'
     'if(ui.saving||(ui._manualSaves&&ui._manualSaves.size))return "busy";'
-    'return ui.isSaved()?"idle":"dirty";'
-    '}catch(e){return "idle";}})();'
+    'if(g.pending||g.jumping||(g.draft&&g.draft.liveSnap))return "dirty";'
+    'return ui.isSaved()?"clean":"dirty";'
+    '}catch(e){return "clean";}})();'
 )
 
 FLUSH_JS = (
@@ -61,7 +64,7 @@ def wait_for_engine(window):
 
 
 def flush_and_destroy(window):
-    """先让前端把进度落盘，再销毁窗口。"""
+    """先等正在写的存档落盘，再销毁窗口。"""
     try:
         window.evaluate_js(FLUSH_JS)
     except Exception:
@@ -69,11 +72,11 @@ def flush_and_destroy(window):
     deadline = time.time() + SAVE_TIMEOUT
     while time.time() < deadline:
         try:
-            if window.evaluate_js(WAIT_SAVED_JS) == 'idle':
+            if window.evaluate_js(WAIT_SAVED_JS) != 'busy':
                 break
         except Exception:
             break
-        time.sleep(0.2)
+        time.sleep(0.1)
     else:
         log.warning('等待存档超时 %ss，仍然关闭', SAVE_TIMEOUT)
     try:
@@ -122,7 +125,6 @@ def set_app_user_model_id():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except (ImportError, AttributeError, OSError):
         log.debug('设置 AppUserModelID 失败', exc_info=True)
-
 
 def activate_existing():
     """把已经在跑的窗口提到前台；找不到进程就什么都不做。"""

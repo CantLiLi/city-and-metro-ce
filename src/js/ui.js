@@ -766,7 +766,8 @@
     const g = this.g(); const bar = this.draftbar;
     if (!g || !g.draft) { bar.classList.add('hidden'); this._dbKey = null; return; }
     const ev = g.draftEval(), can = g.canConfirm();
-    const key = g.draft.ver + '|' + can.ok + '|' + Math.round(g.econ.funds) + '|' + g.draft.pred.state + '|' + g.draft.undo.length + '|' + g.draft.redo.length;
+    const np = g.plans.length;
+    const key = g.draft.ver + '|' + can.ok + '|' + Math.round(g.econ.funds) + '|' + g.draft.pred.state + '|' + g.draft.undo.length + '|' + g.draft.redo.length + '|' + np;
     if (key === this._dbKey) return;
     this._dbKey = key;
     bar.classList.remove('hidden');
@@ -775,6 +776,7 @@
     bar.append.apply(bar, [
       h('button', { class: 'db-main', 'data-tip': '查看草案详情：变更、费用与效果预测', onclick: function () { self.openPage('build', null, { root: true }); } },
         h('span', { class: 'pulse' }), h('b', null, '草案'), h('span', { class: 'muted' }, n + ' 项'), h('span', { class: 'cost' }, ic('coin'), U.fmtMoney(ev.total))),
+      np ? h('button', { class: 'cfbadge plan', 'data-tip': '按方案分别确认建设', onclick: function () { self.openPage('plans', null, { root: true }); } }, ic('layers'), np + ' 个方案') : null,
       ev.conflicts.length ? h('button', { class: 'cfbadge', 'data-tip': '查看冲突位置与解决办法', onclick: function () { self.showConflicts(); } }, ic('error'), ev.conflicts.length + ' 处冲突') : null,
       ev.warnings.length && !ev.conflicts.length ? h('button', { class: 'cfbadge warn', 'data-tip': '查看提示', onclick: function () { self.open['dr-warn'] = true; self.openPage('build', null, { root: true }); } }, ic('warn'), ev.warnings.length) : null,
       h('span', { class: 'db-sep' }),
@@ -1492,6 +1494,93 @@
     this.screenEsc = onEsc || null;
   };
   UI.prototype.closeScreen = function () { this.screen.className = 'hidden'; this.screenEsc = null; this.screenRefresh = null; };
+  // ======================== 滑出卡片 ========================
+  // 开始界面里点「设置 / 退出」时不再盖一张暗底弹窗，而是让卡片从主菜单右侧滑出来：
+  // 主菜单、标题与地图都留在原处，背景不变暗，卡片也不压住主菜单。
+  // 开合各播一次关键帧，animationend 收尾；时长曲线只写在 CSS 里，改手感只改 CSS。
+  const SHEET_FALLBACK_MS = 560;
+  UI.prototype.openSheet = function (card, opts) {
+    const self = this;
+    opts = opts || {};
+    if (this.tools) this.tools.cancelDrag();
+    // 上一次关闭还在收尾就被重新打开：作废它，否则它的定时器会把刚滑出的卡片藏掉
+    if (this._sheetSettle) { clearTimeout(this._sheetSettle); this._sheetSettle = null; }
+    if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
+    const root = this.screen.firstElementChild;
+    const fromStart = !!(root && root.classList.contains('start-root'));
+    // 已经有卡片开着（比如退出确认还没关就点了设置）：先撤掉，只留最新的一张
+    const old = this.screen.querySelector('.start-sheet');
+    if (old) old.remove();
+    // 卡片本身就是 .card，由 .start-sheet 提供滑出动画与宽度（见 style.css）
+    const host = h('div', { class: 'start-sheet' }, card);
+    if (!fromStart) {
+      // 不是从开始界面进来的（退出兜底页等）：补一个开始界面当背景，主菜单照样在左边
+      this.screen.innerHTML = '';
+      this.screen.className = 'start';
+      this.screen.appendChild(h('div', { class: 'start-root' }, h('div', { class: 'start-wrap' })));
+      this.renderThemeBtns();
+    }
+    // 撤 hidden、上浮层状态必须同一帧，否则会先闪一帧「停在终点」再回到原位重播
+    this.screen.classList.remove('hidden');
+    this.screen.classList.add('sheet-open');
+    if (fromStart && root) root.classList.add('sheet-beside');
+    this.screen.appendChild(host);
+    this.screenEsc = opts.esc || null;
+    this.screenRefresh = null;
+    this._sheetBack = opts.back || function () {
+      if (typeof self.showStart === 'function') self.showStart({ noAnim: true });
+    };
+    // 先让浏览器把卡片的静止态渲染一帧，再上 sheet-in：
+    // 同一帧里 append + 加类，关键帧的起始态会被合并掉，滑入就看不出来。
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        if (host.isConnected) host.classList.add('sheet-in');
+      });
+    });
+    this._sheetTimer = setTimeout(function () {
+      self._sheetTimer = null;
+      host.classList.remove('sheet-in');
+    }, SHEET_FALLBACK_MS);
+  };
+  UI.prototype.closeSheet = function () {
+    const host = this.screen.querySelector('.start-sheet');
+    if (!host) { this.closeScreen(); return; }
+    const self = this, back = this._sheetBack;
+    this._sheetBack = null;
+    if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
+    host.classList.remove('sheet-in');
+    this.screenEsc = null;
+    this.screenRefresh = null;
+    let done = false;
+    const finish = function () {
+      if (done) return; done = true;
+      clearTimeout(timer);
+      if (self._sheetSettle === timer) self._sheetSettle = null;
+      host.remove();
+      self.screen.classList.remove('sheet-open');
+      if (back) back();
+    };
+    host.classList.add('sheet-leave');
+    const timer = this._sheetSettle = setTimeout(finish, SHEET_FALLBACK_MS);
+  };
+  // 滑出卡片上的二次确认（设置里的「恢复默认」用）：在已有卡片右侧再浮一张小卡，
+  // 不盖暗幕、也不打断下面的卡片。取消与确认都只关掉这张小卡。
+  UI.prototype.sheetConfirm = function (title, text, okLabel, onOk, danger, icon) {
+    const host = this.screen.querySelector('.start-sheet');
+    if (!host) { this.confirm(title, text, okLabel, onOk, danger, icon); return; }
+    if (host.querySelector('.sheet-ask')) return;
+    const closeAsk = function () {
+      const ask = host.querySelector('.sheet-ask');
+      if (!ask) return;
+      ask.classList.add('out');
+      setTimeout(function () { ask.remove(); }, 200);
+    };
+    host.appendChild(h('div', { class: 'sheet-ask' },
+      h('div', { class: 'card' }, this.cardHead(icon || (danger ? 'warn' : 'help'), danger ? 'b-red' : 'b-blue', title),
+        h('div', { class: 'note', style: { fontSize: '13px' } }, text),
+        h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeAsk }, '取消'),
+          h('button', { class: 'btn ' + (danger ? 'danger fill' : 'primary'), onclick: function () { closeAsk(); onOk(); } }, okLabel)))));
+  };
   UI.prototype.cardHead = function (icon, badge, title) { return h('div', { class: 'card-head' }, h('span', { class: 'badge ' + badge }, ic(icon)), h('h2', null, title)); };
   UI.prototype.confirm = function (title, text, okLabel, onOk, danger, icon) {
     const self = this;
@@ -1504,6 +1593,20 @@
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: restore }, '取消'), h('button', { class: 'btn ' + (danger ? 'danger fill' : 'primary'), onclick: function () { restore(); onOk(); } }, okLabel)));
     this.openScreen(card, restore);
   };
+  UI.prototype.prompt = function (title, value, onOk) {
+    const self = this;
+    const prevCls = this.screen.className;
+    const prev = prevCls.indexOf('hidden') >= 0 ? null : Array.from(this.screen.childNodes);
+    const prevEsc = this.screenEsc;
+    const restore = function () { if (prev) { self.screen.innerHTML = ''; self.screen.className = prevCls + ' noanim'; prev.forEach(function (n) { self.screen.appendChild(n); }); self.screenEsc = prevEsc; } else self.closeScreen(); };
+    const input = h('input', { class: 'inp', value: value || '', maxlength: 40, style: { width: '100%', margin: '4px 0 10px' } });
+    const ok = function () { const v = input.value.trim(); restore(); if (v) onOk(v); };
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ok(); } });
+    const card = h('div', { class: 'card' }, this.cardHead('pencil', 'b-blue', title), h('div', { class: 'note', style: { fontSize: '13px' } }, '最多 40 个字，仅用于区分方案，不影响其他数据。'), input,
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: restore }, '取消'), h('button', { class: 'btn primary', onclick: ok }, '确定')));
+    this.openScreen(card, restore);
+    setTimeout(function () { input.focus(); input.select(); }, 30);
+  };
   UI.prototype.showLoading = function (text) {
     this.openScreen(h('div', { class: 'card', style: { width: 'min(380px, calc(100vw - 32px))' } }, h('div', { class: 'loading' }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '' }), h('div', { class: 'muted' }, text))));
   };
@@ -1512,22 +1615,39 @@
   UI.prototype.quitGame = function () {
     const self = this;
     const desktop = !!(CM.desktop && CM.desktop.isDesktop());
-    this.confirm('退出游戏？', desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。', '退出', function () {
+    const title = '退出游戏？';
+    const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。';
+    const go = function () {
       if (desktop) { CM.desktop.quit(); return; }
       try { window.close(); } catch (e) { /* ignore */ }
       setTimeout(function () { if (!window.closed) self.showQuitFallback(); }, 120);
-    }, false, 'power');
+    };
+    // 主界面：滑出一张确认卡片；游戏内：普通弹窗
+    if (!this.g() && this.screen.querySelector('.start-root')) {
+      const back = function () { self.closeSheet(); };
+      const card = h('div', { class: 'card solo' },
+        this.cardHead('power', 'b-slate', title),
+        h('div', { class: 'note', style: { fontSize: '13px' } }, text),
+        h('div', { class: 'modal-actions' },
+          h('button', { class: 'btn', onclick: back }, '取消'),
+          h('button', { class: 'btn primary', onclick: go }, '退出')));
+      this.openSheet(card, { esc: back });
+    } else this.confirm(title, text, '退出', go, false, 'power');
   };
   UI.prototype.showQuitFallback = function () {
     const self = this;
-    this.openScreen(h('div', { class: 'card', style: { width: 'min(420px, calc(100vw - 32px))', textAlign: 'center' } }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: function () { self.showStart(); } }, '返回主菜单'))), function () { self.showStart(); });
+    const back = function () { self.closeSheet(); };
+    const card = h('div', { class: 'card solo', style: { textAlign: 'center' } }, h('resources', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: back }, '返回主菜单')));
+    this.openSheet(card, { esc: back });
   };
   // ======================== 设置 ========================
   // 设置：单页，只保留常用项；控件就地更新（不整页重绘），主题与界面大小平滑过渡
-  UI.prototype.showSettings = function () {
+  UI.prototype.showSettings = function (opts) {
     const self = this, S = CM.Settings;
     const inGame = !!this.g();
-    const back = function () { if (inGame) self.closeScreen(); else self.showStart(); };
+    // 主界面（开始界面）里用滑出卡片；游戏内设置仍是一张普通全屏弹窗
+    const asSheet = !inGame;
+    const back = function () { if (asSheet) self.closeSheet(); else self.closeScreen(); };
     const row = function (icon, title, ctl, desc) { return h('div', { class: 'set-row' }, h('span', { class: 'set-ico' }, ic(icon)), h('div', { class: 'grow' }, h('div', { class: 'set-t' }, title), desc ? h('div', { class: 'set-d' }, desc) : null), ctl); };
     const toggle = function (key, onChange) {
       const b = h('button', { class: 'switch' + (S.get(key) ? ' on' : ''), role: 'switch', 'aria-checked': S.get(key) ? 'true' : 'false', 'data-silent': '1', onclick: function () {
@@ -1573,9 +1693,13 @@
       body,
       h('div', { class: 'set-foot' },
         h('span', { class: 'muted tiny grow' }, '城市与地铁 v' + CFG.GAME_VERSION + ' · 地图 © OpenStreetMap 贡献者'),
-        h('button', { class: 'btn sm ghost', onclick: function () { self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear'); } }, '恢复默认'),
+        h('button', { class: 'btn sm ghost', onclick: function () {
+          if (asSheet) self.sheetConfirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
+          else self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
+        } }, '恢复默认'),
         h('button', { class: 'btn primary sm', onclick: back }, '完成')));
-    this.openScreen(card, back);
+    if (asSheet) this.openSheet(card, { esc: back });
+    else this.openScreen(card, back);
   };
   // 开始游戏 → 选择地图：每张地图可开始新游戏（选择模式）、继续该地图最近的进度，或读取该地图的存档
   UI.prototype.showNewGame = function () { this.showMapSelect(); };

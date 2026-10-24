@@ -49,8 +49,8 @@ def window_size():
     width, height = int(screen.width), int(screen.height)
     usable_w = round(width * (1 - SCREEN_MARGIN * 2))
     usable_h = round(height * (1 - SCREEN_MARGIN * 2))
-    # 设计比例放得下就按屏幕铺开，放不下才整体等比缩小
-    fit = min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1], 1.0)
+    # 保持设计比例把可用区域铺满，屏幕大就等比放大，小就等比缩小
+    fit = min(usable_w / DESIGN_SIZE[0], usable_h / DESIGN_SIZE[1])
     size = (round(DESIGN_SIZE[0] * fit), round(DESIGN_SIZE[1] * fit))
     # 最小尺寸不能超过屏幕本身，否则窗口一旦缩小就再也拉不回来
     min_size = (

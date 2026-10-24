@@ -327,6 +327,8 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 .cfbadge { display: inline-flex; align-items: center; gap: 5px; border: 0; cursor: pointer; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; background: var(--bad); color: #fff; animation: wiggle 2.4s infinite; }
 .cfbadge .ico { width: 14px; height: 14px; }
 .cfbadge.warn { background: var(--warn-soft); color: var(--warn); animation: none; }
+.cfbadge.plan { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); animation: none; }
+.cfbadge.plan:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 @keyframes wiggle { 0%, 88%, 100% { transform: none; } 91% { transform: rotate(-5deg); } 94% { transform: rotate(5deg); } 97% { transform: rotate(-3deg); } }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(19, 165, 150, 0.5); } 70% { box-shadow: 0 0 0 9px rgba(19, 165, 150, 0); } 100% { box-shadow: 0 0 0 0 rgba(19, 165, 150, 0); } }
 
@@ -742,6 +744,48 @@ table.tbl th:first-child, table.tbl td:first-child { text-align: left; }
 
 /* 开始界面右上角的深浅模式按钮；设置中的音量行 */
 .start-root { display: contents; }
+/* 滑出卡片：开始界面里点「设置 / 退出」时，卡片从不压住主菜单的位置滑出来。
+   两列网格：左列永远是主菜单，右列放卡片。卡片关掉后网格退回单列，
+   主菜单位置不动（不是绝对定位的浮层，所以不存在「盖住」的问题）。 */
+#screen.start { transition: opacity .35s var(--ease), grid-template-columns .34s var(--ease); }
+#screen.start.sheet-open { grid-template-columns: minmax(0, 1fr) auto; }
+.start-sheet { position: relative; justify-self: center; align-self: center; padding: 4px; }
+/* 入场：从右侧滑进来（配合主菜单一并压暗，视线自然落到卡片上） */
+.start-sheet.sheet-in > .card { animation: sheetIn .5s var(--ease) both; }
+/* 退场：右侧滑回去；只给「离开」这一次过渡，平时没有 transition，避免和入场动画打架 */
+.start-sheet.sheet-leave > .card { animation: sheetOut .28s var(--ease) both; }
+@keyframes sheetIn { from { opacity: 0; transform: translateX(120px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes sheetOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(60px) scale(.97); } }
+/* 主菜单让到左边：卡片出场时主菜单轻微右移、略压暗，形成叠放关系而不是遮挡 */
+.start-root.sheet-beside .start-wrap { transition: transform .34s var(--ease), opacity .3s var(--ease); transform: translateX(6px); opacity: .72; }
+.start-root.sheet-beside .start-corner { opacity: .5; transition: opacity .3s var(--ease); }
+/* 卡片本体：外观沿用 .card，宽度收窄以适合右侧栏。
+   .start-sheet 下的选择器特异性更高，压过 .card 的宽度与 cardIn 动画 */
+.start-sheet > .card { width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); animation: none; }
+.start-sheet > .card.solo { width: min(420px, calc(100vw - 32px)); }
+/* 卡片里的二次确认：在卡片右侧再浮一张，不盖暗幕 */
+.sheet-ask { position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%); animation: askIn .26s var(--ease) both; }
+.sheet-ask.out { animation: askOut .2s var(--ease) both; }
+@keyframes askIn { from { opacity: 0; transform: translate(-8px, -50%); } to { opacity: 1; transform: translate(0, -50%); } }
+@keyframes askOut { from { opacity: 1; transform: translate(0, -50%); } to { opacity: 0; transform: translate(8px, -50%); } }
+/* 窄屏：卡片改为从下方滑出、叠在主菜单之上（此时本来就放不下两列），主菜单退到后面 */
+@media (max-width: 900px) {
+  #screen.start.sheet-open { grid-template-columns: minmax(0, 1fr); }
+  .start-sheet { position: absolute; inset: 0; display: grid; place-items: center; padding: 8px; }
+  .start-sheet.sheet-in > .card { animation: sheetInUp .42s var(--ease) both; }
+  .start-sheet.sheet-leave > .card { animation: sheetOutDown .24s var(--ease) both; }
+  @keyframes sheetInUp { from { opacity: 0; transform: translateY(36px) scale(.97); } to { opacity: 1; transform: none; } }
+  @keyframes sheetOutDown { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(24px) scale(.98); } }
+  .start-root.sheet-beside .start-wrap { transform: none; opacity: .25; filter: blur(2px); }
+  .start-sheet > .card { max-height: calc(100vh - 24px); }
+  .sheet-ask { left: 50%; top: auto; bottom: 0; transform: translate(-50%, 0); }
+  @keyframes askIn { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes askOut { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, 8px); } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .start-sheet.sheet-in > .card, .start-sheet.sheet-leave > .card, .sheet-ask, .sheet-ask.out { animation-duration: .01ms; }
+  .start-root.sheet-beside .start-wrap { transition: none; }
+}
 .start-theme { position: fixed; top: 18px; right: 18px; width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform .2s var(--spring), background .2s; }
 .start-theme:hover { transform: translateY(-1px) rotate(-12deg); }
 .start-theme .ico { width: 20px; height: 20px; }
@@ -938,7 +982,7 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .hidden-el { display: none !important; }
 .swap-in { animation: swapIn .26s var(--ease) both; }
 @keyframes swapIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-#screen.noanim .card, #screen.noanim .card * { animation: none !important; }
+#screen.noanim .card, #screen.noanim .card *, #screen.noanim .start-wrap > *, #screen.noanim .start-menu > * { animation: none !important; }
 .stats-win.static { animation: none; }
 /* 统计、线路示意图等全屏窗口盖住地图上的消息提示（消息不再压在窗口标题与标签上） */
 #stats, #netmap { z-index: 42; }

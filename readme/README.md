@@ -99,7 +99,7 @@
 | [js/maps.js](./js/maps.js) / [js/config.js](./js/config.js) | 地图登记与共用参数 |
 | [src/python/main.py](./src/python/main.py) | 桌面外壳入口（pywebview 窗口与存档时机） |
 
-运行资源位于 `index.html`、`css/`、`js/`、`img/`；各城场景使用 `data_*.js`，地理使用 `geo_*.js`。执行 `node scripts/build.mjs` 生成发布目录 `dist/`，不需要依赖安装。
+运行资源位于 `index.html`、`css/`、`js/`、`img/`；各城场景使用 `data_*.js`，地理使用 `geo_*.js`。
 
 桌面外壳的代码在 `src/python/`：`main.py` 负责窗口与关闭时的存档等待，`citymetro/bridge.py` 提供文件对话框与读写接口，`src/js/desktop.js` 是前端侧的适配层。浏览器里打开时这套适配层自动退回到原来的网页逻辑。
 

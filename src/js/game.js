@@ -440,7 +440,8 @@
     by = by === undefined || by === null ? d.coverage.length - 1 : by;
     for (let i = by; i >= 0; i--) {
       const cov = d.coverage[i];
-      if (cov.keys && !cov.keys[key]) continue;
+      // keys 为 null 表示「没记录的改动」：只能解释没记录过的东西，不能接管别人建造时的具体键
+      if (cov.keys ? !cov.keys[key] : cov.own) continue;
       if (cov.plan) return cov.plan;
       if (cov.grp == null) cov.grp = this.coverageGroup(key, i);
       return cov.grp;
@@ -459,7 +460,7 @@
     const p = {
       id: 'p' + (++this.planSeq), kind: kind || 'station', name: opts.name || '',
       stations: {}, moves: {}, segs: {}, removals: {}, sites: {}, types: {}, lines: {}, lineId: null, notes: [], touched: false,
-      net: null, eval: null, evalVer: -1, pend: {}, createdAt: this.clock.y + '年' + this.clock.m + '月',
+      net: null, eval: null, evalVer: -1, pend: {}, kept: {}, createdAt: this.clock.y + '年' + this.clock.m + '月',
     };
     this.plans.push(p); this.plansById[p.id] = p; this.planActive = p.id;
     return p;
@@ -488,16 +489,33 @@
     const nb = d.builtKeys || Object.create(null);
     const ov = { stations: {}, lines: {}, segs: {}, removals: {} };
     const owner = this;
-    const take = function (key, isNew) { const own = owner.planOwner(key); const k = (isNew ? 'n:' : 'b:') + key; return own === undefined ? !p.pend[k] : own === pid; };
+    const take = function (key, isNew) {
+      const own = owner.planOwner(key); const k = (isNew ? 'n:' : 'b:') + key;
+      if (own === pid) return true;
+      if (own === undefined && p.pend[k]) return false;
+      return !!(p.kept && p.kept[k]);
+    };
     for (const k in t.stations) if (!off.stations[k] || t.stations[k] !== off.stations[k]) { if (take(k, !off.stations[k])) ov.stations[k] = true; }
     for (const k in t.lines) if (!off.lines[k] || t.lines[k].name !== off.lines[k].name || t.lines[k].color !== off.lines[k].color) { if (take(k, !off.lines[k])) ov.lines[k] = true; }
     for (const k in t.segments) if (!off.segments[k] || t.segments[k] !== off.segments[k]) { if (take(k, !off.segments[k])) ov.segs[k] = true; }
     for (const k in off.stations) if (!t.stations[k]) { if (this.planOwner(k) === pid) ov.removals[k] = true; }
+    // 已经被别的方案建成、本方案还要用它（接轨、连接）的车站与轨道
+    for (const k in p.kept || {}) {
+      const raw = k.slice(2);
+      if (k.slice(0, 2) === 'b:' && off.stations[raw]) ov.stations[raw] = true;
+      if (k.slice(0, 2) === 'b:' && off.segments[raw]) ov.segs[raw] = true;
+    }
     ov.id = pid;
     ov.net = this.subNet(ov);
     // 本方案的轨道连到、但目前还没建成的车站（可能是别的方案建的）：确认本方案时一并建成
     for (const k in ov.net.stations) if (t.stations[k] && !off.stations[k]) ov.stations[k] = true;
+    // 本方案自己的轨道也要算「本方案改过」的那部分（每条新建轨道已含在 segs 里）
     ov.val = M.evaluate(ov.net, off, this.city, this.clock.y);
+    // 本方案只承担自己那部分的费用：把不属于本方案的变动从改动清单里剔除（连带的车站只算新建）
+    const own = function (key) { return owner.planOwner(key) === pid || (key in ov.stations); };
+    ov.val.items = ov.val.items.filter(function (it) { return !it.ref || own(it.ref); });
+    ov.val.total = 0; ov.val.byKind = { construction: 0, demolition: 0, upgrade: 0, relocation: 0 };
+    for (const it of ov.val.items) { ov.val.total += it.amount; ov.val.byKind[it.kind] += it.amount; }
     p.net = ov.net; p.eval = ov.val; p.evalVer = d.ver;
     // 提示与「顺便改动」：方案里的具体内容 + 不属于任何方案的改动
     const lo = {};
@@ -585,46 +603,103 @@
     if (!this.econ.canAffordBuild(val.total)) return { error: '资金不足：需要 ' + U.fmtMoney(val.total) + '，当前一般资金 ' + U.fmtMoney(this.econ.funds) + (this.econ.capex > 0.5 ? ' + 建设专项资金 ' + U.fmtMoney(this.econ.capex) : '') };
     if (this.jumping || this.pending) return { error: '正在结算，请稍候' };
     const keep = JSON.parse(JSON.stringify(d.net));
+    const prev = this.net;
     const built = {}; for (const k in ov.stations) built[k] = 1; for (const k in ov.segs) built[k] = 1;
     const r = this.commitNet(ov.net, p.name || '方案', val);
     if (!r.ok) return r;
-    // 其余方案：已被建成的部分从草案里去掉，线路转到新网络里的同名线路
+    // 其余方案：已被建成的部分从草案里去掉；方案记过的身份转成正式网络里的键，别处引用的则改成已建成的键
+    const adopt = Object.create(null);
+    const rekey = Object.create(null);
+    for (const k in built) {
+      if (!(this.net.stations[k] || this.net.segments[k] || this.net.lines[k])) continue;
+      if (keep.stations[k] || keep.segments[k]) rekey['n:' + k] = 'b:' + k;
+      adopt['n:' + k] = 1;
+    }
     for (const k in built) { delete keep.stations[k]; delete keep.segments[k]; }
-    for (const k in ov.removals) delete keep.stations[k];
+    for (const k in ov.removals) {
+      delete keep.stations[k];
+      if (this.net.stations[k]) adopt['b:' + k] = 1;
+    }
+    const mov = function (pend) {
+      const out = {};
+      for (const k in pend) { out[rekey[k] || k] = 1; if (k.slice(0, 2) === 'n:' && adopt[k]) out['b:' + k.slice(2)] = 1; }
+      return out;
+    };
     for (const q of this.plans) {
       if (q.id === pid) continue;
+      q.pend = mov(q.pend);
+      q.kept = mov(q.kept || {});
+      // 已建成的对象都归入正式网络：草案不再区分归属，参数用正式网络里的那份
+      for (const a in adopt) q.kept[a] = 1;
       if (q.lineId && d.net.lines[q.lineId] && !this.net.lines[q.lineId]) {
         const want = d.net.lines[q.lineId].name;
         for (const id in this.net.lines) if (this.net.lines[id].name === want) { q.lineId = id; break; }
       }
-      q.pend = {}; q.evalVer = -1; q.net = null; q.eval = null;
+      q.evalVer = -1; q.net = null; q.eval = null;
     }
     keep.nextId = d.net.nextId;
     // 剩下的改动与正式网络里已建成的对象分开编号，免得同一个 id 被当成既有对象的搬迁
-    this.rekeyDraft(keep);
+    const remap = this.rekeyDraft(keep, prev);
+    const ren = function (key) {
+      const raw = key.slice(2), pfx = key.slice(0, 2);
+      const nk = pfx === 'n:' ? (remap.st[raw] || remap.sg[raw]) : null;
+      return nk ? 'n:' + nk : key;
+    };
+    // 剩下的改动归给剩下的方案：它们之间不再区分先后，各按自己用到的部分出钱（键以重编号之后的为准）
+    const rest = Object.create(null), keepB = Object.create(null);
+    for (const k in keep.stations) { rest[k] = 1; keepB['b:' + k] = 1; }
+    for (const k in keep.segments) { rest[k] = 1; keepB['b:' + k] = 1; }
+    const remapped = Object.keys(remap.st).length || Object.keys(remap.sg).length;
+    const left = this.plans.filter(function (q) { return q.id !== pid; });
+    let cov = [{ plan: left.length ? left[left.length - 1].id : null, own: true, keys: rest, grp: null }];
+    if (remapped) {
+      for (const c of d.coverage) {
+        if (!c.keys) continue;
+        const out = {};
+        for (const k in c.keys) { const nk = ren(k); if (rest[nk.slice(2)]) out[nk] = 1; }
+        c.keys = out;
+      }
+      for (const q of left) {
+        for (const f of ['pend', 'kept']) {
+          if (!q[f]) continue;
+          const out = {};
+          for (const k in q[f]) { const nk = ren(k); if (keepB[nk]) out[nk] = 1; }
+          q[f] = out;
+        }
+      }
+      cov = d.coverage.filter(function (c) { return c.keys && Object.keys(c.keys).length; });
+      if (!cov.length) cov = [{ plan: left.length ? left[left.length - 1].id : null, own: true, keys: rest, grp: null }];
+    }
+    if (typeof process !== 'undefined' && process.env.DBG) console.log('DBG keep segs', Object.keys(keep.segments), 'st', Object.keys(keep.stations), 'cov', JSON.stringify(cov), 'plans', this.plans.filter(function(q){return q.id!==pid;}).map(function(q){return [q.name, JSON.stringify(q.pend), JSON.stringify(q.kept)];}));
     M.normalizeLines(keep);
     this.plans = this.plans.filter(function (x) { return x.id !== pid; });
     delete this.plansById[pid];
     this.planActive = this.plans.length ? this.plans[this.plans.length - 1].id : null;
     // 这次确认的只是方案，草案本身要留住（撤销点重来）
-    this.draft = { net: keep, undo: [], redo: [], ver: d.ver + 1, evalVer: -1, eval: null, compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: [this.coverageBase(keep)] };
+    this.draft = { net: keep, undo: [], redo: [], ver: d.ver + 1, evalVer: -1, eval: null, compiled: null, compVer: -1, pred: { state: 'idle' }, coverage: cov };
+    // 最后一个方案建完、草案里不再有东西：直接结束草案
+    if (!this.plans.length && !Object.keys(keyDiff(keySet(keep), this.net)).length) {
+      const ev = this.draftEval();
+      if (ev && !ev.changed) { this.draft = null; this.emit('draft'); return r; }
+    }
     this.invalidatePrediction();
     this.emit('draft');
     return r;
   };
   // 剩下的草案网络整体归给「剩下的方案」：它们之间的改动不再区分先后，各按自己的重叠部分算
   Game.prototype.coverageBase = function (net) { return { plan: null, own: false, keys: null, grp: this.plans.length ? this.plans[this.plans.length - 1].id : null }; };
-  // 草案里「还没建成、但 id 与正式网络里的对象撞了」的键换新 id（含对象自己的 id 字段），免得被当成同一个对象
-  Game.prototype.rekeyDraft = function (net) {
-    const off = this.net;
+  // 草案里「还没建成、但 id 与正式网络里的对象撞了」的键换新 id（含对象自己的 id 字段），免得被当成同一个对象。
+  // 已建成的对象保留在草案里：其它方案可能还引用着它们（作为轨道端点），子网络会从正式网络取它们的参数。
+  Game.prototype.rekeyDraft = function (net, off) {
+    off = off || this.net;
     const stMap = {}, sgMap = {};
-    for (const k in net.stations) if (off.stations[k]) delete net.stations[k];
-    for (const k in net.segments) if (off.segments[k]) delete net.segments[k];
     for (const k of Object.keys(net.stations)) {
+      if (off.stations[k]) continue;
       const nk = M.newId(net, 's'); stMap[k] = nk;
       const s = net.stations[k]; s.id = nk; net.stations[nk] = s; delete net.stations[k];
     }
     for (const k of Object.keys(net.segments)) {
+      if (off.segments[k]) continue;
       const nk = M.newId(net, 'g'); sgMap[k] = nk;
       const sg = net.segments[k];
       sg.id = nk; sg.a = stMap[sg.a] || sg.a; sg.b = stMap[sg.b] || sg.b;

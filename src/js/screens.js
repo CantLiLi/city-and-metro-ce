@@ -30,8 +30,9 @@
     '<g fill="currentColor"><rect x="228" y="12" width="7" height="12" rx="1"/><rect x="237" y="6" width="8" height="18" rx="1"/><rect x="247" y="0" width="8" height="24" rx="1"/><rect x="257" y="8" width="7" height="16" rx="1"/><rect x="266" y="3" width="8" height="21" rx="1"/><rect x="276" y="13" width="7" height="11" rx="1"/></g>' +
     '<circle cx="308" cy="22" r="4.5" style="fill:var(--bg)" stroke="currentColor" stroke-width="2.4"/><circle cx="348" cy="22" r="4.5" style="fill:var(--bg)" stroke="currentColor" stroke-width="2.4"/></svg>';
 
-  UI.prototype.showStart = function () {
+  UI.prototype.showStart = function (opts) {
     const self = this;
+    opts = opts || {};
     const latest = CM.Save.latest();
     const storageOk = CM.Save.available();
     const btn = function (icon, label, onclick, opts) {
@@ -56,7 +57,7 @@
     const news = h('button', { class: 'corner-btn' + (newsSeen() ? '' : ' dot'), 'data-tip': '更新公告', 'aria-label': '更新公告', onclick: function () { self.showNews(function () { self.showStart(); }); } }, ic('megaphone'));
     this.startTheme = h('button', { class: 'corner-btn', 'aria-label': '切换深浅模式', onclick: function () { self.toggleTheme(); } });
     const corner = h('div', { class: 'start-corner' }, news, this.startTheme);
-    this.openScreen(h('div', { class: 'start-root' }, wrap, corner), null, 'start');
+    this.openScreen(h('div', { class: 'start-root' }, wrap, corner), null, 'start' + (opts.noAnim ? ' noanim' : ''));
     this.renderThemeBtns();
   };
 
