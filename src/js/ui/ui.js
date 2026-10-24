@@ -1682,9 +1682,13 @@
   // 开始界面里点「设置 / 退出」时不再盖一张暗底弹窗，而是让卡片从主菜单右侧滑出来：
   // 主菜单、标题与地图都留在原处，背景不变暗，卡片也不压住主菜单。
   // 开合各播一次关键帧，animationend 收尾；时长曲线只写在 CSS 里，改手感只改 CSS。
+  // 游戏内的悬浮面板（openOverlay）复用同一套卡片与动画，只把铺满的背景换成一层淡虚化，
+  // 地图、顶栏与侧栏照常可见；同样只动位移与不透明度，不缩放。
   const SHEET_FALLBACK_MS = 560;
   const SHEET_LEAVE_MS = 320;
-  UI.prototype.openSheet = function (card, opts) {
+  UI.prototype.closeOverlay = function () { if (this.screen.querySelector('.start-sheet')) this.closeSheet(); else this.closeScreen(); };
+  UI.prototype.openOverlay = function (card, opts) { this.openSheet(card, opts, 'overlay'); };
+  UI.prototype.openSheet = function (card, opts, mode) {
     const self = this;
     opts = opts || {};
     if (this.tools) this.tools.cancelDrag();
@@ -1700,11 +1704,15 @@
     // 卡片本身就是 .card，由 .start-sheet 提供滑出动画与宽度（见 css/layout.css）
     const host = h('div', { class: 'start-sheet' }, card);
     if (!fromStart) {
-      // 不是从开始界面进来的（退出兜底页等）：补一个开始界面当背景，主菜单照样在左边
+      // 不是从开始界面进来的（退出兜底页、游戏内悬浮面板等）：补一个开始界面当背景
       this.screen.innerHTML = '';
       this.screen.className = 'start';
       this.screen.appendChild(h('div', { class: 'start-root' }, h('div', { class: 'start-wrap' })));
       this.renderThemeBtns();
+    } else if (mode) {
+      this.screen.classList.toggle('overlay', mode === 'overlay');
+    } else {
+      this.screen.classList.remove('overlay');
     }
     // 撤 hidden、上浮层状态必须同一帧，否则会先闪一帧「停在终点」再回到原位重播
     this.screen.classList.remove('hidden');
@@ -1734,6 +1742,7 @@
     const host = this.screen.querySelector('.start-sheet');
     if (!host) { this.closeScreen(); return; }
     const self = this, back = this._sheetBack;
+    const overlay = this.screen.classList.contains('overlay');
     this._sheetBack = null;
     if (this._sheetTimer) { clearTimeout(this._sheetTimer); this._sheetTimer = null; }
     host.classList.remove('sheet-in');
@@ -1745,6 +1754,13 @@
       if (done) return; done = true;
       clearTimeout(timer);
       if (self._sheetSettle === timer) self._sheetSettle = null;
+      // 悬浮面板的背景只是装饰，卡片收完后整层撤掉，回到游戏画面
+      if (overlay) {
+        host.remove();
+        self.screen.classList.remove('sheet-open', 'sheet-leaving', 'overlay');
+        if (back) back();
+        return;
+      }
       // FLIP：撤掉两列布局后主菜单会横向换了位置，记录旧位置，重建后再补一段位移
       const prev = self.screen.querySelector('.start-wrap');
       const r0 = prev && prev.getBoundingClientRect ? prev.getBoundingClientRect() : null;
@@ -1828,35 +1844,33 @@
       try { window.close(); } catch (e) { /* ignore */ }
       setTimeout(function () { if (!window.closed) self.showQuitFallback(); }, 120);
     };
-    // 主界面：滑出一张确认卡片；游戏内：普通弹窗
-    if (!this.g() && this.screen.querySelector('.start-root')) {
-      const back = function () { self.closeSheet(); };
-      const card = h('div', { class: 'card solo' },
-        this.cardHead('power', 'b-slate', title),
-        h('div', { class: 'note', style: { fontSize: '13px' } }, text),
-        h('div', { class: 'modal-actions' },
-          h('button', { class: 'btn', onclick: back }, '取消'),
-          h('button', { class: 'btn primary', onclick: go }, '退出')));
-      this.openSheet(card, { esc: back });
-    } else this.confirm(title, text, '退出', go, false, 'power');
+    // 主界面：滑出一张确认卡片；游戏内：同样的悬浮面板
+    const back = function () { self.closeSheet(); };
+    const card = h('div', { class: 'card solo' },
+      this.cardHead('power', 'b-slate', title),
+      h('div', { class: 'note', style: { fontSize: '13px' } }, text),
+      h('div', { class: 'modal-actions' },
+        h('button', { class: 'btn', onclick: back }, '取消'),
+        h('button', { class: 'btn primary', onclick: go }, '退出')));
+    if (inGame) this.openOverlay(card, { esc: back }); else this.openSheet(card, { esc: back });
   };
   UI.prototype.showQuitFallback = function () {
     const self = this;
     const back = function () { self.closeSheet(); };
     const card = h('div', { class: 'card solo', style: { textAlign: 'center' } }, h('img', { class: 'logo-ink', src: 'resources/logo-navy.png', alt: '', style: { width: '72px', margin: '6px auto 12px', display: 'block' } }), h('h2', { style: { justifyContent: 'center' } }, '感谢游玩'), h('div', { class: 'note' }, '浏览器不允许网页自行关闭此标签页，请直接关闭它。'), h('div', { class: 'modal-actions', style: { justifyContent: 'center' } }, h('button', { class: 'btn primary', onclick: back }, '返回主菜单')));
-    this.openSheet(card, { esc: back });
+    this.openOverlay(card, { esc: back });
   };
   // ======================== 设置 ========================
   // 设置：单页，只保留常用项；控件就地更新（不整页重绘），主题与界面大小平滑过渡
   UI.prototype.showSettings = function (opts) {
     const self = this, S = CM.Settings;
     const inGame = !!this.g();
-    // 主界面（开始界面）里用滑出卡片；游戏内设置仍是一张普通全屏弹窗
+    // 开始界面里用滑出卡片（主菜单留在左边）；游戏内用同样的滑出样式浮在画面上
     const asSheet = !inGame;
     // 点卡片外的空白处关闭；关掉时顺手把监听撤掉，避免影响随后打开的其它弹窗
     const screenEl = this.screen;
     const detach = function () { if (screenEl) screenEl.onpointerdown = null; };
-    const back = function () { detach(); if (asSheet) self.closeSheet(); else self.closeScreen(); };
+    const back = function () { detach(); self.closeSheet(); };
     const row = function (icon, title, ctl, desc, cls) { return h('div', { class: 'set-row' + (cls ? ' ' + cls : '') }, h('span', { class: 'set-ico' }, ic(icon)), h('div', { class: 'grow' }, h('div', { class: 'set-t' }, title), desc ? h('div', { class: 'set-d' }, desc) : null), ctl); };
     const toggle = function (key, onChange) {
       const b = h('button', { class: 'switch' + (S.get(key) ? ' on' : ''), role: 'switch', 'aria-checked': S.get(key) ? 'true' : 'false', 'data-silent': '1', onclick: function () {
@@ -2000,12 +2014,12 @@
       h('div', { class: 'set-foot' },
         h('span', { class: 'muted tiny grow' }, '城市与地铁社区版 v' + CFG.GAME_VERSION + ' · 地图 © OpenStreetMap 贡献者'),
         h('button', { class: 'btn sm ghost', onclick: function () {
-          if (asSheet) self.sheetConfirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
-          else self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
+          const ask = function () { self.sheetConfirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear'); };
+          if (self.screen.querySelector('.start-sheet')) ask(); else self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
         } }, '恢复默认'),
         h('button', { class: 'btn primary sm', onclick: back }, '完成')));
     if (asSheet) this.openSheet(card, { esc: closeAll });
-    else this.openScreen(card, closeAll);
+    else this.openOverlay(card, { esc: closeAll });
     // 点空白关闭：点到卡片、主菜单、按钮输入等可交互元素时不处理
     if (screenEl) screenEl.onpointerdown = function (e) {
       const t = e.target;
@@ -2096,12 +2110,12 @@
     };
     draw();
     this.screenRefresh = draw;
-    const back = function () { if (inGame) self.closeScreen(); else if (mapId) self.showMapSelect(mapId); else self.showStart(); };
+    const back = function () { if (inGame) self.closeOverlay(); else if (mapId) self.showMapSelect(mapId); else self.showStart(); };
     const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档' + (mapId && CM.MAPS[mapId] ? ' · ' + CM.MAPS[mapId].name : '')),
       h('div', { class: 'note' }, '每个进度相互独立；自动存档在两个位置轮换写入，手动存档最多 ' + CFG.saves.maxManual + ' 个。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
       list, fileIn,
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { self.pickImportFile(keepScreen); } }, ic('import'), '导入存档文件'), h('button', { class: 'btn primary', onclick: back }, inGame ? '关闭' : '返回')));
-    this.openScreen(card, back);
+    if (inGame) this.openOverlay(card, { esc: back }); else this.openScreen(card, back);
   };
   UI.prototype.pickImportFile = function (keepScreen) {
     const self = this;
@@ -2125,10 +2139,11 @@
     CM.Save.importText(text).then(function (r) {
       self.toast('已导入存档「' + r.name + '」（地图：' + ((CM.MAPS[r.map] || {}).name || r.map) + '）', 'good');
       if (keepScreen && self.screenRefresh) self.screenRefresh();
+      else if (keepScreen) self.closeOverlay();
       else self.confirm('导入成功', '存档「' + r.name + '」已加入存档列表。是否立即载入？', '载入', function () { self.loadSlot(r.slotId); }, false, 'import');
     }).catch(function (e) {
       snd('error');
-      self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '导入失败'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
+      self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '导入失败'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { self.closeOverlay(); } }, '确定'))));
     });
   };
   UI.prototype.loadSlot = function (slotId) {
@@ -2164,8 +2179,8 @@
           h('div', { class: 'note' }, '当前游戏仍保留在内存中。可以重试，或先「导出当前进度」作为备份。'),
           h('div', { class: 'modal-actions' },
             h('button', { class: 'btn danger', onclick: function () { go(); } }, '不保存，直接返回'),
-            h('button', { class: 'btn', onclick: function () { self.closeScreen(); } }, '留在游戏'),
-            h('button', { class: 'btn primary', onclick: function () { self.closeScreen(); leave(); } }, '重试保存'))));
+            h('button', { class: 'btn', onclick: function () { self.closeOverlay(); } }, '留在游戏'),
+            h('button', { class: 'btn primary', onclick: function () { self.closeOverlay(); leave(); } }, '重试保存'))));
       });
     };
     const ev = g.draft ? g.draftEval() : null;
@@ -2248,7 +2263,7 @@
     const months = (r.to[0] - r.from[0]) * 12 + (r.to[1] - r.from[1]);
     this.lastReport = r;
     if (months <= 1 && !r.failed) {
-      this.closeScreen();
+      this.closeOverlay();
       const d = a.pop - r.before.pop;
       this.toast('已推进到 ' + r.to[0] + '年' + r.to[1] + '月：人口 ' + U.fmtPeople(a.pop) + '（' + (d >= 0 ? '+' : '−') + U.fmtPeople(Math.abs(d)) + '），地铁分担率 ' + U.fmtPct(a.share) + (g.econ.isFree() ? '' : '，资金 ' + U.fmtMoney(a.funds)), 'good', { label: '查看报告', fn: function () { self.showReport(r); } });
       this.rerenderPage();
@@ -2339,10 +2354,10 @@
     }
     const card = h('div', { class: 'card jr' },
       h('div', { class: 'card-head' }, h('span', { class: 'badge ' + (r.failed ? 'b-red' : 'b-green') }, ic(r.failed ? 'error' : 'report')), h('div', { class: 'grow' }, h('h2', null, r.failed ? '推进中止：经营挑战失败' : '推进完成'), h('div', { class: 'tiny muted' }, r.from[0] + '年' + r.from[1] + '月 → ' + r.to[0] + '年' + r.to[1] + '月 · ' + months + ' 个月' + (evs.length ? ' · ' + evs.length + ' 件大事' : ''))),
-        h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { self.closeScreen(); } }, ic('close'))),
+        h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: function () { self.closeOverlay(); } }, ic('close'))),
       h('div', { class: 'jr-scroll' }, tl, parts),
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { self.closeScreen(); self.openStats(); } }, ic('chart'), '查看统计'), h('button', { class: 'btn primary', onclick: function () { self.closeScreen(); } }, '继续')));
-    this.openScreen(card, function () { self.closeScreen(); });
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { self.closeOverlay(); self.openStats(); } }, ic('chart'), '查看统计'), h('button', { class: 'btn primary', onclick: function () { self.closeOverlay(); } }, '继续')));
+    this.openOverlay(card, function () { self.closeOverlay(); });
   };
   UI.prototype.showFailure = function (f) {
     const g = this.g(), self = this;
@@ -2351,10 +2366,10 @@
       this.kv([['资金', U.fmtMoney(g.econ.funds)], ['满意度', Math.round(g.econ.sat) + ''], ['连续负余额', g.econ.negMonths + ' 个月'], ['满意度过低', g.econ.lowSatMonths + ' 个月']]),
       h('div', { class: 'note', style: { marginTop: '8px' } }, '可以查看财政与指标详情了解恶化原因；读取之前的存档重新经营，或转为自由建造继续发展这座城市（城市经济照常模拟）。'),
       h('div', { class: 'modal-actions' },
-        h('button', { class: 'btn', onclick: function () { self.closeScreen(); self.openPage('finance', null, { root: true }); } }, ic('coin'), '财政详情'),
+        h('button', { class: 'btn', onclick: function () { self.closeOverlay(); self.openPage('finance', null, { root: true }); } }, ic('coin'), '财政详情'),
         h('button', { class: 'btn', onclick: function () { self.showSaveManager(true); } }, ic('folder'), '读取存档'),
         h('button', { class: 'btn', onclick: function () { self.backToMenu(); } }, ic('home'), '主菜单'),
-        h('button', { class: 'btn primary', onclick: function () { g.econ.mode = 'free'; g.mode = 'free'; g.econ.failed = null; g.logEvent({ tag: '经营', title: '转为自由建造模式继续', desc: '' }); self.closeScreen(); self.toast('已转为自由建造模式', 'info'); self.markUnsaved(); } }, ic('sparkle'), '转为自由建造继续')));
-    this.openScreen(card, function () { self.closeScreen(); });
+        h('button', { class: 'btn primary', onclick: function () { g.econ.mode = 'free'; g.mode = 'free'; g.econ.failed = null; g.logEvent({ tag: '经营', title: '转为自由建造模式继续', desc: '' }); self.closeOverlay(); self.toast('已转为自由建造模式', 'info'); self.markUnsaved(); } }, ic('sparkle'), '转为自由建造继续')));
+    this.openOverlay(card, function () { self.closeOverlay(); });
   };
 })(window.CM);

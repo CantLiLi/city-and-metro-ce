@@ -45,9 +45,11 @@
 @keyframes flashGood { 0% { background: var(--good-soft); } 100% { background: transparent; } }
 @keyframes flashBad { 0% { background: var(--bad-soft); } 100% { background: transparent; } }
 .daypill { gap: 9px; }
+/* 固定面板尺寸：时段名与日期数字各占定宽，时间推进时整块不会随字数变化而伸缩 */
+.daypill .k { width: 11.8em; white-space: nowrap; }
 /* 日期数字段：变化时只做不透明度淡入，倍速越高越快（--rdur 由 ui.rollDigit 设置） */
 .daypill .dts { display: inline; }
-.daypill .dt { display: inline-block; }
+.daypill .dt { display: inline-block; min-width: 2ch; text-align: center; }
 .daypill .dt.roll { animation: dtFade var(--rdur, .2s) linear both; }
 @keyframes dtFade { from { opacity: 0; } to { opacity: 1; } }
 .dayring { width: 36px; height: 36px; position: relative; flex: none; }
@@ -79,11 +81,12 @@
   box-shadow: var(--shadow);
 }
 .foldbar.open { display: flex; animation: foldIn .18s var(--spring); }
-.speed .foldbar { left: calc(100% + 6px); flex-wrap: wrap; max-width: 286px; }
+/* 档位条固定横排：宽度按内容撑开，不折成竖排（绝对定位的收缩宽度会被压成一行一词） */
+.speed .foldbar { left: calc(100% + 6px); width: max-content; flex-wrap: nowrap; }
 .sbtn.wide { min-width: 58px; padding: 0 9px; }
 @keyframes foldIn { from { opacity: 0; transform: translateY(-50%) scale(.93); } to { opacity: 1; transform: translateY(-50%) scale(1); } }
-/* 窄屏没有横向余量，折叠条改为向下展开并对齐组边缘 */
-#hudTop.lt960 .speed .foldbar { left: 0; top: calc(100% + 6px); transform: none; animation: none; }
+/* 窄屏没有横向余量，折叠条改为向下展开并对齐组边缘，放不下时才换行 */
+#hudTop.lt960 .speed .foldbar { left: 0; top: calc(100% + 6px); transform: none; animation: none; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 24px); }
 /* 圆环指标：环的弧长表示占满值 100 的比例，环心是图标 */
 .pill.ringpill { padding-left: 7px; }
 .mring { position: relative; flex: none; width: 30px; height: 30px; }

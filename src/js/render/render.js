@@ -1900,9 +1900,10 @@
     // 这一帧视角是否在动（缩放或平移）：动的时候整层位图缓存一律不建，直接画
     this.camMoving = this.ox !== this._oxPrev || this.oy !== this._oyPrev || this.z !== this._zPrevCam;
     this._oxPrev = this.ox; this._oyPrev = this.oy; this._zPrevCam = this.z;
-    // 停下后的第几帧：地铁整层重描、标注位图重描这类一帧几十毫秒的活要排到稳定之后分帧做，
-    // 免得全撞在「松手」那一帧上（换档补块也要抢同一帧的预算）
-    this.camSettle = this.camMoving ? 0 : (this.camSettle || 0) + 1;
+    // 停下后静止了多久（毫秒）：地铁整层重描、标注位图重描这类一帧几十毫秒的活要排到真正停下之后做。
+    // 按「静止了几帧」计时会在鼠标轮询抖动时误触发——拖动中某一帧位移恰好为 0，第 2 帧就触发一整层重描，
+    // 连续拖动于是变成连续重描，手感比原版匀速管线更顿。改成时间阈值后，几十毫秒的空档只是空档。
+    this.camStill = this.camMoving ? 0 : (this.camStill || 0) + dt * 1000;
     // 缩放缓动中：LOD 档位随时会变，这一档的补块多半白建（阈值与 updateCamera 的吸附一致）
     this.zoomEasing = Math.abs(this.z - cam.tz) > cam.tz * 0.002;
     const tStart = performance.now();
@@ -2023,7 +2024,8 @@
         if (visible && !hold && (!e || e.stale)) queue.push({ kind: 'i', key: key, lvl: ilvl, ci: ci, cj: cj, C: C, d: Math.abs((ci + 0.5) * C - cam.cx) + Math.abs((cj + 0.5) * C - cam.cy) - 0.5 });
         if (visible && e && !e.empty) {
           e.used = this.frame;
-          const fade = Math.min(1, (this.time - e.born) / 0.25);
+          // 视角在动时不淡入：新块本来就要等建完才出现，再淡 0.25 秒，拖动中的边角看起来就总是慢半拍
+          const fade = this.camMoving ? 1 : Math.min(1, (this.time - e.born) / 0.25);
           ctx.globalAlpha = bAlpha * fade;
           ctx.drawImage(e.cv, a.x - e.ax * sc, a.y - e.ay * sc, e.cv.width * sc, e.cv.height * sc);
         } else if (visible && e) e.used = this.frame;
@@ -2173,17 +2175,22 @@
       this.tEase > 0.05 ? 1 : 0, (ui && ui.highlightLine) || '', this.detail.tier, g.city.version, g.netVersion || 0,
       g.model && g.model.version ? g.model.version : 0].join('|');
   };
+  // 只合成视口那一块：位图比视口大一圈（余量），整幅贴上去等于每帧白合成视口外的部分，
+  // 平移时这笔全屏填充正好和地面／建筑重绘抢同一帧的填充率
   Renderer.prototype.blitMetro = function (ctx, cv, dx, dy, mx, my) {
     mx = mx || 0; my = my || 0;
     ctx.save();
     ctx.globalAlpha = 1;
-    ctx.drawImage(cv, dx - mx, dy - my, this.w + 2 * mx, this.h + 2 * my);
+    ctx.drawImage(cv, (mx - dx) * this.dpr, (my - dy) * this.dpr, this.w * this.dpr, this.h * this.dpr, 0, 0, this.w, this.h);
     ctx.restore();
   };
-  // 地铁层位图的四周余量：平移时靠它整块贴回，位移超出余量才重描
+  // 地铁层位图的四周余量：平移时靠它整块贴回，位移超出余量才重描。
+  // 贴图只合成视口那一块，余量不再增加每帧填充率，只花内存，所以给得比 8% 宽一些：
+  // 拖动时能多滑几帧位图，少几次「退回矢量快速路径」——那条路径会临时省掉道床、枕木、栏杆。
   Renderer.prototype.metroMargin = function () {
-    let mx = Math.max(64, Math.round(this.w * 0.08)), my = Math.max(64, Math.round(this.h * 0.08));
-    if ((this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr > 12e6) { mx = 48; my = 48; }
+    let mx = Math.max(64, Math.round(this.w * 0.11)), my = Math.max(64, Math.round(this.h * 0.11));
+    const cap = 14e6, pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr;
+    if (pix > cap) { const k = Math.sqrt(cap / pix); mx = Math.max(40, Math.floor(mx * k)); my = Math.max(40, Math.floor(my * k)); }
     return { mx: mx, my: my };
   };
   // 位图按比例拉伸贴用时，先确认旧画面完整盖住新视口，否则边缘会露出没画到的空档
@@ -2234,10 +2241,10 @@
       return;
     }
     // 平移：位移还在位图余量内就整块贴着走（屏幕坐标缓存同步平移），超出余量交给快速路径。
-    // 贴图位移取整到设备像素，反复贴回才不会越贴越糊
+    // 贴图位移不做设备像素取整：位图从不回贴到自身，不存在「越贴越糊」，取整反而让整层轨道
+    // 相对连续移动的地面／车流按整像素跳（dpr=1 时最明显），看起来就是跟手差
     if (m && m.cv && m.core === core && m.z === this.z && !m.pxStale) {
-      const bx = Math.round((this.ox - m.ox) * this.dpr) / this.dpr;
-      const by = Math.round((this.oy - m.oy) * this.dpr) / this.dpr;
+      const bx = this.ox - m.ox, by = this.oy - m.oy;
       if (Math.abs(bx) <= m.mx && Math.abs(by) <= m.my) {
         const dx = bx - (m.dx || 0), dy = by - (m.dy || 0);
         if (dx || dy) { this.shiftMetroPx(dx, dy); m.dx = bx; m.dy = by; }
@@ -2249,7 +2256,7 @@
     }
     // 视角在动（缩放中、或平移到余量外）：直接画快速版，几何精确、省掉装饰线，
     // 停下来再重描一整层清晰位图。重描排在稳定之后，并且避开正在补块的帧（那几帧预算已经吃满）
-    if (this.camMoving || this.camSettle < 2 || (this.stats.lodPreparing && this.camSettle < 20)) {
+    if (this.camMoving || this.camStill < 120 || (this.stats.lodPreparing && this.camStill < 500)) {
       if (m) m.pxStale = true;
       this.drawMetroFast(ctx, ui, C);
       this.drawMetroSel(ctx, ui, C);
@@ -2267,6 +2274,8 @@
     this.drawMetroStatic(x, ui, C, false, Math.max(mg.mx, mg.my));
     this.metroOx = this.ox; this.metroOy = this.oy;
     this.metroLayer = { core: core, full: full, cv: cv, ox: this.ox, oy: this.oy, z: this.z, mx: mg.mx, my: mg.my, dx: 0, dy: 0 };
+    // 这一帧已经付过整层重描的代价：同一帧不要再重建标注位图，两笔重活撞一起就是一次明显的掉帧
+    this._metroBuiltFrame = this.frame;
     this.blitMetro(ctx, cv, 0, 0, mg.mx, mg.my);
     this.drawMetroSel(ctx, ui, C);
   };
@@ -2279,7 +2288,7 @@
     const idx = this.metroIndex(C, v), order = idx.indexed.order, visible = idx.visible;
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     if (!this.segPx) this.segPx = new Map(); else this.segPx.clear();
-    const paths = new Map();
+    const paths = new Map(), caps = new Map();
     for (let q = 0; q < order.length; q++) {
       if (!visible.has(q)) continue;
       const o = order[q], s = o.cs.seg, bb = o.bbox;
@@ -2297,7 +2306,18 @@
       const path = p.path;
       path.moveTo(arr[0], arr[1]);
       for (let i = 2; i < arr.length; i += 2) path.lineTo(arr[i], arr[i + 1]);
+      // 衬边：拖动中如果没有它，轨道会比静止版细一圈，松手又变粗，看起来像线路「慢半拍才跟上」
+      if (!(s.type === 'underground' && under <= 0.5)) {
+        const cc = s.type === 'elevated' ? TH.elevCase : TH.lineCase;
+        const ck = cc + alpha;
+        let cp = caps.get(ck);
+        if (!cp) { cp = { path: new Path2D(), color: cc, alpha: alpha }; caps.set(ck, cp); }
+        cp.path.moveTo(arr[0], arr[1]);
+        for (let i = 2; i < arr.length; i += 2) cp.path.lineTo(arr[i], arr[i + 1]);
+      }
     }
+    ctx.lineWidth = lw + 2.5;
+    caps.forEach(function (p) { ctx.globalAlpha = p.alpha; ctx.strokeStyle = p.color; ctx.stroke(p.path); });
     ctx.lineWidth = lw;
     paths.forEach(function (p) { ctx.globalAlpha = p.alpha; ctx.strokeStyle = p.color; ctx.stroke(p.path); });
     ctx.globalAlpha = 1;
@@ -3463,8 +3483,9 @@
     }
     this.labA = labA; this.mapLabA = mapLabA;
     // 视角在动就直接画到主画布：位图拉伸会把文字一起放大发虚，每帧重排版又太贵，两头都不合适。
-    // 稳定后重描位图再晚两帧（比地铁层更靠后），同样避开正在补块的帧
-    if (this.camMoving || this.camSettle < 4 || (this.stats.lodPreparing && this.camSettle < 22)) { this.drawLabelContent(ctx, ui, 0, 0); return; }
+    // 稳定后重描位图再晚 200ms（比地铁层更靠后），同样避开正在补块的帧；
+    // 地铁层这一帧刚重描过就推后，两笔重活分开落在两帧上
+    if (this.camMoving || this.camStill < 200 || this._metroBuiltFrame === this.frame || (this.stats.lodPreparing && this.camStill < 600)) { this.drawLabelContent(ctx, ui, 0, 0); return; }
     const key = [this.w, this.h, this.dpr, this.z, this.M.join(','), this.cam.under, this.tEase > 0.5, this.bFade > 0.5, this.game.city.version, this.game.netVersion, this.layer, this.themeName, document.fonts ? document.fonts.status : ''].join('|');
     let mx = Math.max(48, Math.round(this.w * 0.08)), my = Math.max(48, Math.round(this.h * 0.08));
     const pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr;

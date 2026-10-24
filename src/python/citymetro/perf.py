@@ -307,14 +307,19 @@ def _mac_usage(lib, pids):
 
 
 def _mac_gpu_seconds(coalition_id):
-    """联盟累计的显卡时间；拿不到时返回 None。"""
+    """联盟累计的显卡时间（秒）；拿不到时返回 None。
+
+    内核按纳秒累加（task_coalition_update_gpu_stats 收的就是 gpu_ns_delta），
+    不能乘 mach 时间基准：Apple 芯片的时间基准是 125/3，一乘就放大 41.7 倍，
+    显卡占用会一直顶在 100%。
+    """
     coalition = _mach()[1]
     if coalition is None or coalition_id is None:
         return None
     usage = _CoalitionUsage()
     if coalition(coalition_id, ctypes.byref(usage), ctypes.sizeof(usage)) != 0:
         return None
-    return usage.gpu_time * _mach()[2]
+    return usage.gpu_time / 1e9
 
 
 def _rate(prev, cur, now, cores):
@@ -330,6 +335,7 @@ class Perf:
         self._prev = None
         self._query = None
         self._counter = None
+        self._mac_gpu_seen = False
 
     def _open_gpu(self, pdh):
         query, counter = HANDLE(), HANDLE()
@@ -387,7 +393,11 @@ class Perf:
             prev, self._prev = self._prev, (cpu_sec, now, gpu_sec)
             cpu = _rate(prev, cpu_sec, now, os.cpu_count() or 1)
             gpu = None
-            if gpu_sec is not None and prev is not None and prev[2] is not None:
+            # 联盟的 gpu_time 要先涨过一次才可信：本机若不上报，它恒为 0，
+            # 差分会一直是 0，与"显卡真的闲着"分不开，这里保持 None 显示成 —
+            if gpu_sec:
+                self._mac_gpu_seen = True
+            if gpu_sec is not None and self._mac_gpu_seen and prev is not None and prev[2] is not None:
                 elapsed = max(1e-6, now - prev[1])
                 gpu = round(min(100.0, max(0.0, (gpu_sec - prev[2]) / elapsed * 100)), 1)
         return {'cpu': cpu, 'ram': int(mem / (1024 * 1024)), 'gpu': gpu}
