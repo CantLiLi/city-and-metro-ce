@@ -19,16 +19,16 @@
   // winZ/doorZ/paxZ 是列车车窗、车门、上下车乘客的显示缩放下限；agentDetail 控制汽车行人的细节与
   // 阴影；agentMax 为汽车、行人、步行者数量上限的系数；edge 为列车外廓描边。
   // 渲染精度决定光栅分辨率：lod 为栅格精度系数（越小模型画得越粗但越快），dprCap 为像素比上限，
-  // maxTier 是自动降档的上限，hot/calm 为降档与恢复的耗时阈值（ms）。
+  // maxTier 是自动降档的上限，hot/calm 为降档与恢复的耗时阈值（ms），pxMin 是内部渲染分辨率自适应的下限。
   const MODEL_DET = {
     high: { coarseLvl: 16, treeN: 3, winZ: 20, doorZ: 26, paxZ: 26, paxFrac: 1, agentDetail: 1, agentMax: 1, edge: 1 },
     mid: { coarseLvl: 24, treeN: 2, winZ: 23, doorZ: 30, paxZ: 34, paxFrac: 0.6, agentDetail: 1, agentMax: 0.8, edge: 1 },
     low: { coarseLvl: 32, treeN: 1, winZ: 26, doorZ: 34, paxZ: 99, paxFrac: 0, agentDetail: 0, agentMax: 0.6, edge: 0 },
   };
   const MODEL_RES = {
-    high: { lod: 1, dprCap: 1.5, maxTier: 0, hot: 20, calm: 14 },
-    mid: { lod: 0.82, dprCap: 1.25, maxTier: 1, hot: 16, calm: 11 },
-    low: { lod: 0.62, dprCap: 1, maxTier: 2, hot: 13, calm: 9 },
+    high: { lod: 1, dprCap: 1.5, maxTier: 0, hot: 20, calm: 14, pxMin: 0.6 },
+    mid: { lod: 0.82, dprCap: 1.25, maxTier: 1, hot: 16, calm: 11, pxMin: 0.5 },
+    low: { lod: 0.62, dprCap: 1, maxTier: 2, hot: 13, calm: 9, pxMin: 0.4 },
   };
   // 建筑密度（设置 → 性能）：每格保留多少普通建筑的比例；带 landmark 标签的建筑（地标、超高层）始终保留
   const BLD_KEEP = { min: 0.2, low: 0.35, mid: 0.5, high: 0.7, max: 0.85, full: 1 };
@@ -98,6 +98,10 @@
     this.cv = canvas; this.ctx = canvas.getContext('2d');
     this.gpu = true; this.soft = null;
     this.dpr = 1; this.w = 0; this.h = 0;
+    // 内部渲染分辨率：画布后备像素比 = 设备像素比 × pxScale，画布仍铺满窗口由浏览器放大。
+    // 整帧成本跟后备像素数成正比，窗口放大到全屏后像素量翻倍，靠它把成本压回预算内
+    this.pxScale = 1; this._pxMin = MODEL_RES.high.pxMin; this._pxBad = 1; this._area = 0;
+    this._resBusy = 0; this._resCalm = 0; this._resGrace = 0; this._frmAt = 0; this._frmGap = 1000 / 60;
     this.cam = { cx: 30, cy: 40, zoom: 13, tz: 13, anchor: null, view: 0, t: 0, under: 0, tu: 0, fly: null };
     this.ground = new Map(); this.iso = new Map(); this.cachePx = 0;
     this.overview = null; this.overviewStale = true; this.overviewAt = 0;
@@ -127,6 +131,16 @@
     this._lmc = null; this._lmcCity = null;
     this.metroLayer = null; this.metroOx = this.metroOy = 0;
     this.layerTmp = makeCanvas(1, 1);
+    // 文字单独一层画布，叠在地图之上：始终按设备像素比满分辨率绘制，不受内部渲染分辨率影响，
+    // 所以全屏自动降分辨率时字也不会糊。内容没变就整帧不动它——不重绘就不会有字形逐帧抖动
+    this.ldpr = 1; this._labKey = ''; this._labC = null; this._labOx = null; this._labOy = null;
+    this.lcv = document.createElement('canvas');
+    this.lcv.id = 'labels';
+    // 样式内联：这层是脚本创建、插在地图与 HUD 之间的，位置必须可靠；
+    // 一旦它掉进普通流就会被 fixed 的地图画布整个盖住，字就全看不见了
+    this.lcv.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;display:block;pointer-events:none;';
+    if (canvas.parentNode) canvas.parentNode.insertBefore(this.lcv, canvas.nextSibling);
+    this.lctx = this.lcv.getContext('2d');
   }
   CM.Renderer = Renderer;
 
@@ -145,6 +159,8 @@
     if (this.modelDetail === detail && this.renderRes === res) return;
     this.modelDetail = detail; this.renderRes = res;
     this._mq = Object.assign({}, MODEL_RES[res], MODEL_DET[detail]);
+    this._pxMin = this._mq.pxMin;
+    this.pxScale = 1; this._pxBad = 1; this._resBusy = 0; this._resCalm = 0; this._resGrace = 0;
     this.detail.tier = 0; this.detail.busy = 0; this.detail.calm = 0;
     this.requestedLevel = null; this.requestedTier = -1;
     this.clearImages(); this.dropMetroLayer();
@@ -188,6 +204,39 @@
     if (d.calm > 1.1 && d.tier > 0) { d.tier--; d.calm = 0; }
     this.stats.detailTier = d.tier;
     this.stats.modelQuality = this.modelDetail + '/' + this.renderRes;
+  };
+  // 内部渲染分辨率自适应：整帧成本（全画布填充、分块放大贴图、地铁层与标注层整屏位图）都跟屏幕画布的
+  // 后备像素数走，窗口越大越贵。全屏后像素量翻倍，原本刚好卡在预算内的帧就会掉；这里按实测出帧间隔
+  // 调低后备像素比，成本立刻落回窗口化时的水平。降过档的档位记进 _pxBad，之后不再尝试，避免来回抖
+  Renderer.prototype.adaptRes = function () {
+    const now = performance.now(), gap = this._frmAt ? now - this._frmAt : 0;
+    this._frmAt = now;
+    // 帧间隔的近期最小值当刷新周期用：高刷屏上目标就是屏幕刷新，不被 rAF 抖动带偏
+    if (gap > 0 && gap < 120) this._frmGap = Math.min(gap, this._frmGap + 0.05);
+    // 换档本身要重建画布与全部缓存，那几帧的耗时不能算进判断，否则每次升档都自证为「过慢」
+    if (now < this._resGrace) { this._resBusy = 0; this._resCalm = 0; return; }
+    // 加载、切后台、切窗口、GC 这类长间隔不算掉帧，只清空计数；要治的是 20~100ms 的稳定掉帧
+    if (!gap || gap > 120) { this._resBusy = 0; this._resCalm = 0; return; }
+    const limit = +CM.Settings.get('fpsLimit') || 0;
+    const target = limit > 0 ? 1000 / limit : Math.min(this._frmGap, 1000 / 55);
+    const dt = Math.min(0.25, gap / 1000);
+    this._resBusy = gap > target * 1.15 ? this._resBusy + dt : Math.max(0, this._resBusy - dt * 2);
+    this._resCalm = gap < target * 1.02 ? this._resCalm + dt : 0;
+    if (this._resBusy > 0.4 && this.pxScale > this._pxMin) {
+      this._pxBad = Math.min(this._pxBad, this.pxScale);   // 这一档判定过慢，收住上限不再往上试
+      this.setPxScale(Math.min(this.pxScale - 0.1, this._pxBad - 0.12));
+      this._resBusy = 0; this._resCalm = 0;
+    } else if (this._resCalm > 2.5 && this._pxBad - this.pxScale > 0.12) {
+      this.setPxScale((this.pxScale + this._pxBad) / 2);   // 只在已知安全区间的中点试探，不直接顶上失败档
+      this._resCalm = 0;
+    }
+  };
+  Renderer.prototype.setPxScale = function (s) {
+    s = Math.round(Math.max(this._pxMin, Math.min(1, s)) * 100) / 100;
+    if (s === this.pxScale) return;
+    this.pxScale = s;
+    this._resGrace = performance.now() + 600;
+    if (CM.Idle && CM.Idle.force) CM.Idle.force();   // 下一帧 resize 会重建画布，静止时也要画一帧
   };
   // 屏幕坐标对齐到设备像素：文字落在亚像素位置上，每帧的字形光栅化结果都不一样，屏幕上就是抖动闪烁
   Renderer.prototype.snapPx = function (v) { const d = this.dpr || 1; return Math.round(v * d) / d; };
@@ -458,12 +507,27 @@
     if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.resize = function () {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = window.innerWidth, h = window.innerHeight;
+    // 视口明显变大（多为切全屏）时先按面积预降一档：像素量一下涨到 1.6 倍，等实测出来再降已经先卡了一秒
+    if (this._area && w * h > this._area * 1.4 && this.pxScale > this._pxMin) this.setPxScale(this.pxScale - 0.15);
+    if (w !== this.w || h !== this.h) { this._pxBad = 1; this._resBusy = 0; this._resCalm = 0; }
+    this._area = w * h;
+    const dpr = Math.min(2, window.devicePixelRatio || 1) * this.pxScale;
     if (w === this.w && h === this.h && dpr === this.dpr) return;
     this.dpr = dpr; this.w = w; this.h = h;
+    this.stats.pxScale = this.pxScale;
     this.cv.width = Math.round(w * dpr); this.cv.height = Math.round(h * dpr);
     this.cv.style.width = w + 'px'; this.cv.style.height = h + 'px';
+    // 文字层固定按设备像素比满分辨率，不跟内部渲染分辨率缩放
+    if (this.lcv) {
+      const ldpr = Math.min(2, window.devicePixelRatio || 1), lw = Math.round(w * ldpr), lh = Math.round(h * ldpr);
+      if (this.ldpr !== ldpr || this.lcv.width !== lw || this.lcv.height !== lh) {
+        this.ldpr = ldpr;
+        this.lcv.width = lw; this.lcv.height = lh;
+        this.lcv.style.width = w + 'px'; this.lcv.style.height = h + 'px';
+        this._labKey = '';
+      }
+    }
     // 软件画布跟屏幕画布同尺寸，整块拷贝时不做缩放
     if (this.soft) { this.soft.width = this.cv.width; this.soft.height = this.cv.height; }
     this.dropMetroLayer();
@@ -488,8 +552,9 @@
     const ctx = this.cv.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.soft, 0, 0);
+    // 内部渲染分辨率可能低于屏幕像素（全屏时自动调低），放大到屏幕尺寸要插值，不然是一格一格的方块
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.soft, 0, 0, this.cv.width, this.cv.height);
   };
 
   // ---------------- 相机 ----------------
@@ -1935,6 +2000,7 @@
     const frameStart = performance.now();
     this.frame++; this.time += dt; this.dt = dt;
     this.adaptDetail(dt);
+    this.adaptRes();
     this.resize();
     const ctx = this.ctx, dpr = this.dpr, g = this.game;
     if (!g) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = U.rgb(TH.bg); ctx.fillRect(0, 0, this.cv.width, this.cv.height); return; }
@@ -2117,8 +2183,8 @@
     if (this.layer === 'fac' || this.layer === 'gap') this.drawFacilities(ctx);
     if (this.fx.length) this.drawFx(ctx, dt);
     if (under < 0.5) this.drawAtmosphere(ctx);
-    // ---- 标注 ----
-    this.drawLabels(ctx, ui);
+    // ---- 标注（画在独立的文字层上，不动主画布）----
+    this.drawLabels(ui);
     if (this.hl) this.drawHighlight(ctx);
     if (ui && ui.drawOverlay) ui.drawOverlay(ctx, this);
     // ---- 缓存渲染队列 ----
@@ -3534,53 +3600,102 @@
     }
   };
   // ---------------- 标注 ----------------
-  Renderer.prototype.drawLabels = function (ctx, ui) {
-    if (this.game.preview) return;
+  // 文字层清空并把变换设成 CSS 像素坐标：与主画布同一套坐标，标注的投影结果可以直接拿过来用
+  Renderer.prototype.labelCtx = function () {
+    const x = this.lctx, d = this.ldpr || 1;
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    // 文字层是自己的画布，光栅化状态会被上一帧带过来：改了尺寸的 canvas 可能带着旧变换，
+    // globalAlpha 上一个直画分支又可能停在半透明上，不清掉字会整层发虚
+    x.globalAlpha = 1;
+    x.globalCompositeOperation = 'source-over';
+    x.imageSmoothingEnabled = true;
+    x.clearRect(0, 0, this.lcv.width, this.lcv.height);
+    x.setTransform(d, 0, 0, d, 0, 0);
+    return x;
+  };
+  // 文字层与主画布各有一套「屏幕点 ← 世界点」的投影参数：两者后备像素比不同（文字层满分辨率、
+  // 主画布可能被降过），取整的对齐格不同，混用会让字最多偏一格。绘制标注时临时切过去，画完还原
+  Renderer.prototype.useLabelSpace = function () {
+    const s = this._lsp || (this._lsp = {});
+    s.px = this.px; s.py = this.py; s.dpr = this.dpr; s.stPx = this.stPx;
+    const d = this.ldpr || 1;
+    this.dpr = d;
+    this.px = Math.round(this.ox * d) / d; this.py = Math.round(this.oy * d) / d;
+    // 站名点位是地铁层按主画布参数投的影，两套取整差半格最多偏半个设备像素；字符锚点本来就按
+    // 整格对齐，这里再整体修正到文字层的格点上，字与站点圆点就不会错开
+    const ax = Math.round((s.px - this.px) * d) / d, ay = Math.round((s.py - this.py) * d) / d;
+    if (s.stPx && (ax || ay)) {
+      const arr = new Array(s.stPx.length);
+      for (let i = 0; i < s.stPx.length; i++) { const p = s.stPx[i]; arr[i] = p ? { x: p.x + ax, y: p.y + ay, r: p.r, id: p.id } : null; }
+      this.stPx = arr;
+    }
+    return s;
+  };
+  Renderer.prototype.restoreSpace = function (s) {
+    if (!s) return;
+    this.px = s.px; this.py = s.py; this.dpr = s.dpr; this.stPx = s.stPx;
+  };
+  Renderer.prototype.drawLabels = function (ui) {
+    if (!this.lctx) return;
+    const g = this.game;
+    // 开始界面不显示标注；顺手把上一局留在文字层上的内容清掉
+    if (g.preview) { if (this._labKey) { this._labKey = ''; this.labelCtx(); } return; }
     const step = (this.dt || 0.016) / 0.25;
     const labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
     const mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
-    // 标注开关的 0.25 秒渐隐渐现里直接画到主画布；其余时间画进一张四周留有余量的位图，
-    // 视角平移时按位移整块贴回来（与地铁层同样的做法），省掉每帧重排、重描数百个站名路名
+    // 标注开关的 0.25 秒渐隐渐现里内容每帧都在变，清空后直画。注意逐帧推进的状态归一化到本帧终值，
+    // 否则渐隐期间每帧都停在中间值，标注会一直半透明
     if ((labA > 0.01 && labA < 0.99) || (mapLabA > 0.01 && mapLabA < 0.99)) {
-      this.labelImage = null;
-      this.drawLabelContent(ctx, ui, 0, 0);
+      this.labelImage = null; this._labKey = '';
+      this.labA = labA; this.mapLabA = mapLabA;
+      const sp = this.useLabelSpace();
+      try { this.drawLabelContent(this.labelCtx(), ui, 0, 0); } finally { this.restoreSpace(sp); }
       return;
     }
     this.labA = labA; this.mapLabA = mapLabA;
-    const key = [this.w, this.h, this.dpr, this.z, this.M.join(','), this.cam.under, this.tEase > 0.5, this.bFade > 0.5, this.game.city.version, this.game.netVersion, this.layer, this.themeName, document.fonts ? document.fonts.status : ''].join('|');
+    // 文字层不被主画布清空，所以内容不变时整帧都不该碰它：不重绘就没有逐帧变化的字形，也就不会闪
+    const key = [this.w, this.h, this.ldpr, this.z, this.M.join(','), this.cam.under, this.tEase > 0.5, this.bFade > 0.5, this.game.city.version, this.game.netVersion, this.layer, this.themeName, document.fonts ? document.fonts.status : ''].join('|');
     // 余量按视野的两成留：一次拖动的位移常常吃不满这点余量，位图就一直贴着走，不用每帧重排版重描
     let mx = Math.max(48, Math.round(this.w * 0.2)), my = Math.max(48, Math.round(this.h * 0.2));
-    const pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.dpr * this.dpr;
+    const pix = (this.w + 2 * mx) * (this.h + 2 * my) * this.ldpr * this.ldpr;
     if (pix > LABEL_MAXPX) { const k2 = Math.sqrt(LABEL_MAXPX / pix); mx = Math.max(24, Math.floor(mx * k2)); my = Math.max(24, Math.floor(my * k2)); }
     // 记账用整像素取整后的偏移：位图内容按这个偏移投影，贴回的位移也只有它变的时候才变
     const sox = this.snapOx(), soy = this.snapOy();
+    if (this._labKey === key && this._labC === this.drawnC && this._labOx === sox && this._labOy === soy) return;
     let image = this.labelImage;
     const reusable = !!image && image.key === key && image.C === this.drawnC;
     if (reusable) {
       const dx = sox - image.ox, dy = soy - image.oy;
       if (Math.abs(dx) <= image.mx && Math.abs(dy) <= image.my) {
-        ctx.drawImage(image.cv, dx - image.mx, dy - image.my, this.w + 2 * image.mx, this.h + 2 * image.my);
+        const x = this.labelCtx();
+        x.drawImage(image.cv, dx - image.mx, dy - image.my, this.w + 2 * image.mx, this.h + 2 * image.my);
+        this._labKey = key; this._labC = this.drawnC; this._labOx = sox; this._labOy = soy;
         return;
       }
     }
+    const x0 = this.labelCtx();
     // 位图用不上、或余量刚好用尽时才到这里。余量用尽就地重描一次：缩放与内容都没变，
-    // 重描成本跟原先每帧直画相当，之后几十帧只贴图。真正用不上（缩放中每帧 key 都会变、相机还在动、
-    // 地铁层刚在这一帧重描过、正在补块）就直接画到主画布，别把一帧花在建一张马上作废的位图上
+    // 重描成本跟每帧直画相当，之后几十帧只贴图。真正用不上（缩放中每帧 key 都会变、相机还在动、
+    // 地铁层刚在这一帧重描过、正在补块）就直接画，别把一帧花在建一张马上作废的位图上
     if (!reusable) {
       this.labelImage = null;
       if (this.zoomEasing || this.camMoving || this.camStill < 200 || this._metroBuiltFrame === this.frame || (this.stats.lodPreparing && this.camStill < 600)) {
-        this.drawLabelContent(ctx, ui, 0, 0);
+        const sp = this.useLabelSpace();
+        try { this.drawLabelContent(x0, ui, 0, 0); } finally { this.restoreSpace(sp); }
+        this._labKey = key; this._labC = this.drawnC; this._labOx = sox; this._labOy = soy;
         return;
       }
     }
-    const cw = Math.ceil((this.w + 2 * mx) * this.dpr), ch = Math.ceil((this.h + 2 * my) * this.dpr);
+    const cw = Math.ceil((this.w + 2 * mx) * this.ldpr), ch = Math.ceil((this.h + 2 * my) * this.ldpr);
     const cv = image && image.cv.width === cw && image.cv.height === ch ? image.cv : makeCanvas(cw, ch);
     const x = cv.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cw, ch);
-    x.setTransform(this.dpr, 0, 0, this.dpr, mx * this.dpr, my * this.dpr);
-    this.drawLabelContent(x, ui, mx, my, sox, soy);
+    x.setTransform(this.ldpr, 0, 0, this.ldpr, mx * this.ldpr, my * this.ldpr);
+    const sp = this.useLabelSpace();
+    try { this.drawLabelContent(x, ui, mx, my, sox, soy); } finally { this.restoreSpace(sp); }
     image = this.labelImage = { key: key, C: this.drawnC, cv: cv, ox: sox, oy: soy, mx: mx, my: my };
-    ctx.drawImage(cv, -mx, -my, this.w + 2 * mx, this.h + 2 * my);
+    x0.drawImage(cv, -mx, -my, this.w + 2 * mx, this.h + 2 * my);
+    this._labKey = key; this._labC = this.drawnC; this._labOx = sox; this._labOy = soy;
   };
   Renderer.prototype.drawLabelContent = function (ctx, ui, mx, my, sox, soy) {
     const g = this.game, z = this.z, v = this.view, city = g.city;
@@ -3589,8 +3704,8 @@
     // sox / soy 是投影用的整像素偏移：重描位图时必须与记账的那一份一致，否则贴回去会差一个像素
     const mX = mx || 0, mY = my || 0;
     // 重描位图时用记账那一份偏移，画完还原（其余绘制都依赖 this.px / this.py）
-    const sax = this.px, say = this.py;
-    if (sox != null) { this.px = sox; this.py = soy; }
+    const sax = this.px, say = this.py, sdpr = this.dpr;
+    if (sox != null) { this.px = sox; this.py = soy; this.dpr = this.ldpr || 1; }
     try {
     let vx = v;
     if (mX || mY) {
@@ -3601,12 +3716,10 @@
       }
       vx = { x0: ax0, y0: ay0, x1: ax1, y1: ay1 };
     }
-    // 标注开关渐隐渐现（不闪切）
-    const step = (this.dt || 0.016) / 0.25;
-    this.labA = U.clamp((this.labA == null ? (this.labelsOn ? 1 : 0) : this.labA) + (this.labelsOn ? step : -step), 0, 1);
-    this.mapLabA = U.clamp((this.mapLabA == null ? (this.mapLabelsOn !== false ? 1 : 0) : this.mapLabA) + (this.mapLabelsOn !== false ? step : -step), 0, 1);
+    // 标注开关渐隐渐现（不闪切）。状态在 drawLabels 里已逐帧推进过，这里直接用本帧终值，
+    // 再推进一次会让渐隐永远停在中间值，标注一直半透明甚至看不见
+    const dpr = this.ldpr || 1;
     const placed = new Map(), tile = 48;
-    const dpr = this.dpr || 1;
     // 文字锚点对齐到设备像素：相机位移是连续的，文字落在亚像素位置时每帧的字形光栅化结果都不一样，
     // 屏幕上看起来就是抖动闪烁。取整到整格后字形稳定，代价是最多偏半个设备像素
     const snap = function (v) { return Math.round(v * dpr) / dpr; };
@@ -3628,35 +3741,29 @@
       ctx.lineWidth = 3.2; ctx.strokeStyle = TH.halo; ctx.lineJoin = 'round';
       ctx.strokeText(text, px, py); ctx.fillStyle = fill; ctx.fillText(text, px, py);
     };
-    // 车站名、区名下面垫一块半透明底：底下的地面与街景每帧都在变，只靠描边时字口随底色明暗闪，
-    // 而且换乘站的白底圆点会把旁边的字吞掉。底框按对齐后的位置算，尺寸只由字宽和字号决定，不逐帧变化。
-    // 字号必须从字体串里的 "Npx" 取，不能对整串 parseFloat：那会拿到字重（600），底框高度会撑成几百像素
-    const plate = (text, x, y, font, align) => {
-      ctx.font = font; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
-      const fs = /(\d+(?:\.\d+)?)px/.exec(font);
-      const w = Math.ceil(this.textWidth(ctx, text)) + 5, h = Math.round((fs ? +fs[1] : 12) * 1.55);
-      const x0 = snap((align === 'center' ? x - w / 2 : x) - 2), y0 = snap(y - h / 2);
-      ctx.fillStyle = TH.plate; ctx.fillRect(x0, y0, w, h);
-    };
-    // 车站名
+    // 文字层内容不变就整帧不动，字口不会再随底下街景闪，不需要再垫底板，只靠描边压住背景
+    // 车站名。换乘站优先：两行以上（大小站除外）的先排，挤不下时先舍弃小站
     const C = this.drawnC;
-    const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station' || this.layer === 'fac' || this.layer === 'gap';   // 这两个图层自带标注，隐藏站名、区名与未开放区域
-    if (C && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
+    const busyLayer = this.layer === 'cong' || this.layer === 'flow' || this.layer === 'station' || this.layer === 'fac' || this.layer === 'gap';   // 这些图层自带标注，隐藏站名、区名与未开放区域
+    if (C && C.stations && this.stPx && z >= 8.5 && this.labA > 0.01 && !busyLayer) {
+      const pick = [];
+      for (let i = 0; i < this.stPx.length; i++) {
+        const p = this.stPx[i];
+        if (!p || !C.stations[i]) continue;
+        const sl = C.stationLines[i] || { size: 'M', lines: [0] };
+        pick.push([p, i, sl.size, { L: 2, M: 1, S: 0 }[C.stations[i].size] || 0]);
+      }
+      pick.sort(function (a, b) { return (b[2] - a[2]) || (b[3] - a[3]); });
       ctx.globalAlpha = this.labA;
       // 字号取整：0.25 像素的台阶会让排版宽度在缩放中反复变化，邻近标注跟着闪
       const fs = Math.round(11.5 + U.clamp((z - 20) / 4, 0, 1));
-      ctx.font = fs + 'px ' + FONT;
-      const order = this.stPx.map(function (p, i) { return [p, i]; }).filter(function (a) { return a[0]; });
-      order.sort(function (a, b) { return (C.stationLines[b[1]].size - C.stationLines[a[1]].size) || ({ L: 2, M: 1, S: 0 }[C.stations[b[1]].size] - { L: 2, M: 1, S: 0 }[C.stations[a[1]].size]); });
-      const stationFont = function (lines) { return (lines > 1 ? '600 ' : '') + fs + 'px ' + FONT; };
-      for (const it of order) {
+      for (const it of pick) {
         const p = it[0], s = C.stations[it[1]];
-        const font = stationFont(C.stationLines[it[1]].size);
+        const font = (it[2] > 1 ? '600 ' : '') + fs + 'px ' + FONT;
         ctx.font = font;
         const w = this.textWidth(ctx, s.name);
         const x = p.x + p.r + 4, y = p.y;
         if (!fits(x - 2, y - fs / 2 - 2, x + w + 5, y + fs / 2 + 2)) continue;
-        plate(s.name, x, y, font);
         halo(s.name, x, y, font, TH.ink);
       }
       ctx.globalAlpha = 1;
@@ -3734,7 +3841,7 @@
         shown.add(k);
       }
     }
-    } finally { this.px = sax; this.py = say; }
+    } finally { this.px = sax; this.py = say; this.dpr = sdpr; }
   };
 
   // ---------------- 拾取 ----------------

@@ -72,6 +72,10 @@ body { -webkit-user-select: none; user-select: none; }
 /* 拖拽界面时不该出现选区；输入框与代码块仍然可选 */
 input, textarea, pre, code, kbd, .selectable { -webkit-user-select: text; user-select: text; }
 #map { position: fixed; inset: 0; display: block; touch-action: none; }
+/* 文字层：叠在地图之上、HUD 之下（不给 z-index，按 DOM 顺序夹在两者之间），鼠标事件一律穿透。
+   开着地图淡入的过渡时（开始界面）跟地图一起淡出，否则文字会浮在淡出的地图上面 */
+#labels { position: fixed; inset: 0; display: block; pointer-events: none; transition: opacity .9s ease; }
+#labels.lab-intro { opacity: 0; }
 button { font-family: inherit; font-size: inherit; color: inherit; }
 input, select { font-family: inherit; font-size: 13px; color: var(--text); background: var(--surface-solid); }
 .ico { display: inline-flex; width: 18px; height: 18px; flex: none; }

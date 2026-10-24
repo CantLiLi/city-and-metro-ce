@@ -285,11 +285,13 @@
   wakeLoop();
   // 先显示开始界面，再在下一帧之后生成背景城市，地图淡入（打开不卡顿）
   canvas.classList.add('map-intro');
-  CM.onLoadPageDone = function () { canvas.classList.add('map-in'); };
+  if (R.lcv) R.lcv.classList.add('lab-intro');
+  const mapIn = function () { canvas.classList.add('map-in'); if (R.lcv) R.lcv.classList.remove('lab-intro'); };
+  CM.onLoadPageDone = mapIn;
   CM.Save.init().then(function () { ui.showStart(); }, function () { ui.showStart(); });
   setTimeout(function () {
     if (!preview) { try { preview = makePreview(); } catch (e) { console.error(e); } }
     if (preview && !CM.game) R.setGame(preview);
-    if (!CM.LoadPage.isOpen()) requestAnimationFrame(function () { canvas.classList.add('map-in'); });
+    if (!CM.LoadPage.isOpen()) requestAnimationFrame(mapIn);
   }, 80);
 })(window.CM);
