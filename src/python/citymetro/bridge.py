@@ -309,9 +309,10 @@ class ShellApi:
         # 清单（槽位指向哪个文件）：不存在时 index=None，前端按空清单处理。
         # 顺手带上「哪份最新」的结论：两份信息来自同一次磁盘扫描，前端不必再问一次
         res = self._store.read_index()
-        if res.get('ok'):
-            latest = self._store.latest(False)
-            res['latest'] = latest.get('slot') if latest.get('ok') else None
+        latest = self._store.latest(False)
+        res['latest'] = latest.get('slot') if latest.get('ok') else None
+        if not res.get('ok'):
+            res.setdefault('error', latest.get('error') or '清单内容已损坏（不是合法的存档清单）')
         log.debug('save_index_get -> ok=%s slots=%s latest=%s', res.get('ok'),
                   len((res.get('index') or {}).get('slots') or {}),
                   ((res.get('latest') or {}).get('key')))

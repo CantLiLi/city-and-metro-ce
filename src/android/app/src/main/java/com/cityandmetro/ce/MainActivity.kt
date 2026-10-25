@@ -221,7 +221,9 @@ class MainActivity : AppCompatActivity(), ShellApi.Host {
                 "log_client" -> api.log_client(arg(0)?.toString())
                 "save_index_get" -> api.save_index_get()
                 "save_index_set" -> api.save_index_set(arg(0))
+                "save_rebuild" -> api.save_rebuild()
                 "save_index_rebuild" -> api.save_index_rebuild()
+                "save_latest" -> api.save_latest(arg(0) != null)
                 "save_slot_write" -> api.save_slot_write(arg(0)?.toString(), arg(1)?.toString())
                 "save_slot_read" -> api.save_slot_read(arg(0)?.toString())
                 "save_slot_verify" -> api.save_slot_verify(arg(0)?.toString(), arg(1)?.toString())
@@ -229,7 +231,7 @@ class MainActivity : AppCompatActivity(), ShellApi.Host {
                 "save_dir" -> api.save_dir()
                 "cache_read" -> api.cache_read(arg(0))
                 "cache_write" -> api.cache_write(arg(0))
-                "export_to_file" -> api.export_to_file(arg(0)?.toString())
+                "export_to_file" -> api.export_to_file(arg(0)?.toString(), arg(1)?.toString())
                 "open_import_file" -> api.open_import_file()
                 "open_doc" -> api.open_doc(arg(0)?.toString())
                 "open_external" -> api.open_external(arg(0)?.toString())
@@ -348,7 +350,9 @@ object ShellApiMethods {
         "log_client",
         "save_index_get",
         "save_index_set",
+        "save_rebuild",
         "save_index_rebuild",
+        "save_latest",
         "save_slot_write",
         "save_slot_read",
         "save_slot_verify",

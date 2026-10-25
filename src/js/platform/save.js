@@ -332,14 +332,17 @@
   Save.sync = function () {
     return loadIndex().then(function (n) { idx = n; bad = ''; return idx; }, function (e) { bad = fail(e); throw e; });
   };
-  // 外壳按存档目录里的文件重新登记清单（只登记，不删任何存档）
+  // 外壳按存档目录里的文件重新登记清单（只登记，不删任何存档）。
+  // 重建出来的若是一份空清单，说明目录里没有任何存档文件，直接当空清单用，不算失败
   Save.reload = function () {
     if (!desk()) return Save.sync();
     return deskCall('save_rebuild', []).then(function (r) {
       if (!r || !r.ok) throw new Error((r && r.error) || '重建存档清单失败');
-      const n = norm(r.index);
+      const n = norm(r.index) || (r.count === 0 ? EMPTY() : null);
       if (!n) throw new Error('重建后的清单格式不对');
       idx = n; bad = '';
+      if (!r.count) newest = null;
+      else if (newest && !idx.slots[newest.slotId]) newest = null;
       return idx;
     });
   };
@@ -351,11 +354,16 @@
     try { const k = KN.index + '.t'; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return false; }
   };
 
-  // 主页面要显示的「继续游戏」信息：桌面版以壳扫描存档目录的结论为准，网页版从清单里挑
+  // 主页面要显示的「继续游戏」信息：外壳扫过一次存档目录给出结论，之后每写一份存档就地更新；
+  // 内存里没有结论时才去问一次外壳，避免主页面空着
   Save.resume = function () {
-    if (desk()) return newest;
-    return Save.latest();
+    if (!desk()) return Save.latest();
+    if (newest && idx.slots[newest.slotId]) return newest;
+    const own = Save.latest();
+    if (own) return own;
+    return newest;
   };
+  Save.refreshLatest = refreshLatest;
   Save.list = function (mapId) {
     const byGame = Object.create(null);
     for (const s of slots()) {
@@ -426,6 +434,8 @@
     const gone = (old && old.key && old.key !== meta.key ? [old.key] : [])
       .concat(evict.filter(function (s) { return s.slotId !== slotId; }).map(function (s) { return s.key; }));
     await Promise.all(gone.map(function (k) { return store().del(k); }));
+    // 刚写好的这份就是最新：主页面「继续游戏」用的就是它，不必再问一次外壳
+    if (o.kind !== 'backup' && (!newest || meta.savedAt >= (newest.savedAt || 0))) { newest = meta; lastErr = ''; }
     return { ok: true, slotId: slotId, savedAt: meta.savedAt, size: meta.size, removed: gone.length };
   }
   function newSlotId(gameId, kind) {
@@ -468,6 +478,7 @@
   function finishLoad(r, meta) {
     r.payload.meta.name = meta.name || r.payload.meta.name;
     r.meta = meta;
+    if (meta && meta.slotId && !(newest && newest.slotId === meta.slotId)) newest = meta;
     return upgradeGuard(r, meta).then(function (extra) { return Object.assign(r.payload, extra); });
   }
   // 旧交通模型的存档（v1.8 及更早）在升级前先另存一份原档；备份失败时仍可载入但不自动保存（见 main.js）
@@ -484,9 +495,13 @@
     }, function (e) { return { __backupFailed: fail(e) }; });
   }
 
-  Save.remove = function (slotId) { return dropSlot(slotId); };
+  Save.remove = function (slotId) {
+    if (newest && newest.slotId === slotId) newest = null;
+    return dropSlot(slotId);
+  };
   Save.removeGame = function (gameId) {
     const keys = slots().filter(function (s) { return s.gameId === gameId; }).map(function (s) { return s.key; });
+    if (newest && newest.gameId === gameId) newest = null;
     if (!keys.length) return Promise.resolve();
     return update(function () {
       for (const k in idx.slots) if (idx.slots[k].gameId === gameId) delete idx.slots[k];

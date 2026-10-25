@@ -234,13 +234,15 @@ class ShellApi(
     // ---------------- 存档 ----------------
 
     fun save_index_get(): JSONObject {
+        val latest = runCatching { latestSlot() }.getOrNull()
+        val latestJson: Any = latest?.second ?: JSONObject.NULL
         val file = store.indexFile
-        if (!file.isFile) return JSONObject().put("ok", true).put("index", JSONObject.NULL)
+        if (!file.isFile) return JSONObject().put("ok", true).put("index", JSONObject.NULL).put("latest", latestJson)
         val raw = store.readText(file) ?: return error("清单内容已损坏（不是合法的存档清单）")
         val data = runCatching { JSONObject(raw) }.getOrNull()
             ?: return error("清单内容已损坏（不是合法的存档清单）")
         val norm = normalizeIndex(data) ?: return error("清单内容已损坏（不是合法的存档清单）")
-        return JSONObject().put("ok", true).put("index", norm)
+        return JSONObject().put("ok", true).put("index", norm).put("latest", latestJson)
     }
 
     fun save_index_set(index: Any?): JSONObject {
@@ -258,6 +260,17 @@ class ShellApi(
     fun save_index_rebuild(): JSONObject = rebuildIndex(this)
 
     fun save_latest(with_text: Boolean): JSONObject {
+        val found = latestSlot() ?: return JSONObject().put("ok", true)
+            .put("slot", JSONObject.NULL).put("text", JSONObject.NULL)
+        if (!with_text) return JSONObject().put("ok", true).put("slot", found.second).put("text", JSONObject.NULL)
+        return try {
+            JSONObject().put("ok", true).put("slot", found.second).put("text", found.first.readText(Charsets.UTF_8))
+        } catch (e: Exception) {
+            error("读取存档文件失败：" + (e.message ?: ""))
+        }
+    }
+
+    private fun latestSlot(): Pair<File, JSONObject>? {
         var best: Pair<File, JSONObject>? = null
         for (file in slotFiles()) {
             val entry = slotEntry(file) ?: continue
@@ -270,13 +283,7 @@ class ShellApi(
             }
             if (newer) best = file to entry
         }
-        val found = best ?: return JSONObject().put("ok", true).put("slot", JSONObject.NULL).put("text", JSONObject.NULL)
-        if (!with_text) return JSONObject().put("ok", true).put("slot", found.second).put("text", JSONObject.NULL)
-        return try {
-            JSONObject().put("ok", true).put("slot", found.second).put("text", found.first.readText(Charsets.UTF_8))
-        } catch (e: Exception) {
-            error("读取存档文件失败：" + (e.message ?: ""))
-        }
+        return best
     }
 
     fun save_slot_write(key: String?, text: String?): JSONObject {
@@ -286,7 +293,9 @@ class ShellApi(
         if (runCatching { JSONObject(text) }.isFailure) return error("存档内容不是合法的 JSON")
         return try {
             store.writeAtomic(file, text)
-            JSONObject().put("ok", true)
+            val back = file.length()
+            if (back <= 0) error("写入存档失败：文件为空")
+            else JSONObject().put("ok", true).put("size", back)
         } catch (e: Exception) {
             error(e.message ?: "写入存档失败")
         }

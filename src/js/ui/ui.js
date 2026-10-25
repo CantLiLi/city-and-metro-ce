@@ -286,7 +286,7 @@
     const keys = ['econ', 'sat', 'share', 'pop', 'cong', 'money'];
     for (const k of keys) this.pills[k].el.classList.remove('squeezed');
     m.style.maxWidth = '';
-    if (!m.clientWidth) return;
+    if (!m.clientWidth || !this.top.offsetHeight || m.offsetTop > this.top.offsetHeight) return;
     const zw = window.innerWidth / (CM.Settings.get('uiScale') || 1);
     const bar = this.citybar, act = this.actionsGroup;
     let room = zw;

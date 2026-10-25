@@ -71,7 +71,7 @@
 .msel-sheet .msel-thumb { width: 84px; height: 58px; }
 .msel-sheet .msel-it b { font-size: 14.5px; }
 .msel-sheet .msel-note { display: none; }
-.card.msel-card { display: flex; flex-direction: column; height: min(640px, calc(100vh - 48px)); width: min(430px, calc(100vw - 32px)); padding: 18px 16px 14px; overflow: hidden; outline: none; }
+.card.msel-card { display: flex; flex-direction: column; height: auto; max-height: min(640px, calc(100vh - 48px)); width: min(430px, calc(100vw - 32px)); padding: 18px 16px 14px; overflow: hidden; outline: none; }
 /* 滑出卡片：开始界面里点「开始 / 设置 / 退出」时，卡片从右侧滑进来，主菜单留在左边不动。
    两列网格：左列是主菜单，右列放卡片；列宽瞬间就位、不做过渡，
    只有卡片自己做位移+淡入（两重动画叠加会看起来像「先闪一下再动」） */
@@ -113,12 +113,13 @@
   #screen.start.sheet-open .start-corner { opacity: 0; pointer-events: none; }
   /* 窄屏只有一列：列表铺满屏幕 */
   .start-stage { width: calc(100vw - 32px); margin: 0 auto; }
-  .card.msel-card { height: calc(100vh - 40px); width: calc(100vw - 32px); }
+  .card.msel-card { height: auto; max-height: calc(100vh - 40px); width: calc(100vw - 32px); }
   /* 窄屏：列表贴在屏幕右侧竖着排，详情改在游戏内的「地图信息」里看 */
   #screen.start.sheet-open:has(.msel-sheet) { place-items: center stretch; padding-right: 12px; }
   .start-sheet:has(.msel-sheet) { position: relative; inset: auto; display: block; justify-self: end; align-self: stretch; }
-  .start-sheet:has(.msel-sheet) > .card { --sheet-from: 120px; transform: translateX(0); height: calc(100vh - 24px); max-height: calc(100vh - 24px); width: auto; }
+  .start-sheet:has(.msel-sheet) > .card { --sheet-from: 120px; transform: translateX(0); height: auto; max-height: calc(100vh - 24px); width: auto; }
   .start-sheet.sheet-leave:has(.msel-sheet) > .card { transform: translateX(120px); }
+  .msel-sheet { height: auto; max-height: 100%; }
   .msel-sheet .msel-left { height: 100%; border-right: 0; border-bottom: 0; padding: 12px 10px 10px; gap: 10px; }
   .msel-sheet .msel-list { flex-direction: column; overflow-x: hidden; overflow-y: auto; flex: 1 1 auto; min-height: 0; margin: 0 -6px; padding: 2px 6px 4px; }
   .msel-sheet .msel-item { width: auto; }

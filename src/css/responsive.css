@@ -6,9 +6,20 @@
   #hudTop { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; flex-wrap: wrap; gap: 6px; align-items: center; }
   /* 窄屏指标条仍居中，但整体下移，避免和日期、操作按钮挤在同一行 */
   #hudTop > .spacer { display: none; }
-  #hudMetrics { top: calc(64px + env(safe-area-inset-top)); }
+  #hudMetrics { top: calc(62px + env(safe-area-inset-top)); left: 8px; right: 8px; transform: none; flex-wrap: wrap; overflow: visible; }
+  #hudMetrics.hidden { transform: translateY(-14px); }
+  #hudMetrics.lt1260 .pill.squeezed, #hudMetrics.lt820 .pill.squeezed { display: flex; }
+  #hudMetrics .pill { height: 34px; padding: 2px 7px 2px 3px; gap: 5px; }
+  #hudMetrics .pill .badge { width: 24px; height: 24px; }
+  #hudMetrics .pill .v { font-size: 12.5px; }
+  #hudMetrics .pill .k { display: none; }
+  #hudMetrics .dayring { width: 26px; height: 26px; }
   .citybar { flex: 0 1 auto; min-width: 0; padding: 4px; gap: 4px; }
-  #timeBar { left: 8px; right: 8px; bottom: calc(84px + env(safe-area-inset-bottom)); flex-wrap: wrap; justify-content: center; }
+  #timeBar { left: auto; right: calc(8px + env(safe-area-inset-right)); bottom: calc(78px + env(safe-area-inset-bottom)); flex-wrap: nowrap; justify-content: flex-end; gap: 4px; padding: 4px; }
+  #timeBar .jumps { display: flex; }
+  #timeBar .sbtn, #timeBar .jbtn { height: 28px; min-width: 28px; padding: 0 6px; font-size: 11.5px; }
+  #timeBar .sbtn .ico { width: 14px; height: 14px; }
+  #timeBar .speed, #timeBar .jumps { padding: 2px; gap: 1px; border-radius: 10px; }
   .brand { width: 36px; height: 36px; border-radius: 11px; }
   .brand img { width: 28px; height: 28px; }
   .pill { height: 38px; padding: 3px 8px 3px 4px; gap: 6px; }
@@ -40,8 +51,8 @@
   #feed { top: calc(150px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
   #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
   .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
-  #coach { top: calc(150px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; gap: 6px; padding: 10px 12px 9px; border-radius: 14px; }
-  #coach.mini { width: calc(100vw - 68px); }
+  #coach { top: calc(140px + env(safe-area-inset-top)); left: 8px; right: auto; width: min(340px, calc(100vw - 76px)); gap: 5px; padding: 9px 11px 8px; border-radius: 14px; }
+  #coach.mini { width: min(240px, calc(100vw - 76px)); }
   #coach .co-step { font-size: 11.5px; }
   #coach .co-title { font-size: 14px; line-height: 1.35; }
   #coach .co-body { font-size: 12.5px; line-height: 1.5; }
