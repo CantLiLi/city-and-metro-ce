@@ -96,7 +96,7 @@
 
   // 单个起点的方式选择与统计：对起点 i 的每条需求记录，先算去程（i → j）再算返程（j → i）。
   // 汽车广义成本、最优接驳车站对（同一迭代内缓存胜出的组合）、Logit 地铁选择、新增购物 / 休闲出行（有上限），
-  // 并按顺序累加全网统计（S、分目的 pT / pM）、小区与设施的吸引统计、期望线与汽车需求。
+  // 并按顺序累加全网统计（totStat 的 14 项、分目的 pT / pM）、小区与设施的吸引统计、期望线与汽车需求。
   // 需要的数组一次性读入局部变量；运算与累加顺序固定，结果与逐次调用完全相同
   function odOrigin(K, i) {
     const Z = K.Z, NZ = K.NZ, N = K.N, B = K.B;
@@ -106,7 +106,7 @@
     const cpk = K.cpk, park = K.park, vot = K.vot, carAccess = K.carAccess, walkW = K.walkW, occ = K.occ, theta = K.theta, fareFlat = K.fareFlat;
     const acc = K.acc, accOk = K.accOk, zCov = acc ? acc.zCov : null, zl = acc ? acc.zl : null, choices = K.choices;
     const gtS = K.gtS, tmS = K.tmS, kmS = K.kmS, DS = K.DS, perMin = K.perMin, capSh = K.capSh, capLz = K.capLz;
-    const carDem = K.carDem, hasCar = K.hasCar, S = K.S, pT = K.pT, pM = K.pM;
+    const carDem = K.carDem, hasCar = K.hasCar, totStat = K.totStat, pT = K.pT, pM = K.pM;
     const zTrips = K.zTrips, zMetro = K.zMetro, zAccess = K.zAccess, zJ = K.zJ, blocks = K.blocks, desTot = K.desTot, desMetro = K.desMetro;
     const zDest = K.zDest, zDestM = K.zDestM, fIn = K.fIn, fInM = K.fInM, fOut = K.fOut, fOutM = K.fOutM, fP = K.fP;
     for (let k = odStart[i]; k < odStart[i + 1]; k++) {
@@ -176,15 +176,15 @@
         if (metro > 0) DS[bs * N + bt] += metro;
         const car = F - metro;
         if (car > 0) { carDem[ho * Z + hd] += car / occ; hasCar[ho] = 1; }
-        S[0] += F; S[1] += metro; S[2] += car;
+        totStat[0] += F; totStat[1] += metro; totStat[2] += car;
         const tCar = ct + carAccess * 0.5;
-        S[3] += car * tCar + metro * mTime;
-        S[4] += car * tCar; S[5] += metro * mTime;
-        S[6] += metro * fare; S[7] += metro * mKm; S[8] += car * ck; S[9] += car / occ * ck;
+        totStat[3] += car * tCar + metro * mTime;
+        totStat[4] += car * tCar; totStat[5] += metro * mTime;
+        totStat[6] += metro * fare; totStat[7] += metro * mKm; totStat[8] += car * ck; totStat[9] += car / occ * ck;
         const cw = comp[HW] / F0;
-        if (cw > 0) { S[10] += comp[HW]; S[11] += ((F0 - metroB) * tCar + metroB * mTime) * cw; }
+        if (cw > 0) { totStat[10] += comp[HW]; totStat[11] += ((F0 - metroB) * tCar + metroB * mTime) * cw; }
         for (let p = 0; p < NPK; p++) { const c = comp[p]; if (c) { pT[p] += c; pM[p] += c * q; } }
-        if (ind > 0) { pT[SH] += indSh; pT[LZ] += indLz; pM[SH] += indSh * pMc; pM[LZ] += indLz * pMc; S[12] += ind; S[13] += indM; }
+        if (ind > 0) { pT[SH] += indSh; pT[LZ] += indLz; pM[SH] += indSh * pMc; pM[LZ] += indLz * pMc; totStat[12] += ind; totStat[13] += indM; }
         zTrips[ho] += F; zMetro[ho] += metro;
         if (o < Z && d < Z) zAccess[o] += zJ[d] * Math.exp(-gtBest / 30);
         const key = blocks[ho] * B + blocks[hd];
@@ -250,6 +250,37 @@
     }
     accN[s] = 0;
     return true;
+  }
+
+  // 并行求解时主线程只留零号片的完整快照，其余片的结果按自己的数据装进 odBuffer 带回来。
+  // 记录格式：dest 里依次是 [编号, 起, 止] 三个一组，六个目的的值放在 t[q] 的同一段位置上，
+  // 主线程按同样的区间取出来写回。区间以外的数各片本来都写在自己的成员上、合并时没用。
+  // 编号顺序和下面的 ODSLOT 一致。totStat（全网 14 项统计）、pT、pM 是跨起点累加的全局量，各片带回自己的部分和。
+  // carDem 走另一条路（按行的偏移拷回），不进记录。
+  const ODSLOT = ['totStat', 'pT', 'pM', 'hasCar', 'zTrips', 'zMetro', 'zAccess', 'desTot', 'desMetro', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP', 'DS'];
+  // 记录里的编号就是 ODSLOT 的下标，主线程按它对回数组名，两边必须一一对应
+  function odDump(K, i, o) {
+    const Z = K.Z, B = K.B, F = K.fIn.length, N = K.N;
+    let at = 0;
+    const totStat = K.totStat;
+    const put = function (arr, f0, f1) {
+      const n = f1 - f0;
+      if (o.cap - o.n < n) return;
+      o.dest[o.n] = at; o.dest[o.n + 1] = f0; o.dest[o.n + 2] = f1; o.n += 3;
+      for (let q = 0; q < 6; q++) o.t[q].set(arr.subarray(f0, f1), o.n);
+      o.n += n;
+      at++;
+    };
+    put(totStat, 0, 14);
+    put(K.pT, 0, 6);
+    put(K.pM, 0, 6);
+    put(K.hasCar, 0, K.hasCar.length);
+    put(K.zTrips, i, i + 1); put(K.zMetro, i, i + 1); put(K.zAccess, i, i + 1);
+    const blo = K.blocks[i] * B, bhi = blo + B;
+    put(K.desTot, blo, bhi); put(K.desMetro, blo, bhi);
+    put(K.zDest, 0, 6 * Z); put(K.zDestM, 0, 6 * Z);
+    put(K.fIn, 0, F); put(K.fInM, 0, F); put(K.fOut, 0, F); put(K.fOutM, 0, F); put(K.fP, 0, 6 * F);
+    put(K.DS, 0, Math.min(N * N, Math.min(K.NZ, Z) * N));
   }
   // 需求表的输出缓冲区：目的地编号与六个目的的往返次数
   function odBuffer(cap) { return { cap: cap, dest: new Int32Array(cap), t: [0, 1, 2, 3, 4, 5].map(function () { return new Float32Array(cap); }) }; }
@@ -507,10 +538,10 @@
       const f = fn.list[k];
       if (f.T.hub) { hubs.push(k); continue; }
       fL[k] = L2 * f.T.L;
-      const s = Fac.share(f, y);
+      const tmp_render_share = Fac.share(f, y);
       for (let p = 1; p < 5; p++) {
         const fr = f.p[PK[p]] || 0; if (!fr) continue;
-        const a = s * fr * sumA[p];
+        const a = tmp_render_share * fr * sumA[p];
         fA[p][k] = a;
         if (f.lmK < 0) { const hz = fn.hostZ[Z + k]; A[p][hz] = Math.max(A[p][hz] * 0.3, A[p][hz] - a); }
       }
@@ -542,18 +573,15 @@
       w: [new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z)],
       wf: [null, new Float64Array(F), new Float64Array(F), new Float64Array(F), new Float64Array(F)],
       scores: new Float64Array(Z), s: new Float64Array(5), kk: new Float64Array(5), cand: new Int32Array(Z), candF: new Int32Array(Math.max(1, F)),
-      out: ob, n: 0, tot: new Float64Array(NPK), per: per };
+      out: ob, n: 0, tot: new Float64Array(NPK), per: per, _bufIdx: this._odFlip };
     // 各起点之间互相独立，可以分给多个 Worker 并行算；不可用或有片失败时回退到下面的串行循环
     if (par && CM.SimPar && CM.SimPar.ready()) {
-      const self = this;
-      this.parOd = null;
-      yield { parWait: CM.SimPar.demand(D).then(function (r) { self.parOd = r; }) };
-      const r = this.parOd;
-      this.parOd = null;
+      const r = yield { par: CM.SimPar.demand(D) };
       if (r) {
-        this._odBufs[this._odFlip] = r.buf;
+        this._odBufs[D._bufIdx] = r.buf;
         this.od = { start: r.start, dest: r.dest, t: r.t, tot: r.tot, F: F, NZ: NZ, key: fn.key };
         this.version++;
+        this.dropOdSpare();
         return;
       }
     }
@@ -567,6 +595,25 @@
     const n = D.n, o = D.out;
     this.od = { start: start, dest: o.dest.subarray(0, n), t: o.t.map(function (a) { return a.subarray(0, n); }), tot: D.tot, F: F, NZ: NZ, key: fn.key };
     this.version++;
+    this.dropOdSpare();
+  };
+  // 需求表换掉之后，另一套缓冲就没有引用了：立刻丢掉，别让它跟着下一轮一起常驻。
+  // 下一轮会按需重新分配，容量够用时直接把旧的那套接回来。
+  Model.prototype.dropOdSpare = function () {
+    const bufs = this._odBufs;
+    if (!bufs) return;
+    const cur = this.od && this.od.dest ? this.od.dest.buffer : null;
+    for (let i = 0; i < 2; i++) {
+      const b = bufs[i];
+      if (b && b.dest.buffer !== cur) bufs[i] = null;
+    }
+  };
+  // 跳月/跳年结束时调用：把这一轮临时撑出来的东西放掉。
+  // 步行的最短路树按坐标缓存，跳完之后车站位置可能整片变过，留着只会占内存；下次接入会按需重建。
+  Model.prototype.releaseJumpMemory = function () {
+    this._walkTrees = new Map();
+    this.dropOdSpare();
+    this.liveBuf = {};
   };
   // 分步版本（月度处理中使用，避免单帧长时间停顿）。进行期间暂停实时求解与预测（见 step），
   // 使其不会读到新旧混合的小区/需求/路网状态；计算结果与一次性执行相同。
@@ -668,7 +715,9 @@
       const ci = c0 % city.W, cj = (c0 / city.W) | 0;
       heap.clear(); touched.length = 0;
       const treeKey = st.x + ':' + st.y;
-      const cachedTree = treeCache.get(treeKey);
+      // 命中时把这条移到 Map 末尾（最近使用）；淘汰从表头开始，丢的是最久没用的那棵
+      let cachedTree = treeCache.get(treeKey);
+      if (cachedTree !== undefined) { treeCache.delete(treeKey); treeCache.set(treeKey, cachedTree); }
       if (cachedTree) {
         trees[k] = cachedTree.tree; accessible[k] = 1;
         for (let q = 0; q < cachedTree.tree.verts.length; q++) { const v = cachedTree.tree.verts[q]; touched.push(v); D_[v] = cachedTree.exact[q]; }
@@ -698,7 +747,7 @@
         trees[k] = { verts: tv, dist: td, pred: tp };
         const exact = new Float64Array(tv.length);
         for (let q = 0; q < tv.length; q++) exact[q] = D_[tv[q]];
-        if (treeCache.size >= 512) treeCache.clear();
+        if (treeCache.size >= 512) treeCache.delete(treeCache.keys().next().value);
         treeCache.set(treeKey, { tree: trees[k], exact: exact });
       }
       // 只有接入运营线路的车站提供服务：未通车站不计覆盖、不参与接驳与站外换乘
@@ -968,14 +1017,14 @@
     if (choices) choices.fill(-2);
     const t = od.t;
     // 方式选择的输入与统计数组（每次迭代一次性组装，见 odOrigin）
-    const S = new Float64Array(14);
+    const totStat = new Float64Array(14);
     const K = { Z: Z, NZ: NZ, N: N, B: this.B, odStart: od.start, odDest: od.dest, t0: t[0], t1: t[1], t2: t[2], t3: t[3], t4: t[4], t5: t[5],
       co: co, cr: cr, cO: new Float64Array(NPK), cR: new Float64Array(NPK), facW: facW, facWe: facWe, odOk: od.F === F && od.key === fn.key,
       hostZ: hostZ, nx: nx, ny: ny, skT: skT, skK: skK, kmPerCell: kmPerCell,
       cpk: prm.cpk, park: prm.park, vot: prm.vot, carAccess: prm.carAccess, walkW: prm.walkW, occ: prm.occ, theta: prm.theta, fareFlat: this.fareFor(0),
       acc: acc, accOk: !!accOk, choices: choices, gtS: store ? store.gt : null, tmS: store ? store.tm : null, kmS: store ? store.km : null, DS: store ? store.D : null,
       perMin: IND.perMin, capSh: IND.cap.sh, capLz: IND.cap.lz,
-      carDem: carDem, hasCar: hasCar, S: S, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
+      carDem: carDem, hasCar: hasCar, totStat: totStat, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
       zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP, task: dt + p };
     // 起点需求计算可以分片并行：跳月等批量推进时交给 Worker 池（见 sim-par.js），
     // 驱动方（jump 的推进循环）会 await 这个 parWait 再继续；实时循环与预测不传 par，仍是原来的分步循环。
@@ -990,8 +1039,8 @@
         if ((++cnt & 7) === 0) yield;
       }
     }
-    st.trips = S[0]; st.metro = S[1]; st.car = S[2]; st.timeSum = S[3]; st.carTime = S[4]; st.metroTime = S[5]; st.fare = S[6]; st.metroPkm = S[7]; st.carPkm = S[8]; st.vkt = S[9];
-    st.commTrips = S[10]; st.commTime = S[11]; st.ind = S[12]; st.indM = S[13];
+    st.trips = totStat[0]; st.metro = totStat[1]; st.car = totStat[2]; st.timeSum = totStat[3]; st.carTime = totStat[4]; st.metroTime = totStat[5]; st.fare = totStat[6]; st.metroPkm = totStat[7]; st.carPkm = totStat[8]; st.vkt = totStat[9];
+    st.commTrips = totStat[10]; st.commTime = totStat[11]; st.ind = totStat[12]; st.indM = totStat[13];
     for (let k = 0; k < NPK; k++) { st[TKEY[k]] = pT[k]; st[MKEY[k]] = pM[k]; }
     // ---- 地铁客流加载与自动运营 ----
     if (hasMetro) {
@@ -1322,6 +1371,33 @@
   };
 
   // ---------------- 建设前预测 ----------------
+  // 预测要跑 base/draft × wd/we 共 16 个时段上下文。这些 P 只是迭代用的临时载体，形状固定，
+  // 每次预测都重新分配会让十几份 Z²（skimT/skimK 各 2 MB）同时变成垃圾；
+  // 所以按槽位复用，每轮只把来自原上下文的输入数组按值拷进去。
+  Model.prototype.predPer = function (k, L, dt) {
+    const Z = this.Z, nA = this.road.nA;
+    let pool = this.predPool;
+    if (!pool) pool = this.predPool = [];
+    let P = pool[k];
+    if (!P || !P.arcVol || P.arcVol.length !== nA || !P.skimT || P.skimT.length !== Z * Z || !P.desTot || P.desTot.length !== this.B * this.B) {
+      P = pool[k] = {
+        arcVol: new Float32Array(nA), arcTime: Float32Array.from(this.road.arcT0),
+        skimT: new Float32Array(Z * Z), skimK: new Float32Array(Z * Z),
+        desTot: new Float32Array(this.B * this.B), desMetro: new Float32Array(this.B * this.B),
+        zTrips: new Float32Array(Z), zMetro: new Float32Array(Z), zAccess: new Float32Array(Z),
+        stats: null, iters: 0,
+      };
+    }
+    P.arcVol.set(L.arcVol); P.arcTime.set(L.arcTime); P.skimT.set(L.skimT); P.skimK.set(L.skimK);
+    P.stats = null; P.iters = Math.max(1, L.iters); P.dt = dt;
+    this.allocStatArrays(P);
+    return P;
+  };
+  // 放弃一轮预测时把槽位与专用临时缓冲一起丢掉（残留数值不再被引用）
+  Model.prototype.freePredPool = function () {
+    this.predPool = null;
+    this.predBuf = {};
+  };
   // 基于同一城市状态与票价，比较当前网络与草案网络（均从当前运行状态热启动，迭代次数相同）；工作日与周末分别计算
   Model.prototype.predict = function (draftC, affectedLineIds, done) {
     const self = this;
@@ -1329,17 +1405,13 @@
       const result = { conditions: { year: self.year, fare: Object.assign({}, self.fare) }, progress: 0 };
       self.predState = result;
       const baseNet = self.net, draftNet = self.buildMetro(draftC);
+      self.predPool = null;          // 这一轮用全新的槽位，半途被停掉的旧槽位连同残留数值一起丢掉
       yield;
-      const runFor = function* (net, dt, prog) {
+      const runFor = function* (net, dt, prog, slot) {
         const per = [];
         for (let p = 0; p < NP; p++) {
           const L = self.ctxs[dt].per[p];
-          const P = {
-            arcVol: Float32Array.from(L.arcVol), arcTime: Float32Array.from(L.arcTime), skimT: Float32Array.from(L.skimT), skimK: Float32Array.from(L.skimK),
-            desTot: new Float32Array(self.B * self.B), desMetro: new Float32Array(self.B * self.B), zTrips: new Float32Array(self.Z), zMetro: new Float32Array(self.Z), zAccess: new Float32Array(self.Z),
-            stats: null, iters: Math.max(1, L.iters), dt: dt,
-          };
-          self.allocStatArrays(P);
+          const P = self.predPer(slot * NP + p, L, dt);
           self.initMetroPer(P, net, p, L, self.net);
           const its = p === 3 ? 1 : 2;
           for (let it = 0; it < its; it++) {
@@ -1353,8 +1425,8 @@
         return per;
       };
       result.progress = 0;
-      const base = baseNet ? { wd: yield* runFor(baseNet, 'wd', 0), we: yield* runFor(baseNet, 'we', 0.25) } : null;
-      const draft = { wd: yield* runFor(draftNet, 'wd', 0.5), we: yield* runFor(draftNet, 'we', 0.75) };
+      const base = baseNet ? { wd: yield* runFor(baseNet, 'wd', 0, 0), we: yield* runFor(baseNet, 'we', 0.25, 1) } : null;
+      const draft = { wd: yield* runFor(draftNet, 'wd', 0.5, 2), we: yield* runFor(draftNet, 'we', 0.75, 3) };
       const empty = function () { return self.aggregate([0, 1, 2, 3].map(function () { return null; }), null); };
       const B = base ? { wd: self.aggregate(base.wd, baseNet), we: self.aggregate(base.we, baseNet) } : { wd: empty(), we: empty() };
       const Dr = { wd: self.aggregate(draft.wd, draftNet), we: self.aggregate(draft.we, draftNet) };
@@ -1437,12 +1509,15 @@
         }
       }
       result.progress = 1;
+      // 这些 P 只在本次预测里有意义，算完就丢掉，不然 16 份 Z² 会一直挂到下次预测
+      self.predPool = null;
+      self.predBuf = {};
       return result;
     })();
     this.predJob = { gen: gen, done: done };
     return gen;
   };
-  Model.prototype.cancelPredict = function () { this.predJob = null; };
+  Model.prototype.cancelPredict = function () { this.predJob = null; this.freePredPool(); };
   // 多核并行：把需求生成与出行分配的源码交给 sim-par.js，Worker 里跑的是同一份实现
-  if (CM.SimPar) CM.SimPar.setKernel(odOrigin.toString(), demandOrigin.toString(), odBuffer.toString(), odGrow.toString());
+  if (CM.SimPar) CM.SimPar.setKernel(odOrigin.toString(), demandOrigin.toString(), odBuffer.toString(), odGrow.toString(), odDump.toString(), ODSLOT.join(','));
 })(window.CM);

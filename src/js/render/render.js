@@ -20,15 +20,22 @@
   // 阴影；agentMax 为汽车、行人、步行者数量上限的系数；edge 为列车外廓描边。
   // 渲染精度决定光栅分辨率：lod 为栅格精度系数（越小模型画得越粗但越快），dprCap 为像素比上限，
   // maxTier 是自动降档的上限，hot/calm 为降档与恢复的耗时阈值（ms），pxMin 是内部渲染分辨率自适应的下限。
+  // 每一档比上一档低至少 30%（Ultra → High → Mid → Low → 超低 → potato），保证档位之间真的有可见、可测的差别
   const MODEL_DET = {
-    high: { coarseLvl: 16, treeN: 3, winZ: 20, doorZ: 26, paxZ: 26, paxFrac: 1, agentDetail: 1, agentMax: 1, edge: 1 },
-    mid: { coarseLvl: 24, treeN: 2, winZ: 23, doorZ: 30, paxZ: 34, paxFrac: 0.6, agentDetail: 1, agentMax: 0.8, edge: 1 },
-    low: { coarseLvl: 32, treeN: 1, winZ: 26, doorZ: 34, paxZ: 99, paxFrac: 0, agentDetail: 0, agentMax: 0.6, edge: 0 },
+    ultra: { coarseLvl: 9, treeN: 5, winZ: 15, doorZ: 19, paxZ: 19, paxFrac: 1, agentDetail: 1, agentMax: 1.3, edge: 1 },
+    high: { coarseLvl: 13, treeN: 3, winZ: 22, doorZ: 28, paxZ: 28, paxFrac: 0.7, agentDetail: 1, agentMax: 0.91, edge: 1 },
+    mid: { coarseLvl: 19, treeN: 2, winZ: 32, doorZ: 41, paxZ: 41, paxFrac: 0.49, agentDetail: 0, agentMax: 0.64, edge: 1 },
+    low: { coarseLvl: 28, treeN: 1, winZ: 46, doorZ: 59, paxZ: 99, paxFrac: 0.34, agentDetail: 0, agentMax: 0.45, edge: 0 },
+    min: { coarseLvl: 41, treeN: 1, winZ: 67, doorZ: 86, paxZ: 99, paxFrac: 0.24, agentDetail: 0, agentMax: 0.31, edge: 0 },
+    potato: { coarseLvl: 99, treeN: 0, winZ: 99, doorZ: 99, paxZ: 99, paxFrac: 0.17, agentDetail: 0, agentMax: 0.22, edge: 0 },
   };
   const MODEL_RES = {
-    high: { lod: 1, dprCap: 1.5, maxTier: 0, hot: 20, calm: 14, pxMin: 0.6 },
-    mid: { lod: 0.82, dprCap: 1.25, maxTier: 1, hot: 16, calm: 11, pxMin: 0.5 },
-    low: { lod: 0.62, dprCap: 1, maxTier: 2, hot: 13, calm: 9, pxMin: 0.4 },
+    ultra: { lod: 1.62, dprCap: 2, maxTier: 0, hot: 26.9, calm: 19.5, pxMin: 1 },
+    high: { lod: 1.13, dprCap: 1.4, maxTier: 0, hot: 18.8, calm: 13.6, pxMin: 0.7 },
+    mid: { lod: 0.79, dprCap: 0.98, maxTier: 1, hot: 13.2, calm: 9.5, pxMin: 0.49 },
+    low: { lod: 0.55, dprCap: 0.69, maxTier: 2, hot: 9.2, calm: 6.7, pxMin: 0.34 },
+    min: { lod: 0.39, dprCap: 0.48, maxTier: 2, hot: 6.4, calm: 4.7, pxMin: 0.24 },
+    potato: { lod: 0.27, dprCap: 0.34, maxTier: 2, hot: 4.5, calm: 3.3, pxMin: 0.17 },
   };
   // 建筑密度（设置 → 性能）：每格保留多少普通建筑的比例；带 landmark 标签的建筑（地标、超高层）始终保留
   const BLD_KEEP = { min: 0.2, low: 0.35, mid: 0.5, high: 0.7, max: 0.85, full: 1 };

@@ -335,6 +335,10 @@
         this.jumping = null;
         this.speed = 0;
         this.recordHistoryIfNeeded();
+        // 一趟跳月/跳年刚把需求表、Worker 输出和预测缓冲全换了一轮，趁现在把能重建的都放掉：
+        // 步行的最短路树缓存、旧需求缓冲、迭代用的临时数组；不然后面长时间停留在高水位上
+        this.model.releaseJumpMemory();
+        if (CM.Idle && CM.Idle.force) CM.Idle.force();
         const res = { from: j.from, to: [this.clock.y, this.clock.m, this.clock.d], before: j.snap, after: this.snapshotMetrics(), failed: this.econ.failed };
         this.emit('jumpDone', res);
         return;

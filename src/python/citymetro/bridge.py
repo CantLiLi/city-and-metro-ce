@@ -15,7 +15,7 @@ import webbrowser
 
 import webview
 
-from citymetro import paths, perf, prefs, storage
+from citymetro import paths, perf, prefs, saves, storage
 from citymetro.about import APP_NAME, VERSION
 
 log = logging.getLogger('citymetro')
@@ -60,6 +60,7 @@ class ShellApi:
         self._lock = threading.Lock()
         self.close_requested = threading.Event()
         self.close_requested._serializable = False
+        self._store = saves.SaveStore()
 
     def bind(self, window):
         self.window = window
@@ -231,6 +232,32 @@ class ShellApi:
         except Exception as exc:
             log.debug('写缓存失败: %s', exc)
             return {'ok': False, 'error': str(exc)}
+
+    def save_index_get(self):
+        # 存档索引（进度与存档的清单）：不存在时 index=None，前端按空索引处理
+        return self._store.get_index()
+
+    def save_index_set(self, index):
+        return self._store.set_index(index)
+
+    def save_index_rebuild(self):
+        # 清单丢了或和 slots 里的文件对不上时，按文件重建一份（进度名称会退化成进度 id）
+        return self._store.rebuild_index()
+
+    def save_slot_write(self, key, text):
+        return self._store.write_slot(key, text)
+
+    def save_slot_read(self, key):
+        return self._store.read_slot(key)
+
+    def save_slot_verify(self, key, text):
+        return self._store.verify_slot(key, text)
+
+    def save_slot_delete(self, key):
+        return self._store.delete_slot(key)
+
+    def save_dir(self):
+        return self._store.info()
 
     def quit_app(self):
         # 只登记意图：关窗与存档等待都在 main.py 的退出线程里做，避免在 JS 调用线程里销毁窗口

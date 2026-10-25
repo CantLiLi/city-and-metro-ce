@@ -33,6 +33,13 @@
     });
   };
 
+  // 存档：正文与索引都由 Python 写进数据目录（见 js/platform/save.js）
+  const SAVE_METHODS = { save_index_get: 1, save_index_set: 1, save_index_rebuild: 1, save_slot_write: 1, save_slot_read: 1, save_slot_verify: 1, save_slot_delete: 1, save_dir: 1 };
+  info.saveCall = function (name, args) {
+    if (!isDesktop() || !SAVE_METHODS[name]) return Promise.reject(new Error('桌面接口不可用'));
+    return call(name, args || []);
+  };
+  info.saveDir = function () { return isDesktop() ? call('save_dir') : Promise.resolve(null); };
   info.openDataDir = function () { return isDesktop() ? call('open_data_dir') : Promise.reject(new Error('仅桌面版可用')); };
   // 显卡模式：外壳在下次启动时按这个值给内核加参数（关闭 GPU 加速时走软件渲染）
   info.setGpu = function (on) {

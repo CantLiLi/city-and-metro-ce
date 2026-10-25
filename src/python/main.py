@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -37,6 +38,7 @@ WAIT_SAVED_JS = (
     'var ui=window.CM&&window.CM.ui;if(!ui)return "clean";'
     'var g=ui.g();if(!g)return "clean";'
     'if(ui.saving||(ui._manualSaves&&ui._manualSaves.size))return "busy";'
+    'if(window.CM.Save&&window.CM.Save.flushing&&window.CM.Save.flushing())return "busy";'
     'if(g.pending||g.jumping||(g.draft&&g.draft.liveSnap))return "dirty";'
     'return ui.isSaved()?"clean":"dirty";'
     '}catch(e){return "clean";}})();'
@@ -124,6 +126,49 @@ def set_app_user_model_id():
     except (ImportError, AttributeError, OSError):
         log.debug('设置 AppUserModelID 失败', exc_info=True)
 
+
+def clear_web_cache():
+    """丢掉 WebView2 的磁盘缓存与 JS 字节码缓存：本地 file:// 资源不走 HTTP 缓存头，
+    也不按文件时间失效，缓存里留着旧 js 的字节码，表现为改了前端却不生效。
+    返回是否全部清干净：删不掉时说明还有别的 WebView2 进程占着这些文件，
+    下一次启动会再试（指纹没写进去，所以下次仍判定为「变过」）。"""
+    ok = True
+    for path in storage.web_cache_dirs():
+        if not os.path.isdir(path):
+            continue
+        try:
+            shutil.rmtree(path)
+            log.info('已清理缓存 %s', path)
+        except OSError:
+            ok = False
+            log.warning('清理缓存失败 %s（可能仍有 WebView2 进程占用）', path, exc_info=True)
+    return ok
+
+
+def refresh_cache_if_changed(src_dir):
+    """按前端资源指纹决定要不要清缓存：只在代码确实变过时清，平时启动不受影响。
+    清理没成功就不写指纹，下次启动会重试，不会把「没清成」当成「已经清过」。"""
+    try:
+        stamp = storage.src_stamp(src_dir)
+        path = storage.stamp_path()
+        try:
+            with open(path, 'r', encoding='utf-8') as fh:
+                old = fh.read().strip()
+        except OSError:
+            old = ''
+        if old == stamp:
+            return
+        # 清缓存会重建 service worker、网络缓存与前端代码的 V8 字节码，启动会慢几秒：
+        # 只在真的重建时记一条，日志里才看得出「这次是不是清过缓存」，便于把「存档读不到」和「刚清过缓存」对上时间
+        log.info('前端代码已变化，重建 WebView2 缓存（存档在 saves 目录，不受影响）')
+        if not clear_web_cache():
+            return
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(stamp)
+    except OSError:
+        log.debug('检查前端更新失败', exc_info=True)
+
+
 def activate_existing():
     """把已经在跑的窗口提到前台；找不到进程就什么都不做。"""
     if sys.platform != 'win32':
@@ -162,6 +207,11 @@ def main():
         activate_existing()
         return 0
 
+    # 必须在建窗口之前清：build_window() 一调用 create_window，WebView2 就已经开始读
+    # index.html 与那几个 js 了，之后再删缓存目录只会和它抢文件；而且此时旧字节码可能已经编译完，
+    # 清掉也不起作用。打包版同样要清，资源解包目录换了新内容时旧字节码一样会让改动不生效。
+    refresh_cache_if_changed(paths.find_src_dir())
+
     try:
         app_window, state = build_window()
     except RuntimeError as exc:
@@ -173,7 +223,7 @@ def main():
     webview.start(
         private_mode=False,
         storage_path=storage.profile_dir(),
-        debug=False,
+        debug=True,
         localization={'global.quitConfirmation': '确定要退出城市与地铁社区版吗？'},
         icon=window.window_icon(),
     )

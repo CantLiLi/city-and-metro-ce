@@ -1,6 +1,6 @@
 /* 设置与卡片：设置行、票价、收藏搜索、多选、线路示意图 */
 /* ---------- 设置 ---------- */
-.card.settings { padding: 22px 24px 18px; width: min(820px, calc(100vw - 32px)); }
+.card.settings { padding: 22px 24px 18px; width: min(980px, calc(100vw - 32px)); }
 .set-wrap { display: grid; grid-template-columns: 168px 1fr; gap: 18px; min-height: 380px; }
 .set-nav { display: flex; flex-direction: column; gap: 3px; border-right: 1px solid var(--line); padding-right: 12px; }
 .set-tab { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); font-weight: 600; cursor: pointer; text-align: left; transition: background .15s, color .15s; }
@@ -26,6 +26,8 @@
 .set-slider { display: flex; align-items: center; gap: 10px; width: 220px; flex: none; }
 .set-slider input { flex: 1; accent-color: var(--accent); }
 .set-val { width: 40px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
+.set-num { width: 62px; flex: none; text-align: center; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 9px; padding: 6px 8px; }
+.set-num:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .set-preview { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 12px 4px; }
 .keys { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
 .key-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 9px; background: var(--surface-2); font-size: 12.5px; }

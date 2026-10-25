@@ -11,11 +11,12 @@
     agents: true,         // 车辆、行人与列车动画
     gpu: true,            // 使用显卡渲染地图；关闭后走处理器（软件）渲染
     fpsLimit: 0,          // 最大帧率：0 垂直同步 | 30 | 60 | 90
-    modelDetail: 'high',  // 模型质量：high 高质量模型（精细建筑、山体树木、列车车窗与乘客、完整车流） | mid 中 | low 低质量模型
-    renderRes: 'high',    // 渲染精度：high 高分辨率 | mid 中 | low 低分辨率（降低模型光栅精度与像素比上限）
+    modelDetail: 'high',  // 模型质量：ultra 极限高质量模型 | high 高 | mid 中 | low 低 | min 超低 | potato 超超超低质量模型
+    renderRes: 'high',    // 渲染精度：ultra 极限高分辨率 | high 高 | mid 中 | low 低 | min 超低 | potato 超超超低分辨率（降低模型光栅精度与像素比上限）
     shadow: true,         // 绘制阴影：关闭后建筑、地标、桥梁、车辆都不画投影
     bldDensity: 'full',   // 建筑密度：min 极低 | low 低 | mid 中 | high 高 | max 最高 | full 超高（地标建筑始终保留）
     lodLive: false,       // 实时 LOD：开启后缩放过程中就按当前缩放重算渲染精度；关闭则等缩放停下再换档
+    simThreads: 2,        // 步进线程：时间推进开几个线程并行，1–10
     winMode: 'window',    // 窗口方式：window 普通窗口 | max 窗口化全屏（仅桌面版）
     monitor: false,       // 右下角运行监控
     monCpu: true, monRam: true, monGpu: true, monFps: true, monLow: false,   // 监控里分别显示哪几项
@@ -40,8 +41,8 @@
   // 旧版的 120 / 144 等帧率上限已经取消，落回垂直同步
   const FPS_LIMITS = [0, 30, 60, 90];
   cur.fpsLimit = FPS_LIMITS.indexOf(+cur.fpsLimit) < 0 ? 0 : +cur.fpsLimit;
-  const MODEL_DETAILS = ['high', 'mid', 'low'];
-  const MODEL_RESS = ['high', 'mid', 'low'];
+  const MODEL_DETAILS = ['ultra', 'high', 'mid', 'low', 'min', 'potato'];
+  const MODEL_RESS = ['ultra', 'high', 'mid', 'low', 'min', 'potato'];
   // 旧版只有一个「模型渲染」开关（quality / perf），拆成模型质量与渲染精度两项后按原意迁移
   if (cur.modelQuality !== undefined) {
     if (cur.modelQuality === 'perf') { cur.modelDetail = 'low'; cur.renderRes = 'low'; }
@@ -52,6 +53,7 @@
   cur.shadow = cur.shadow !== false;
   if (['min', 'low', 'mid', 'high', 'max', 'full'].indexOf(cur.bldDensity) < 0) cur.bldDensity = 'full';
   cur.lodLive = cur.lodLive === true;
+  cur.simThreads = Math.max(1, Math.min(10, (+cur.simThreads | 0) || 2));
   if (cur.winMode === 'full') cur.winMode = 'max';   // 旧版的「独占全屏」已经取消
   if (['window', 'max'].indexOf(cur.winMode) < 0) cur.winMode = 'window';
   const subs = [];
@@ -108,7 +110,8 @@
       if (CM.R && CM.R.setModelOpts && (!k || k === 'modelDetail' || k === 'renderRes')) CM.R.setModelOpts(cur.modelDetail, cur.renderRes);
       if (CM.R && CM.R.setShadows && (!k || k === 'shadow')) CM.R.setShadows(cur.shadow !== false);
       if (CM.R && CM.R.setBldDensity && (!k || k === 'bldDensity')) CM.R.setBldDensity(cur.bldDensity);
-      if (CM.R && CM.R.setLodLive && (!k || k === 'lodLive')) CM.R.setLodLive(cur.lodLive === true);
+      if (!k || k === 'lodLive') { if (CM.R && CM.R.setLodLive) CM.R.setLodLive(cur.lodLive === true); }
+      if (!k || k === 'simThreads') { if (CM.SimPar && CM.SimPar.setThreads) CM.SimPar.setThreads(cur.simThreads); }
       // 窗口方式交给桌面外壳；网页版没有这个能力。启动时（k 为空）只在不是普通窗口时才动窗口，
       // 普通窗口本来就是默认状态，再去设一次既没意义，又可能因窗口尚未就绪而白弹一个失败提示
       const wantWin = !k || k === 'winMode';

@@ -1927,6 +1927,13 @@
       oninput: function (e) { S.preview('uiScale', +e.target.value); scaleVal.textContent = Math.round(e.target.value * 100) + '%'; },
       onchange: function () { S.commit('uiScale'); snd('good'); },
     });
+    // 步进线程：推进月份时把出行分配分给几个 Worker，1–10；拖动只更新数字，松手才广播
+    const threadVal = h('span', { class: 'set-val' }, String(S.get('simThreads') || 2));
+    const threadIn = h('input', {
+      type: 'range', min: 1, max: 10, step: 1, value: S.get('simThreads') || 2, 'aria-label': '步进线程',
+      oninput: function (e) { threadVal.textContent = e.target.value; },
+      onchange: function (e) { S.set('simThreads', +e.target.value | 0 || 2); snd('good'); },
+    });
     // 三路音量：总音量（含界面音效）、列车音效、城市环境音；关闭音效时一并变灰
     const volRows = [];
     const volRow = function (key, icon, title, desc) {
@@ -1965,14 +1972,19 @@
         row('label', '地图标注', seg('labels', [['all', '全部'], ['stations', '仅车站'], ['none', '关闭']]), '地图上显示的名称：全部包含车站、线路、片区与兴趣点'),
         row('expand', '全屏方式', winCtl, '窗口：普通窗口；窗口化全屏：无边框铺满屏幕，可随时切到其它窗口'),
       ],
-      perf: [
-        row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '用显卡渲染画面；关闭后用处理器（CPU）渲染，显卡驱动异常、花屏时可以关掉，但可能引起动画不流畅、帧率变低。切换后需重启游戏生效'),
-        row('clock', '最大帧率', seg('fpsLimit', [[0, '垂直同步'], [30, '30'], [60, '60'], [90, '90']]), '垂直同步跟随显示器的刷新率；选 30、60、90 可限制画面每秒最多绘制多少帧，调低更省电，调高更流畅'),
-        row('building', '模型质量', seg('modelDetail', [['high', '高质量模型'], ['mid', '中质量模型'], ['low', '低质量模型']]), '高质量模型：建筑、地标、山体树木、列车、汽车与行人都按精细模型绘制；中质量模型：树木与车辆略减、远景建筑合并，大部分细节保留；低质量模型：远景只留高楼、树木与汽车行人更少、列车省去车窗、乘客与描边，画面更粗糙但更快'),
-        row('expand', '渲染精度', seg('renderRes', [['high', '高分辨率'], ['mid', '中分辨率'], ['low', '低分辨率']]), '高分辨率：地图与模型按屏幕的精细度绘制，边缘更清晰；中分辨率：光栅精度与像素比上限略降，清晰度与性能折中；低分辨率：光栅精度与像素比上限明显降低，画面稍糊但更省显卡'),
-        row('density', '建筑密度', seg('bldDensity', [['min', '极低'], ['low', '低'], ['mid', '中'], ['high', '高'], ['max', '最高'], ['full', '超高']]), '每一格（约 250 米）里画多少栋普通建筑，从高到低依次减少；地标建筑与带 landmark 标签的超高层任何时候都会保留，越低越流畅'),
-        row('pulse', '实时 LOD 修改', toggle('lodLive'), '关闭：缩放停下后才重新计算渲染精度，缩放过程更顺滑；开启：缩放过程中就实时按当前缩放重算精度，画面细节跟得更紧，但缩放时补块更多、可能掉帧'),
-        row('layers', '绘制阴影', toggle('shadow'), '关闭后建筑、地标、高架桥与车辆都不再画投影，画面更干净也更快'),
+      video: [
+        row('clock', '最大帧率', seg('fpsLimit', [[0, '垂直同步'], [30, '30'], [60, '60'], [90, '90']]), '游戏内允许的最大画面帧率'),
+        row('building', '模型质量', seg('modelDetail', [['ultra', '超高质量'], ['high', '高质量'], ['mid', '中质量'], ['low', '低质量'], ['min', '超低质量'], ['potato', '土豆']]), '渲染的3D模型的质量'),
+        row('expand', '渲染精度', seg('renderRes', [['ultra', '超高精度'], ['high', '高精度'], ['mid', '中精度'], ['low', '低精度'], ['min', '超低精度'], ['potato', '土豆']]), '3D模型贴图和地图的精细程度'),
+        row('density', '建筑密度', seg('bldDensity', [['min', '极低'], ['low', '低'], ['mid', '中'], ['high', '高'], ['max', '最高'], ['full', '超高']]), '建筑数量密集程度(landmark标签的建筑不剔除)'),
+      ],
+      compute: [
+        row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '使用GPU加速画面计算，无法使用GPU游玩时关闭此选项，可能会引起画面卡顿的问题'),
+        row('pulse', '实时 LOD 修改', toggle('lodLive'), '视角变化时实时计算渲染质量和精度'),
+        row('layers', '绘制阴影', toggle('shadow'), '是否渲染建筑车辆人物阴影'),
+        row('train', '步进线程', h('div', { class: 'set-slider' }, threadIn, threadVal), '推进月份时用来并行计算出行方式的线程数；只在「+1月 / +1年」等推进里起作用，实时模拟不起作用，线程越多每轮要传的数据也越多，一般取 4–6'),
+      ],
+      info: [
         row('radar', '显示监控信息', toggle('monitor', function () { monForm.classList.toggle('off', !S.get('monitor')); }), '在右下角显示本软件的运行占用，下面的勾选决定显示哪几项'),
         monForm,
         row('expand', '独立窗口', toggle('monFloating'), '把监控信息放进可以自由拖动的浮动小窗，不再固定在右下角；拖动标题栏移动，点 × 收回'),
@@ -1981,7 +1993,7 @@
         row('save', '自动保存', toggle('autosave'), '暂停、每月结算与每次建设后自动保存'),
       ],
     };
-    const CATS = [['sound', 'sound', '声音设置', '音效开关，总音量、列车与环境音量'], ['display', 'expand', '显示设置', '车辆与行人、界面大小、地图标注与全屏方式'], ['perf', 'bolt', '性能设置', '显卡加速、模型质量与渲染精度、实时 LOD、建筑密度、最大帧率与运行监控'], ['game', 'map', '游戏设置', '自动保存']];
+    const CATS = [['sound', 'sound', '声音设置', '音效开关，总音量、列车与环境音量'], ['display', 'expand', '显示设置', '车辆与行人、界面大小、地图标注与全屏方式'], ['video', 'play', '画面设置', '最大帧率、模型质量与渲染精度、建筑密度'], ['compute', 'bolt', '计算设置', '显卡加速、实时 LOD、绘制阴影、步进线程'], ['info', 'radar', '信息设置', '运行监控开关与显示哪几项、独立窗口'], ['game', 'map', '游戏设置', '自动保存']];
     const title = h('h2', null, '设置');
     const backBtn = h('button', { class: 'iconbtn hide', 'data-tip': '返回分类', onclick: function () { home(); } }, ic('back'));
     const body = h('div', { class: 'set-body single' });
@@ -2104,6 +2116,7 @@
               const current = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
               if (!current) throw new Error('该进度已不存在，请取消后刷新列表。');
               if (current.name !== name) CM.Save.rename(gm.gameId, name);
+              await Promise.resolve(CM.Save.flush()).catch(function () {});
               const saved = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
               if (!saved || saved.name !== name) throw new Error('未能写入名称，请重试。');
               const active = self.g();
@@ -2143,8 +2156,26 @@
     const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档' + (mapId && CM.MAPS[mapId] ? ' · ' + CM.MAPS[mapId].name : '')),
       h('div', { class: 'note' }, '每个进度相互独立；自动存档在两个位置轮换写入，手动存档最多 ' + CFG.saves.maxManual + ' 个。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
       list, fileIn,
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: function () { self.pickImportFile(keepScreen); } }, ic('import'), '导入存档文件'), h('button', { class: 'btn primary', onclick: back }, inGame ? '关闭' : '返回')));
+      h('div', { class: 'modal-actions' },
+        h('button', { class: 'btn', onclick: function () { self.pickImportFile(true); } }, ic('import'), '导入存档文件'),
+        CM.desktop.isDesktop() ? h('button', { class: 'btn', onclick: function () { self.confirmRebuildIndex(inGame, mapId); } }, ic('folder'), '修复存档清单') : null,
+        h('button', { class: 'btn primary', onclick: back }, inGame ? '关闭' : '返回')));
     if (inGame) this.openOverlay(card, { esc: back }); else this.openScreen(card, back);
+  };
+  // 清单与存档目录里的文件对不上时，按文件重建一份（只登记，不删除任何存档）
+  UI.prototype.confirmRebuildIndex = function (inGame, mapId) {
+    const self = this;
+    self.confirm('修复存档清单？', '会按存档目录里现有的文件重新登记所有存档。清单丢失、或清单里少了存档时可以这样找回；不会删除任何存档文件，但找回来的存档名称会变成进度编号。', '修复', function () {
+      self.showLoading('正在按存档目录里的文件重建清单…');
+      CM.Save.rebuildIndex().then(function (idx) {
+        const n = idx && idx.slots ? Object.keys(idx.slots).length : 0;
+        self.toast(n ? '已重新登记 ' + n + ' 个存档' : '存档目录里没有找到存档文件', n ? 'info' : 'bad');
+        self.showSaveManager(inGame, mapId);
+      }, function (e) {
+        self.showSaveManager(inGame, mapId);
+        self.toast((e && e.message) || '修复失败', 'bad');
+      });
+    }, false, 'folder');
   };
   UI.prototype.pickImportFile = function (keepScreen) {
     const self = this;
@@ -2180,8 +2211,34 @@
     // 不弹旧式「正在读取存档」白卡：读盘完成后紧接着就是加载页，两张卡会连续闪
     CM.Save.load(slotId).then(function (data) { CM.loadGame(data); }, function (e) {
       snd('error');
+      if (/存档文件丢失|清单没有读取成功|读取存档文件失败|记录可能是旧的/.test(String(e && e.message))) { self.showSaveDiagnosis(e.message); return; }
       self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '无法载入'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档与当前进度未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
     });
+  };
+  // 读档失败时给用户一条可执行的出路：打开存档目录、重读清单、按存档文件重建清单
+  UI.prototype.showSaveDiagnosis = function (reason) {
+    const self = this;
+    const btn = function (label, fn, primary) { return h('button', { class: 'btn' + (primary ? ' primary' : ''), onclick: fn }, label); };
+    const rebuild = function () {
+      self.showLoading('正在按存档目录里的文件重建清单…');
+      CM.Save.rebuildIndex().then(function (idx) {
+        self.closeScreen();
+        const n = idx && idx.slots ? Object.keys(idx.slots).length : 0;
+        self.toast(n ? '已找回 ' + n + ' 个存档' : '存档目录里没有找到存档文件', n ? 'info' : 'bad');
+        self.showStart();
+      }, function (e) {
+        self.closeScreen();
+        self.toast((e && e.message) || '重建失败', 'bad');
+      });
+    };
+    self.openScreen(h('div', { class: 'card' }, self.cardHead('folder', 'b-red', '存档读不出来'),
+      self.callout('bad', 'error', reason || '存档清单与存档目录里的文件对不上。'),
+      h('div', { class: 'note' }, '桌面版的存档全部写在存档目录里（index.json 是清单，slots 下每个文件是一份存档），与浏览器缓存无关。重建清单只会按已有文件重新登记，不会删除任何存档。'),
+      h('div', { class: 'modal-actions' },
+        btn('重建存档清单', rebuild, true),
+        btn('打开存档目录', function () { CM.desktop.openDataDir(); }),
+        btn('刷新清单', function () { CM.Save.sync().then(function () { self.toast('存档清单已重新读取', 'info'); self.showStart(); }); }),
+        btn('返回', function () { if (self.g()) self.closeScreen(); else self.showStart(); }))));
   };
   // 返回主菜单：先确认最新状态已成功保存；保存失败时保留当前游戏
   // after：返回后要打开的界面（默认主菜单）
@@ -2197,7 +2254,6 @@
     if (!g) { go(); return; }
     const leave = function () {
       if (g.speed > 0) self.setSpeed(0);   // 先暂停，保证保存的就是离开时的状态
-      if (self.isSaved()) { go(); return; }
       self.showLoading('正在保存当前进度…');
       self.doAutosave(true).then(function (r) {
         if (self.g() !== g) return;
@@ -2265,12 +2321,15 @@
     if (g.pending || g.jumping) { this.toast('正在进行月度结算，请稍候再保存', 'info'); return Promise.resolve({ ok: false, error: '正在结算' }); }
     const self = this, snap = this.saveSnap(g);
     const pending = CM.Save.save(g, 'manual', { slotId: slotId, label: label || ('手动存档 ' + g.clock.y + '年' + g.clock.m + '月') }).then(function (r) {
-      if (self.g() !== g) return r;
-      if (r.ok) { self.markSaved(g, r.savedAt, snap); self.toast('已保存到本地（' + (r.size / 1024).toFixed(0) + ' KB）', 'good'); }
-      else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('保存失败：' + r.error, 'bad'); }
-      self.rerenderPage();
-      if (self.screenRefresh) self.screenRefresh();
-      return r;
+      // 存档索引是异步落盘的：等它写完再刷新列表，否则桌面版读到的还是旧清单
+      return Promise.resolve(CM.Save.flush()).then(function () {}, function () {}).then(function () {
+        if (self.g() !== g) return r;
+        if (r.ok) { self.markSaved(g, r.savedAt, snap); self.toast('已保存到本地（' + (r.size / 1024).toFixed(0) + ' KB）', 'good'); }
+        else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('保存失败：' + r.error, 'bad'); }
+        self.rerenderPage();
+        if (self.screenRefresh) self.screenRefresh();
+        return r;
+      });
     }, function (e) {
       if (self.g() === g) { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: String(e && e.message || e) }); self.toast('保存失败：' + String(e && e.message || e), 'bad'); }
       return { ok: false, error: String(e && e.message || e) };

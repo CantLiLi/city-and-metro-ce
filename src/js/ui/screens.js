@@ -35,6 +35,10 @@
     const self = this;
     opts = opts || {};
     const latest = CM.Save.latest();
+    // 清单里的槽位在磁盘上找不到时，「继续游戏」会点到一个已经丢了的存档；
+    // 桌面版启动时已经按存档目录补齐过，仍拿不到就退回最近一个能用的槽
+    const usable = function (sl) { return sl && CM.Save.hasSlot(sl.slotId); };
+    const cont = usable(latest) ? latest : CM.Save.latestUsable();
     const storageOk = CM.Save.available();
     const btn = function (icon, label, onclick, opts) {
       opts = opts || {};
@@ -46,7 +50,7 @@
     const wrap = h('div', { class: 'start-wrap' },
       title, edition, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
-        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),        btn('clock', '继续游戏', function () { if (latest) self.loadSlot(latest.slotId); }, { disabled: !latest, sub: latest ? ((CM.MAPS[latest.map || 'gz'] || {}).name || '') + ' · ' + latest.date[0] + '年' + latest.date[1] + '月' : '暂无存档' }),
+        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),        btn('clock', '继续游戏', function () { if (cont) self.loadSlot(cont.slotId); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : '暂无存档' }),
         btn('gear', '设置', function () { self.showSettings(); }),
         btn('power', '退出', function () { self.quitGame(); })),
       CM.MAPS.tutorial ? h('button', { class: 'start-learn', onclick: function () { self.showMapSelect('tutorial'); } }, ic('help', 16), h('span', null, '第一次玩？先试试'), h('b', null, '新手教程 · 青湾'), ic('chev', 14)) : null,

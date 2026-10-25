@@ -1514,6 +1514,7 @@
       return b;
     }, true));
     el.appendChild(this.sec('sv-note', '关于本地保存', '', function () {
+      if (CM.Save.isDesktop()) return h('div', { class: 'note' }, '游戏无需账号，进度由桌面版保存在本机的存档目录里（不是浏览器缓存）：每月自动保存，并在建设完成后保存；自动存档在两个位置轮换写入。删除浏览器数据不会影响存档，重装游戏前请备份存档目录。更换电脑时，请导出存档文件，再在新设备上导入。全部存档约 ' + (CM.Save.usage() / 1024 / 1024).toFixed(1) + ' MB。');
       return h('div', { class: 'note' }, '游戏无需账号，进度保存在当前浏览器的本地存储（' + CM.Save.backend() + '）中：每月自动保存，并在建设完成后保存；自动存档在两个位置轮换写入。本地保存不会跨设备同步；清除浏览器数据会删除存档。更换电脑或浏览器时，请导出存档文件，再在新设备上导入。全部存档约 ' + (CM.Save.usage() / 1024 / 1024).toFixed(1) + ' MB。');
     }));
     return { title: '存档', el: el };
@@ -1526,7 +1527,7 @@
       h('button', { class: 'btn sm', onclick: function () { self.loadSlot(sl.slotId); } }, '载入'),
       h('button', { class: 'btn sm ghost', title: '导出为文件', onclick: function () { CM.Save.exportSlot(sl.slotId).catch(function (e) { self.toast('导出失败：' + e.message, 'bad'); }); } }, '导出'),
       inGame && sl.kind === 'manual' && sl.gameId === (self.g() && self.g().id) ? h('button', { class: 'btn sm ghost', title: '用当前进度覆盖此存档', onclick: function () { self.confirm('覆盖存档？', '将用当前进度覆盖「' + sl.label + '」（' + d[0] + '年' + d[1] + '月）。', '覆盖', function () { self.manualSave(sl.slotId, sl.label); }); } }, '覆盖') : null,
-      h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除存档？', '「' + sl.label + '」将被永久删除，无法恢复。', '删除', function () { CM.Save.remove(sl.slotId); self.toast('已删除存档', 'info'); self.rerenderPage(); if (self.screenRefresh) self.screenRefresh(); }, true); } }, '删除'));
+      h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除存档？', '「' + sl.label + '」将被永久删除，无法恢复。', '删除', function () { CM.Save.remove(sl.slotId); Promise.resolve(CM.Save.flush()).then(function () { self.toast('已删除存档', 'info'); self.rerenderPage(); if (self.screenRefresh) self.screenRefresh(); }); }, true); } }, '删除'));
   };
 
   // ======================== 页面：帮助 ========================

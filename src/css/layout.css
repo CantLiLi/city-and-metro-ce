@@ -40,7 +40,7 @@
 #draftbar .iconbtn[disabled] { opacity: .35; cursor: default; }
 
 /* 设置：单页 */
-.card.settings { width: min(520px, calc(100vw - 32px)); padding: 20px 22px 16px; }
+.card.settings { width: min(980px, calc(100vw - 32px)); padding: 20px 22px 16px; }
 .set-body.single { max-height: none; overflow: visible; padding: 0; margin-top: 4px; }
 .set-body.single .set-row { padding: 10px 2px; }
 /* 缩放滑动条的容器要和音量条一样宽，否则拖动时行宽随百分比文字跳动 */
@@ -96,6 +96,7 @@
 /* 卡片默认停在起点（右侧偏外、透明），插入时不会先在终点露一帧；
    .sheet-in 把它滑到原位。只动位移和不透明度，不缩放 */
 .start-sheet > .card { --sheet-from: 160px; width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); animation: none; transform: translateX(var(--sheet-from)); opacity: 0; }
+.start-sheet > .card.settings { width: min(980px, calc(100vw - 32px)); }
 .start-sheet > .card.solo { width: min(420px, calc(100vw - 32px)); }
 .start-sheet.sheet-in > .card { transition: transform .46s var(--ease), opacity .32s var(--ease); transform: translateX(0); opacity: 1; }
 .start-sheet.sheet-settled > .card { transform: translateX(0); opacity: 1; }

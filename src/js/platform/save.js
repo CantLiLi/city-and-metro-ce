@@ -1,14 +1,24 @@
 'use strict';
-// 本地存档（无账号）：存档数据保存在浏览器 IndexedDB（容量大），不可用时退回 localStorage；
-// 存档索引保存在 localStorage。支持多进度、自动/手动存档、文件导入导出（格式、版本、校验和检查）。
+// 本地存档（无账号）：桌面版由 Python 外壳把存档写进数据目录（saves/index.json + saves/slots/），
+// 网页版保存在浏览器 IndexedDB（容量大，不可用时退回 localStorage）、索引在 localStorage。
+// 支持多进度、自动/手动存档、文件导入导出（格式、版本、校验和检查）。
 (function (CM) {
   const U = CM.U, CFG = CM.CFG;
   const P = CFG.saves.prefix;
   const IDX = P + 'index';
 
   // ---------------- 存储后端 ----------------
+  // 桌面版：全部走桥，页面里不留存档数据；网页版：IndexedDB + localStorage
+  const desk = function () { return !!(CM.desktop && CM.desktop.isDesktop()); };
+  function deskCall(name, args) {
+    if (!CM.desktop || typeof CM.desktop.saveCall !== 'function') return Promise.reject(new Error('桌面接口不可用'));
+    return CM.desktop.saveCall(name, args);
+  }
+  function deskIndexError(r) { throw new Error((r && r.error) || '读取存档索引失败'); }
+
   let db = null, dbFailed = false;
   function openDB() {
+    if (desk()) return Promise.resolve(null);
     if (db || dbFailed) return Promise.resolve(db);
     return new Promise(function (resolve) {
       let req;
@@ -36,23 +46,48 @@
   }
   const store = {
     put: function (key, str) {
+      // 桌面版写完由读回校验（verify）确认，这里不做二次读
+      if (desk()) return deskCall('save_slot_write', [key, str]).then(function (r) {
+        if (!r || !r.ok) throw new Error((r && r.error) || '写入存档文件失败');
+        return 'py';
+      });
       return idbOp('readwrite', function (st) { return st.put(str, key); }).then(function () { return 'idb'; })
         .catch(function (e) { if (db) throw e; localStorage.setItem(key, str); return 'ls'; });
     },
     get: function (key, where) {
+      if (desk()) return deskCall('save_slot_read', [key]).then(function (r) {
+        if (!r || !r.ok) throw new Error((r && r.error) || '读取存档文件失败');
+        return r.text != null ? r.text : null;
+      });
       if (where === 'ls') return Promise.resolve(localStorage.getItem(key));
       return idbOp('readonly', function (st) { return st.get(key); })
         .then(function (v) { return v != null ? v : localStorage.getItem(key); }, function () { return localStorage.getItem(key); });
     },
     del: function (key, where) {
+      if (desk()) return deskCall('save_slot_delete', [key]).then(function () { /* 删不掉下次写入会覆盖 */ }, function () {});
       try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
       if (where === 'ls') return Promise.resolve();
       return idbOp('readwrite', function (st) { return st.delete(key); }).catch(function () { /* ignore */ });
     },
   };
+  // 写入后校验：桌面版比对磁盘上的文本，网页版比对刚读回的文本
+  function verify(key, str, where) {
+    if (desk()) return deskCall('save_slot_verify', [key, str]).then(function (r) { return !!(r && r.ok); }, function () { return false; });
+    return store.get(key, where).then(function (back) { return back === str; }, function () { return false; });
+  }
 
   function emptyIndex() { return { games: {}, slots: {} }; }
+  // 索引：桌面版同步缓存一份（界面到处同步读列表），写入时串行刷到磁盘
+  let pyIndex = null;
+  // 清单没读出来时不能假装「没有存档」：那样下一次写入会把磁盘上完整的 index.json 覆盖成空的
+  let idxFailed = '';
+  function indexUnavailable() {
+    const e = new Error('存档清单没有读取成功（' + idxFailed + '），为避免覆盖磁盘上的存档清单，本次不写入');
+    e.noWrite = true;
+    return e;
+  }
   function readIndex() {
+    if (desk()) return pyIndex || emptyIndex();
     try {
       const s = localStorage.getItem(IDX);
       if (!s) return emptyIndex();
@@ -60,7 +95,33 @@
       return o && o.games && o.slots ? o : emptyIndex();
     } catch (e) { return emptyIndex(); }
   }
-  function writeIndex(idx) { localStorage.setItem(IDX, JSON.stringify(idx)); }
+  function normalizeIndex(o) {
+    // 没有清单就是全新安装（外壳返回 index: null），那是真的没有存档，不算读失败
+    if (!o || typeof o !== 'object') return emptyIndex();
+    if (o.games && o.slots) return o;
+    // 结构不对时按空处理，但不许写回去：磁盘上那份清单还可能有救
+    idxFailed = idxFailed || '清单结构不正确';
+    return emptyIndex();
+  }
+  let idxTail = Promise.resolve(), idxPending = 0;
+  // 返回 Promise：桌面版索引落盘后 resolve，网页版立即 resolve
+  function writeIndex(idx) {
+    if (!desk()) { localStorage.setItem(IDX, JSON.stringify(idx)); return Promise.resolve(); }
+    if (idxFailed) return Promise.reject(indexUnavailable());
+    const copy = JSON.parse(JSON.stringify(idx));
+    pyIndex = copy;
+    idxPending++;
+    const next = idxTail.catch(function () {}).then(function () {
+      return deskCall('save_index_set', [copy]).then(function (r) {
+        if (!r || !r.ok) throw new Error((r && r.error) || '写入存档索引失败');
+      });
+    });
+    // 写盘失败时内存副本已经变了，磁盘却没变：留个标记，让界面去重读清单，
+    // 不能一边显示新列表一边让磁盘留着旧的
+    next.catch(function () { pyIndex = null; idxFailed = idxFailed || '写入存档清单失败'; });
+    idxTail = next.then(function () { idxPending--; }, function () { idxPending--; });
+    return next;
+  }
   function errMsg(e) {
     if (!e) return '未知错误';
     if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) return '浏览器本地存储空间不足（可删除旧存档或导出备份后清理）';
@@ -78,9 +139,57 @@
   function uniqueWriteId() { return U.uid('') + '-' + (++writeSeq).toString(36); }
   // 同一时钟刻度内也按写入顺序排序，确保自动轮换及「最近存档」正确。
   function savedAt(requested) { lastSavedAt = Math.max(Date.now(), requested || 0, lastSavedAt + 1); return lastSavedAt; }
-  Save.init = function () { return openDB(); };
-  Save.backend = function () { return db ? 'IndexedDB' : 'localStorage'; };
+  Save.init = function () {
+    if (!desk()) return openDB();
+    idxFailed = '';
+    // 清单读不出来（损坏、丢失、桥还没注入）不算致命：外壳会先用上一版备份顶上，
+    // 再不行就按 saves/slots 里的文件重建，只有这一切都失败才真的没有存档可列
+    return deskCall('save_index_get', []).then(function (r) {
+      if (!r || !r.ok) {
+        idxFailed = (r && r.error) || '读取失败';
+        pyIndex = emptyIndex();
+        const e = new Error(idxFailed);
+        e.soft = true;
+        throw e;
+      }
+      pyIndex = normalizeIndex(r.index);
+      // 清单能读但内容不全（文件比清单多）时照样自动补：只靠用户去点「修复」是不够的，
+      // 重启后点「继续游戏」就该直接回到上次的存档
+      return fillFromDir(r).then(function () { return readIndex(); });
+    }, function (e) {
+      // 桥还没注入或 IPC 失败：绝不能当成「没有存档」，否则下一次写入会覆盖磁盘清单
+      idxFailed = errMsg(e);
+      pyIndex = emptyIndex();
+      const err = new Error('存档清单没有读到：' + idxFailed);
+      err.soft = true;
+      throw err;
+    });
+  };
+  // 清单漏登记了存档文件（文件数比清单条数多）时自动按文件补齐，返回补齐后的清单。
+  // 只在「重建结果比原来多」时才换掉内存里的清单，避免把用户手动删掉的记录又加回来
+  function fillFromDir(r) {
+    const before = Object.keys(readIndex().slots).length;
+    const files = r && typeof r.files === 'number' ? r.files : 0;
+    if (!(files > before)) return Promise.resolve(readIndex());
+    // 重建期间用户可能已经存过一次档，写新清单会把那份刚存的记录挤掉：
+    // 等排队中的写入都落盘，重建完再用磁盘上最新的清单覆盖内存
+    return (Save.flush ? Save.flush() : Promise.resolve()).then(function () {
+      return deskCall('save_index_rebuild', []);
+    }).then(function (res) {
+      const rebuilt = res && res.ok ? (Number(res.count) || 0) : 0;
+      if (rebuilt <= before) return readIndex();
+      idxFailed = '';
+      return Save.sync().then(function (idx) {
+        if (typeof console !== 'undefined') console.info('存档清单漏了存档，已按目录补齐：' + before + ' → ' + rebuilt);
+        return idx;
+      }, function () { return readIndex(); });
+    }, function () { return readIndex(); });
+  }
+  // 存档位置说明：桌面版是数据目录，网页版是浏览器本地存储
+  Save.backend = function () { return desk() ? '本地存档目录' : (db ? 'IndexedDB' : 'localStorage'); };
+  Save.isDesktop = desk;
   Save.available = function () {
+    if (desk()) return true;
     try { const k = P + '__t'; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return false; }
   };
   Save.envelope = function (game) {
@@ -113,15 +222,17 @@
         date: snap.date, savedAt: env.savedAt, size: str.length, mode: snap.mode, name: snap.name, map: snap.map, stations: snap.stations, funds: snap.funds };
       // 写入串行化，使额度、轮换和覆盖均依据上一次已提交的索引；失败不覆盖旧数据。
       return store.put(key, str).then(function (where) {
-        return store.get(key, where).then(function (back) {
-          if (back !== str) { store.del(key, where); return { ok: false, error: '写入后校验失败' }; }
+        return verify(key, str, where).then(function (ok) {
+          if (!ok) { store.del(key, where); return { ok: false, error: '写入后校验失败' }; }
           const idx2 = readIndex();
           idx2.games[snap.id] = { gameId: snap.id, name: snap.name, mode: snap.mode, map: snap.map, createdAt: snap.createdAt, updatedAt: env.savedAt };
           meta.store = where; idx2.slots[slotId] = meta;
-          try { writeIndex(idx2); }
-          catch (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; }
-          if (old && old.key && old.key !== key) store.del(old.key, old.store);
-          return { ok: true, slotId: slotId, savedAt: env.savedAt, size: str.length };
+          // 索引里放的是旧对象的副本：桌面版提交后索引会被替换成新副本
+          const next = desk() ? JSON.parse(JSON.stringify(idx2)) : idx2;
+          return writeIndex(next).then(function () {
+            if (old && old.key && old.key !== key) store.del(old.key, old.store);
+            return { ok: true, slotId: slotId, savedAt: env.savedAt, size: str.length };
+          }, function (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; });
         });
       });
     }).catch(function (e) { return { ok: false, error: errMsg(e) }; });
@@ -139,6 +250,17 @@
   Save.latest = function (mapId) {
     const g = Save.list(mapId)[0];
     return g ? g.slots[0] : null;
+  };
+  // 槽位是否真的在清单里：界面据此判断「继续游戏」能不能点
+  Save.hasSlot = function (slotId) { return !!(slotId && readIndex().slots[slotId]); };
+  // 最近一个真实存在、且存档文件也在的槽位：清单里的记录指向不存在的文件时跳过
+  Save.latestUsable = function (mapId) {
+    for (const g of Save.list(mapId)) {
+      for (const sl of g.slots) {
+        if (readIndex().slots[sl.slotId]) return sl;
+      }
+    }
+    return null;
   };
   Save.parseEnvelope = function (text) {
     let env;
@@ -171,10 +293,18 @@
   };
   function readSlotText(slotId) {
     const meta = readIndex().slots[slotId];
-    if (!meta) return Promise.reject(new Error('存档不存在'));
+    const missing = function (m) {
+      if (!m && idxFailed) return Promise.reject(new Error('存档清单没有读取成功（' + idxFailed + '），现在只能看到空清单。请在存档管理里点「刷新存档清单」后重试，你的存档文件应该还在'));
+      if (m && idxFailed) return Promise.reject(new Error('存档清单没有读取成功（' + idxFailed + '），' + (m.label || m.slotId) + ' 的记录可能是旧的。请在存档管理里点「修复存档清单」后重试'));
+      return Promise.reject(new Error(m ? '存档文件丢失：' + (m.label || m.slotId) + ' 记录指向的 ' + m.key + ' 不在存档目录里。可在「存档管理」导出其它存档，或用导入恢复备份' : '存档不存在'));
+    };
+    if (!meta) return missing(null);
     return store.get(meta.key, meta.store).then(function (text) {
-      if (!text) throw new Error('存档数据丢失（浏览器数据可能已被清理）');
+      if (!text) return missing(meta);
       return { meta: meta, text: text };
+    }, function (e) {
+      // 读盘本身失败（权限、占用、桥出错）不能报成「存档不存在」
+      return Promise.reject(new Error('读取存档文件失败：' + ((e && e.message) || e) + '（' + meta.key + '）'));
     });
   }
   // 进度重命名保存在索引中，不重写每个历史快照；读取与导出时将最新名称应用到副本。
@@ -209,13 +339,13 @@
       if (idx.slots[slotId]) return { ok: true, slotId: slotId, existed: true };
       const key = P + 'slot.' + slotId + '.' + uniqueWriteId(), text = r.text;
       return store.put(key, text).then(function (where) {
-        return store.get(key, where).then(function (back) {
-          if (back !== text) { store.del(key, where); return { ok: false, error: '备份写入后校验失败' }; }
+        return verify(key, text, where).then(function (ok) {
+          if (!ok) { store.del(key, where); return { ok: false, error: '备份写入后校验失败' }; }
           const idx2 = readIndex();
           idx2.slots[slotId] = Object.assign({}, meta, { slotId: slotId, key: key, store: where, kind: 'backup', label: '升级前备份（v' + from + '）', savedAt: meta.savedAt, size: text.length });
           if (!idx2.games[meta.gameId]) idx2.games[meta.gameId] = { gameId: meta.gameId, name: meta.name, mode: meta.mode, map: meta.map, createdAt: payload.meta.createdAt, updatedAt: meta.savedAt };
-          try { writeIndex(idx2); } catch (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; }
-          return { ok: true, slotId: slotId };
+          return writeIndex(desk() ? JSON.parse(JSON.stringify(idx2)) : idx2).then(function () { return { ok: true, slotId: slotId }; },
+            function (e) { store.del(key, where); return { ok: false, error: errMsg(e) }; });
         });
       });
     }).catch(function (e) { return { ok: false, error: errMsg(e) }; });
@@ -226,21 +356,21 @@
     if (!meta) return;
     delete idx.slots[slotId];
     if (!Object.values(idx.slots).some(function (s) { return s.gameId === meta.gameId; })) delete idx.games[meta.gameId];
-    writeIndex(idx);
+    writeIndex(desk() ? JSON.parse(JSON.stringify(idx)) : idx);
     store.del(meta.key, meta.store);
   };
   Save.removeGame = function (gameId) {
     const idx = readIndex();
     for (const s of Object.values(idx.slots)) if (s.gameId === gameId) { delete idx.slots[s.slotId]; store.del(s.key, s.store); }
     delete idx.games[gameId];
-    writeIndex(idx);
+    writeIndex(desk() ? JSON.parse(JSON.stringify(idx)) : idx);
   };
   Save.rename = function (gameId, name) {
     const idx = readIndex();
     if (!idx.games[gameId]) return;
     idx.games[gameId].name = name;
     for (const s of Object.values(idx.slots)) if (s.gameId === gameId) s.name = name;
-    writeIndex(idx);
+    writeIndex(desk() ? JSON.parse(JSON.stringify(idx)) : idx);
   };
   Save.fileName = function (meta) {
     const d = meta.date || [0, 0];
@@ -270,8 +400,9 @@
     return queueWrite(function () {
       const idx = readIndex();
       const p = r.payload;
-      let gameId = p.meta.gameId, name = p.meta.name;
+      let gameId = p.meta.gameId || U.uid('g'), name = p.meta.name || '导入的进度';
       if (idx.games[gameId]) { gameId = U.uid('g'); name = name + '（导入）'; p.meta.gameId = gameId; p.meta.name = name; }
+      else p.meta.gameId = gameId;
       const body = JSON.stringify(p);
       const env = { format: CFG.SAVE_FORMAT, version: CFG.SAVE_VERSION, gameVersion: CFG.GAME_VERSION, savedAt: savedAt(), checksum: U.fnv(body), body: body };
       const str = JSON.stringify(env);
@@ -281,8 +412,9 @@
         const idx2 = readIndex();
         idx2.games[gameId] = { gameId: gameId, name: name, mode: p.meta.mode, map: p.meta.map || 'gz', createdAt: p.meta.createdAt, updatedAt: env.savedAt };
         idx2.slots[slotId] = { slotId: slotId, key: key, store: where, gameId: gameId, kind: 'manual', label: '导入的存档', date: [p.clock.y, p.clock.m, p.clock.d], savedAt: env.savedAt, size: str.length, mode: p.meta.mode, map: p.meta.map || 'gz', name: name, stations: Object.keys(p.net.stations || {}).length, funds: p.econ.mode === 'free' ? null : p.econ.funds };
-        try { writeIndex(idx2); } catch (e) { store.del(key, where); throw new Error(errMsg(e)); }
-        return { slotId: slotId, gameId: gameId, name: name, map: p.meta.map || 'gz' };
+        return writeIndex(desk() ? JSON.parse(JSON.stringify(idx2)) : idx2).then(function () {
+          return { slotId: slotId, gameId: gameId, name: name, map: p.meta.map || 'gz' };
+        }, function (e) { store.del(key, where); throw new Error(errMsg(e)); });
       }, function (e) { throw new Error(errMsg(e)); });
     });
   };
@@ -290,6 +422,31 @@
     let n = 0;
     for (const s of Object.values(readIndex().slots)) n += s.size || 0;
     return n;
+  };
+  // 等已排队的写入与索引落盘；删除、改名之后界面刷新列表前要等它
+  Save.flush = function () { return idxTail.catch(function () {}); };
+  Save.flushing = function () { return !!idxPending; };
+  // 重新从磁盘读索引（外部改过存档目录、或怀疑内存副本与磁盘不一致时）
+  Save.sync = function () {
+    if (!desk()) return Promise.resolve(readIndex());
+    return deskCall('save_index_get', []).then(function (r) {
+      if (!r || !r.ok) deskIndexError(r);
+      idxFailed = r && r.ok ? '' : ((r && r.error) || '读取失败');
+      pyIndex = normalizeIndex(r.index);
+      return pyIndex;
+    }, function (e) { idxFailed = errMsg(e); return readIndex(); });
+  };
+  // 清单是否真正读到了：界面据此决定能不能写盘
+  Save.indexOk = function () { return !desk() || (!!pyIndex && !idxFailed); };
+  Save.dir = function () { return desk() ? deskCall('save_dir', []).then(function (r) { return (r && r.dir) || ''; }, function () { return ''; }) : Promise.resolve(''); };
+  // 按存档目录里的文件重建清单：清单丢了或对不上时，用它是能把进度找回来的
+  Save.rebuildIndex = function () {
+    if (!desk()) return Promise.reject(new Error('网页版没有存档目录，无法重建清单'));
+    return deskCall('save_index_rebuild', []).then(function (r) {
+      if (!r || !r.ok) throw new Error((r && r.error) || '重建存档清单失败');
+      idxFailed = '';
+      return Save.sync();
+    });
   };
   CM.Save = Save;
 })(window.CM);
