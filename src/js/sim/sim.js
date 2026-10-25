@@ -10,6 +10,9 @@
   const PK = ['hw', 'sc', 'sh', 'md', 'lz', 'hb'], NPK = 6;
   const HW = 0, SH = 2, LZ = 4, HB = 5;
   const DT = ['wd', 'we'];
+  // A 单进程时每个 P 要在主线程与 Worker 之间搬运的数组（都由 allocStatArrays / makePer 建好）
+  const PERARR = ['skimT', 'skimK', 'desTot', 'desMetro', 'zTrips', 'zMetro', 'zAccess', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP',
+    'freq', 'crowd', 'load', 'stDelay', 'stIn', 'stOut', 'stXfer', 'stBoard', 'arcVol', 'arcTime'];
   // 地铁相关的统计量：夜间时段只运营到 24 时（按 0.9 折算）
   const METRO_KEYS = new Set(['metro', 'fare', 'metroPkm', 'metroTime', 'mHW', 'mSC', 'mSH', 'mMD', 'mLZ', 'mHB', 'indM']);
   const TKEY = ['tHW', 'tSC', 'tSH', 'tMD', 'tLZ', 'tHB'], MKEY = ['mHW', 'mSC', 'mSH', 'mMD', 'mLZ', 'mHB'];
@@ -573,12 +576,12 @@
       w: [new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z)],
       wf: [null, new Float64Array(F), new Float64Array(F), new Float64Array(F), new Float64Array(F)],
       scores: new Float64Array(Z), s: new Float64Array(5), kk: new Float64Array(5), cand: new Int32Array(Z), candF: new Int32Array(Math.max(1, F)),
-      out: ob, n: 0, tot: new Float64Array(NPK), per: per };
-    // 各起点之间互相独立，可以分给多个 Worker 并行算；不可用或有片失败时回退到下面的串行循环
-    if (par && CM.SimPar && CM.SimPar.ready()) {
-      const r = yield { par: CM.SimPar.demand(D) };
+      out: ob, n: 0, tot: new Float64Array(NPK), per: per, _bufIdx: this._odFlip };
+    // 各起点之间互相独立，可以分给 Worker 池并行算；A 分支在池里算，B 分支同样交给人口那一片
+    const pm = CM.SimPar ? this.parMode() : null;
+    if (par && pm) {
+      const r = yield { par: pm === 'A' ? CM.SimPar.demandAll(D, Z) : CM.SimPar.demand(D) };
       if (r) {
-        this._odBufs[D._bufIdx] = r.buf;
         this.od = { start: r.start, dest: r.dest, t: r.t, tot: r.tot, F: F, NZ: NZ, key: fn.key };
         this.version++;
         this.dropOdSpare();
@@ -975,8 +978,7 @@
 
   // 一个时段的一次完整迭代（buf 为该求解流程独占的临时缓冲区）。P.dt 为日类型（工作日 / 周末）
   Model.prototype.iterate = function* (net, P, p, opts) {
-    opts = opts || {};
-    const buf = opts.buf || this.liveBuf;
+    opts = opts || {};    const buf = opts.buf || this.liveBuf;
     const prm = this.params();
     const Z = this.Z, od = this.od, fn = this.fn, F = fn.F, NZ = fn.NZ;
     const hostZ = fn.hostZ, nx = fn.nx, ny = fn.ny, facWe = fn.we;
@@ -993,7 +995,7 @@
     let stable = P.iters > 0;
     if (hasMetro) { store = this.allocSkimStore(net, buf); yield* this.metroSkim(net, P, p, prm, store); store.D.fill(0); }
     // ---- 方式选择 ----
-    if (!buf.carDem || buf.carDem.length !== Z * Z) buf.carDem = new Float32Array(Z * Z);
+    if (!buf.carDem || buf.carDem.length !== Z * Z) buf.carDem = new Float64Array(Z * Z);
     if (!buf.hasCar || buf.hasCar.length !== Z) buf.hasCar = new Uint8Array(Z);
     const carDem = buf.carDem, hasCar = buf.hasCar;
     carDem.fill(0);
@@ -1025,18 +1027,17 @@
       acc: acc, accOk: !!accOk, choices: choices, gtS: store ? store.gt : null, tmS: store ? store.tm : null, kmS: store ? store.km : null, DS: store ? store.D : null,
       perMin: IND.perMin, capSh: IND.cap.sh, capLz: IND.cap.lz,
       carDem: carDem, hasCar: hasCar, totStat: totStat, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
-      zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP, task: dt + p, parTok: opts.tok || null };
-    // 起点需求计算交给 Worker 池分片算（见 sim-par.js）：池里有排队任务时这轮先挂到任务下面，
-    // 回来时由驱动方调用 release 让排队任务开始处理。
-    // 单进程或池不可用时就地算，结果完全一致。
+      zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP, task: dt + p };
+    // 起点这一趟怎么算，由设置里的「计算进程」决定（见 parMode）：
+    //   B 多进程 —— 起点这一段交给池里各片并行，回来时把跨起点需要求和的那几项并进 K；地铁加载与调度也由池里另一片算好送回；
+    //   A 单进程 —— 整套分配都在一个 Worker 里跑，主线程不进这个函数，这里只在池失效时兜底；
+    //   null     —— 池不可用（还在建、已休眠、出错回退），就地串行算，结果完全一致。
     let cnt = 0;
-    // 上一轮的 stable 说明本轮读到的 skT/skK 与上一轮喂给 Worker 的完全相同，可跳过重发
-    const par = opts.par && CM.SimPar && CM.SimPar.ready() ? CM.SimPar.run(K, Z, this.od, P.stable) : null;
+    const pm = CM.SimPar ? this.parMode() : null;
+    const par = pm === 'B' && opts.par && CM.SimPar.ready() ? CM.SimPar.run(K, Z) : null;
     if (opts.tok) yield { tok: 1 };
     if (par) {
-      const head = CM.SimPar.head(K.parTok);
-      if (head) yield { par: par, parWait: head.release };
-      else yield { par: par };
+      yield { par: par };
     } else {
       for (let i = 0; i < Z; i++) {
         odOrigin(K, i);
@@ -1140,62 +1141,96 @@
   };
 
   // ---------------- 实时求解循环 ----------------
-  // 迭代里的 yield 有三种：不带值的节奏点、带 par/parWait 的等待点（这段已经交给 Worker 池算，
-  // 要等它回来才能接着往下跑）、以及任务令牌换轮（主线程这轮算完了，池里把它标成可被后面的请求跳过）。
+  // A/B 的驱动方式不同，这里用一个分支决定：
+  //   B 多进程 — 各任务同时开跑，主线程每一步各推进一格；起点那段落到池里时挂起，回来再接着算。
+  //   A 单进程 — 只有一个 Worker，各任务排队：一整个任务（起点分配 + 地铁加载 + 调度）打包送进去，回来时把
+  //              Worker 那支算好的状态装回主线程这份，再继续算后面的汇总与输出。
+  Model.prototype.parMode = function () {
+    return CM.SimPar && CM.SimPar.ready() ? (CM.SimPar.multi() ? 'B' : 'A') : null;
+  };
+
+  // 迭代里的 yield 有两种：不带值的节奏点、带 par 的等待点（这段已经交给 Worker 算，要等它回来）。
   // 这里包一层，把等待点拆成“交给池”和“等它回来”两步，好让池里另一片的迭代在同一时间推进。
   function* taskOf(gen) {
-    let pend = null;
+    let pd = null;
     for (;;) {
-      const r = pend ? gen.next(pend) : gen.next();
-      pend = null;
+      const r = pd ? gen.next(pd) : gen.next();
+      pd = null;
       if (r.done) return r.value;
       const v = r.value;
-      if (v && (v.par || v.parWait)) {
-        yield { wait: v.par || v.parWait, rel: v.parWait || null };
-        pend = yield { tick: 1 };
-        continue;
-      }
-      if (v && v.tok) { yield { tok: 1 }; continue; }
+      if (v && v.par) { yield { wait: v.par }; pd = yield { tick: 1 }; continue; }
       yield { tick: 1 };
     }
   }
   // 各任务同时开跑：每一步落到主线程时各推进一格，直到每个 gen 都结束。
   // 各任务的起点需求与迭代输入都来自同一份状态，所以并行与串行结果完全一致。
-  // 池不可用（单进程、空闲休眠）时调用方不会进来，仍走串行，结果不变。
+  // 池不可用（还在建、空闲休眠）时调用方不会进来，仍走串行，结果不变。
   Model.prototype.solveDrain = function* (tasks) {
-    const list = tasks.map(function (g) { return { gen: taskOf(g), tok: CM.SimPar.begin(), done: false, value: undefined }; });
+    const list = tasks.map(function (g) { return { gen: taskOf(g), done: false, value: undefined }; });
     for (;;) {
       let any = false;
       for (const s of list) {
         if (s.done) continue;
         any = true;
-        if (s.tok && s.tok.next === s.tok) s.tok.next = null;
         const r = s.gen.next();
-        const v = r.done ? null : r.value;
-        if (r.done) { s.done = true; s.value = r.value; continue; }
-        if (v && v.wait) { s.tok.next = s.tok; s.tok.wait = null; }
-        else if (v && v.tok) s.tok.next = s.tok;
+        if (r.done) { s.done = true; s.value = r.value; }
       }
       if (!any) break;
-      // 没有等待点的分步任务照样要按固定节奏让出主线程，别把整轮同步跑完
+      // 分步任务照样要按固定节奏让出主线程，别把整轮同步跑完
       yield { tick: 1 };
     }
     return list.map(function (s) { return s.value; });
+  };
+  Model.prototype.solveGenA = function* (cycles, dts, noDaily) {
+    this.wake();
+    dts = dts || DT;
+    const req = { cycles: cycles, dts: dts, per: [], net: null };
+    for (const dt of dts) {
+      const ctx = this.ctxs[dt];
+      for (let p = 0; p < NP; p++) {
+        const P = ctx.per[p], o = { dt: dt, p: p, arr: {} };
+        for (const k of PERARR) if (P[k]) o.arr[k] = P[k];
+        o.iters = P.iters | 0;
+        req.per.push(o);
+      }
+    }
+    const r = yield { par: CM.SimPar.solveAll(req, this) };
+    if (!r) return false;
+    let i = 0;
+    for (const dt of dts) {
+      const ctx = this.ctxs[dt];
+      for (let p = 0; p < NP; p++) {
+        const P = ctx.per[p], q = r.per ? r.per[i++] : null;
+        if (!P || !q) continue;
+        for (const k of PERARR) if (P[k] && q[k] && P[k].set) P[k].set(q[k]);
+        P.iters = q.__iters | 0;
+        P.stable = !!q.__stable;
+      }
+    }
+    if (!noDaily) this.computeDaily();
+    this.gen = null;
+    return true;
   };
   // 工作日与周末两套结果都保持收敛：先算当天的日类型，再算另一类；两套都到达精确不动点后停止
   Model.prototype.liveLoop = function* () {
     for (;;) {
       const order = this.dayType === 'we' ? ['we', 'wd'] : ['wd', 'we'];
-      const tasks = order.map(function (dt) {
-        const ctx = this.ctxs[dt];
-        return (function* () {
-          for (let p = 0; p < NP; p++) {
-            yield* this.iterate(this.net, ctx.per[p], p, { fullSkim: this.sinceChange < 1, par: true });
-            this.computeDaily();
-          }
-        }).call(this);
-      }, this);
-      yield* this.solveDrain(tasks);
+      // A 单进程：整个循环打包送进唯一那个 Worker，结果装回来后再走后面的收敛判断
+      if (this.parMode() === 'A') {
+        const okA = yield* this.solveGenA(1, order, true);
+        if (!okA) for (const dt of order) this.computeDaily();
+      } else {
+        const tasks = order.map(function (dt) {
+          const ctx = this.ctxs[dt];
+          return (function* () {
+            for (let p = 0; p < NP; p++) {
+              yield* this.iterate(this.net, ctx.per[p], p, { fullSkim: this.sinceChange < 1, par: true });
+              this.computeDaily();
+            }
+          }).call(this);
+        }, this);
+        yield* this.solveDrain(tasks);
+      }
       this.cycles++; this.sinceChange++;
       const allStable = DT.every(function (dt) { return this.ctxs[dt].per.every(function (P) { return P.stable; }); }, this);
       this.quietCycles = allStable ? (this.quietCycles || 0) + 1 : 0;
@@ -1233,7 +1268,7 @@
     for (let r = g.next(); !r.done; r = g.next()) { /* run */ }
   };
   // 一次求解：先让城市刷新算出的需求表落地，再依次解各日类型。
-  // par 为 true 时把各日类型的迭代同时交给 Worker 池（见 solveDrain），否则串行。
+  // par 为 true 时按设置里的模式分流（见 parMode），否则串行。
   Model.prototype.solveGen = function* (cycles, dts, par) {
     this.wake();
     dts = dts || DT;
@@ -1242,7 +1277,9 @@
     };
     const jobs = [];
     for (let c = 0; c < cycles; c++) for (const dt of dts) jobs.push(run.call(this, dt, c));
-    if (par && CM.SimPar && CM.SimPar.ready()) yield* this.solveDrain(jobs);
+    const pm = par ? this.parMode() : null;
+    if (pm === 'A' && (yield* this.solveGenA(cycles, dts))) return;
+    if (pm === 'B') yield* this.solveDrain(jobs);
     else for (const j of jobs) yield* j;
     this.computeDaily();
     this.gen = null;

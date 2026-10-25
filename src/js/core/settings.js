@@ -16,8 +16,8 @@
     shadow: true,         // 绘制阴影：关闭后建筑、地标、桥梁、车辆都不画投影
     bldDensity: 'full',   // 建筑密度：min 极低 | low 低 | mid 中 | high 高 | max 最高 | full 超高（地标建筑始终保留）
     lodLive: false,       // 实时 LOD：开启后缩放过程中就按当前缩放重算渲染精度；关闭则等缩放停下再换档
-    simThreads: 2,        // 步进线程：时间推进开几个线程并行，1–10
-    winMode: 'window',    // 窗口方式：window 普通窗口 | max 窗口化全屏（仅桌面版）
+    simPar: 'multi',      // 计算进程：'one' 单进程（一个 Worker 算完整套分配），'multi' 多进程（按块分工再汇总）
+    winMode: 'window',    // 窗口方式：始终普通窗口，启动时不再恢复上次的值（仅桌面版）
     monitor: false,       // 右下角运行监控
     monCpu: true, monRam: true, monGpu: true, monFps: true, monLow: false,   // 监控里分别显示哪几项
     monFloating: false,   // 监控信息放进可拖动的浮动小窗
@@ -53,9 +53,8 @@
   cur.shadow = cur.shadow !== false;
   if (['min', 'low', 'mid', 'high', 'max', 'full'].indexOf(cur.bldDensity) < 0) cur.bldDensity = 'full';
   cur.lodLive = cur.lodLive === true;
-  cur.simThreads = Math.max(1, Math.min(10, (+cur.simThreads | 0) || 2));
-  if (cur.winMode === 'full') cur.winMode = 'max';   // 旧版的「独占全屏」已经取消
-  if (['window', 'max'].indexOf(cur.winMode) < 0) cur.winMode = 'window';
+  if (cur.simPar !== 'one' && cur.simPar !== 'multi') cur.simPar = 'multi';
+  cur.winMode = 'window';   // 每次打开都是普通窗口，不沿用上次的全屏
   const subs = [];
   function save() { try { localStorage.setItem(KEY, JSON.stringify(cur)); } catch (e) { /* ignore */ } }
   // 显卡模式要内核启动参数，浏览器里只能等下次打开页面，桌面版则交给外壳写进启动偏好
@@ -111,11 +110,10 @@
       if (CM.R && CM.R.setShadows && (!k || k === 'shadow')) CM.R.setShadows(cur.shadow !== false);
       if (CM.R && CM.R.setBldDensity && (!k || k === 'bldDensity')) CM.R.setBldDensity(cur.bldDensity);
       if (!k || k === 'lodLive') { if (CM.R && CM.R.setLodLive) CM.R.setLodLive(cur.lodLive === true); }
-      if (!k || k === 'simThreads') { if (CM.SimPar && CM.SimPar.setThreads) CM.SimPar.setThreads(cur.simThreads); }
-      // 窗口方式交给桌面外壳；网页版没有这个能力。启动时（k 为空）只在不是普通窗口时才动窗口，
-      // 普通窗口本来就是默认状态，再去设一次既没意义，又可能因窗口尚未就绪而白弹一个失败提示
-      const wantWin = !k || k === 'winMode';
-      if (wantWin && CM.desktop && CM.desktop.setWindowMode && (k || cur.winMode !== 'window')) {
+      if (!k || k === 'simPar') { if (CM.SimPar && CM.SimPar.setMode) CM.SimPar.setMode(cur.simPar === 'multi'); }
+      // 窗口方式交给桌面外壳；网页版没有这个能力。只跟着设置里的改动走：启动时窗口一律是普通窗口，
+      // 不再把上次保存的全屏恢复回来，也就不会有「窗口还没就绪就去设定」的失败提示
+      if (k === 'winMode' && CM.desktop && CM.desktop.setWindowMode) {
         CM.desktop.setWindowMode(cur.winMode).then(function (ok) {
           if (!ok && CM.ui && CM.ui.toast) CM.ui.toast('切换全屏方式失败', 'warn');
         }, function () { /* 外壳不可用时保持原样 */ });

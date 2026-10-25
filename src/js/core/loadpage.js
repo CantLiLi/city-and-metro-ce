@@ -6,7 +6,8 @@
   if (!U) return;
   const h = U.h;
   const CFG = CM.CFG || { GAME_VERSION: '2.0.0' };
-  const VERSION = CFG.GAME_VERSION || '2.0.0';
+  // 延迟到渲染时再取：外壳注入的版本号比本文件的 SCENES 定义更晚到
+  const VERSION = function () { return CFG.GAME_VERSION || '2.0.0'; };
   const REPO = 'https://github.com/CantLiLi/city-and-metro-ce/issues';
 
   // 三种场景：启动、进入地图、退出地图。提示各自独立。
@@ -17,7 +18,7 @@
       tips: [
         { t: '正在准备城市数据与地铁线路，请稍候' },
         { t: '建议最大化或全屏窗口游玩' },
-        { t: '本版本基于原版 v' + VERSION + ' 修改' },
+        { t: function () { return '本版本基于原版 v' + VERSION() + ' 修改'; } },
         { t: '有问题请反馈到本项目的 GitHub 仓库，而不是官方仓库。', link: REPO },
       ],
     },
@@ -120,7 +121,7 @@
   function setTips(tipEl, list) {
     tipEl.innerHTML = '';
     tipEl.appendChild(h('div', { class: 'lp-tips' }, list.map(function (tip) {
-      const line = [h('span', { class: 'lp-tip-i' }, tip.t)];
+      const line = [h('span', { class: 'lp-tip-i' }, typeof tip.t === 'function' ? tip.t() : tip.t)];
       if (tip.link) line.push(h('a', { class: 'lp-tip-a', href: tip.link, target: '_blank', rel: 'noopener' }, 'GitHub 仓库'));
       return h('div', { class: 'lp-tip-line' }, line);
     })));

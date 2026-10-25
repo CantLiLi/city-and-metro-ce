@@ -1927,13 +1927,9 @@
       oninput: function (e) { S.preview('uiScale', +e.target.value); scaleVal.textContent = Math.round(e.target.value * 100) + '%'; },
       onchange: function () { S.commit('uiScale'); snd('good'); },
     });
-    // 步进线程：推进月份时把出行分配分给几个 Worker，1–10；拖动只更新数字，松手才广播
-    const threadVal = h('span', { class: 'set-val' }, String(S.get('simThreads') || 2));
-    const threadIn = h('input', {
-      type: 'range', min: 1, max: 10, step: 1, value: S.get('simThreads') || 2, 'aria-label': '步进线程',
-      oninput: function (e) { threadVal.textContent = e.target.value; },
-      onchange: function (e) { S.set('simThreads', +e.target.value | 0 || 2); snd('good'); },
-    });
+    // 计算进程：单进程 = 整套出行分配在一个 Worker 里跑完；多进程 = 人口、资金、地铁、土地、交通各一个 Worker，
+    // 最后汇成一份状态交回主线程。切换后下一轮求解按新分支走。
+    const parSeg = seg('simPar', [['one', '单进程'], ['multi', '多进程']]);
     // 三路音量：总音量（含界面音效）、列车音效、城市环境音；关闭音效时一并变灰
     const volRows = [];
     const volRow = function (key, icon, title, desc) {
@@ -1982,7 +1978,7 @@
         row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '使用GPU加速画面计算，无法使用GPU游玩时关闭此选项，可能会引起画面卡顿的问题'),
         row('pulse', '实时 LOD 修改', toggle('lodLive'), '视角变化时实时计算渲染质量和精度'),
         row('layers', '绘制阴影', toggle('shadow'), '是否渲染建筑车辆人物阴影'),
-        row('train', '步进线程', h('div', { class: 'set-slider' }, threadIn, threadVal), '推进月份时用来并行计算出行方式的线程数；只在「+1月 / +1年」等推进里起作用，实时模拟不起作用，线程越多每轮要传的数据也越多，一般取 4–6'),
+        row('train', '计算进程', parSeg, '单进程：整套出行分配放进一个后台线程算完再交回主界面；多进程：人口、资金、地铁、土地、交通各占一个后台线程分头算，最后汇总成一份状态。多进程在核心数多的机器上更快，单进程占用更省'),
       ],
       info: [
         row('radar', '显示监控信息', toggle('monitor', function () { monForm.classList.toggle('off', !S.get('monitor')); }), '在右下角显示本软件的运行占用，下面的勾选决定显示哪几项'),
@@ -2179,7 +2175,10 @@
   };
   UI.prototype.pickImportFile = function (keepScreen) {
     const self = this;
-    if (!CM.desktop.isDesktop()) { if (this._importInput) this._importInput.click(); return; }
+    const desk = CM.desktop.isDesktop();
+    // 临时诊断：确认点击后走的是桌面分支还是网页分支
+    if (CM.desktop.call) CM.desktop.call('log_client', ['pickImportFile desktop=' + desk]).catch(function () {});
+    if (!desk) { if (this._importInput) this._importInput.click(); return; }
     CM.desktop.importJSON().then(function (picked) {
       if (!picked) return;
       if (picked.text.length > 30 * 1024 * 1024) { self.toast('文件过大，不是有效的存档', 'bad'); return; }

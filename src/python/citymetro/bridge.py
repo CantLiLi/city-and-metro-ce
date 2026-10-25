@@ -16,7 +16,7 @@ import webbrowser
 import webview
 
 from citymetro import paths, perf, prefs, saves, storage
-from citymetro.about import APP_NAME, VERSION
+from citymetro.about import APP_NAME, UPDATE_INFO, VERSION
 
 log = logging.getLogger('citymetro')
 
@@ -69,6 +69,11 @@ class ShellApi:
     def app_info(self):
         return {'name': APP_NAME, 'version': VERSION, 'platform': 'pywebview'}
 
+    def log_client(self, msg):
+        # 临时诊断：把前端的判断结果记进 shell.log
+        log.info('CLIENT %s', msg)
+        return {'ok': True}
+
     def choose_save_file(self, mode='open'):
         okay, payload = self._choose_file(mode)
         return payload if okay else None
@@ -83,6 +88,7 @@ class ShellApi:
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
         if sys.platform == 'darwin':
+            log.info('走 macOS 原生面板 mode=%s filters=%s', mode, filters)
             return self._choose_file_macos(mode, filters, filename)
         # pywebview 的对话框会阻塞调用线程（主线程），必须与窗口生命周期错开
         try:
@@ -120,6 +126,7 @@ class ShellApi:
                 filename or '选择存档文件',
                 extensions,
             )
+            log.info('macOS 面板返回 path=%r', path)
         except Exception as exc:
             log.warning('打开文件对话框失败 %s: %s', mode, exc, exc_info=True)
             return False, '无法打开文件选择窗口：' + str(exc)
@@ -139,7 +146,9 @@ class ShellApi:
 
     def open_import_file(self):
         # 一次调用取回路径与文本：取消返回 ok=False 且没有 error，失败带 error
+        log.info('open_import_file 被调用 platform=%s', sys.platform)
         okay, payload = self._choose_file('open')
+        log.info('open_import_file 选择结果 ok=%s payload=%r', okay, payload)
         if not okay:
             return {'ok': False, 'error': payload} if payload else {'ok': False}
         result = self.read_import_file(payload)
@@ -297,7 +306,10 @@ class ShellApi:
 
 
 def bridge_script():
-    payload = json.dumps({'name': APP_NAME, 'version': VERSION}, ensure_ascii=False)
+    payload = json.dumps(
+        {'name': APP_NAME, 'version': VERSION, 'updateInfo': list(UPDATE_INFO)},
+        ensure_ascii=False,
+    )
     return (
         ';(function () {'
         '  var info = ' + payload + ';'
@@ -307,5 +319,7 @@ def bridge_script():
         '    window.CM.desktop.name = info.name;'
         '    window.CM.desktop.version = info.version;'
         '  }'
+        '  window.__CM_UPDATE_INFO__ = info.updateInfo || [];'
+        '  window.dispatchEvent(new CustomEvent("__cmDesktopReady", { detail: info }));'
         '})();'
     )

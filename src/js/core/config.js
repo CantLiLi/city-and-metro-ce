@@ -2,7 +2,7 @@
 // 全局参数。PRD 中标注"待确认"的数值在此给出可调整的默认值（DEFAULT），评审确认后只需修改本文件。
 (function (CM) {
   CM.CFG = {
-    GAME_VERSION: '2.0.0',
+    GAME_VERSION: '2.0.1',
     TRAFFIC_MODEL: 2,      // 交通模型版本：2 = v1.9 起的出行目的、重要设施与工作日/周末模型（旧存档为 1，载入时升级）
     SAVE_FORMAT: 'city-metro-save',
     SAVE_VERSION: 2,
@@ -197,4 +197,9 @@
     // 动态对象上限（代表性展示）：汽车、车站行人、街道行人、列车上下车乘客（每帧）；声音：列车声部与同时播放的环境短音
     perf: { solverBudgetMs: 5, chunkBudgetMs: 6, cacheMaxPx: 24e6, maxCars: 320, maxPeds: 180, maxWalkers: 120, maxRiders: 120, trainVoices: 3, maxOneShots: 6 },
   };
+  // 桌面版：Python 外壳注入的 about.py 版本号为准，浏览器直接打开时才用上面的 GAME_VERSION
+  window.addEventListener('__cmDesktopReady', function (e) {
+    const v = e.detail && e.detail.version;
+    if (v) CM.CFG.GAME_VERSION = String(v).replace(/^v/i, '');
+  });
 })(window.CM);

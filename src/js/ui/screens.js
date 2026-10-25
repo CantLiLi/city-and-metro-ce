@@ -369,6 +369,15 @@
     const close = function () { if (onBack) onBack(); else self.closeScreen(); };
     markNews();
     const list = h('div', { class: 'news-list' });
+    // 桌面版：当前版本的条目由 about.py 的 UPDATE_INFO 提供
+    if (window.__CM_UPDATE_INFO__ && window.__CM_UPDATE_INFO__.length) {
+      const body = h('ul', { class: 'news-b' }, window.__CM_UPDATE_INFO__.map(function (t) { return h('li', null, t); }));
+      if (self.open['news-cur'] === undefined) self.open['news-cur'] = true;
+      const sec = self.sec('news-cur', '', '', function () { return body; }, true);
+      const head = sec.querySelector('.sec-h');
+      head.replaceChildren.apply(head, [h('span', { class: 'news-v cur' }, 'v' + CFG.GAME_VERSION), h('span', { class: 'news-t' }, '本版本更新'), h('span', { class: 'tag good' }, '最新'), ic('chev', 14, 'chev')].filter(Boolean));
+      list.appendChild(sec);
+    }
     (CM.NEWS || []).forEach(function (v, k) {
       // 每个版本只列主要变化（篇幅统一）
       const body = h('ul', { class: 'news-b' }, (v.items || []).map(function (t) { return h('li', null, t); }));
