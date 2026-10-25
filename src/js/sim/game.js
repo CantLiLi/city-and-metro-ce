@@ -343,14 +343,14 @@
         this.emit('jumpDone', res);
         return;
       }
-      if (r.value && r.value.parWait) {
-        const self = this, p = r.value.parWait;
+      if (r.value && (r.value.par || r.value.parWait)) {
+        const self = this, p = r.value.par || r.value.parWait;
         j.wait = p;
-        p.then(function () { if (self.jumping === j) j.wait = null; }).catch(function () { if (self.jumping === j) j.wait = null; });
+        const rel = r.value.parWait;
+        p.then(function () { if (rel) rel(); if (self.jumping === j) j.wait = null; }).catch(function () { if (rel) rel(); if (self.jumping === j) j.wait = null; });
         this.emit('jumpProgress', j.progress);
         return;
-      }
-    }
+      }    }
     this.emit('jumpProgress', j.progress);
   };
   Game.prototype.recordHistoryIfNeeded = function () {};

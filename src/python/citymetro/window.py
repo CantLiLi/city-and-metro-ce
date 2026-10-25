@@ -8,6 +8,8 @@ import ctypes
 import logging
 import os
 import sys
+import threading
+import time
 
 log = logging.getLogger('citymetro')
 
@@ -265,6 +267,44 @@ def set_macos_on_top(on):
     level = NSFloatingWindowLevel if on else NSNormalWindowLevel
     # setLevel: 只能碰主线程，而调用点常常在别的工作线程上
     AppHelper.callAfter(lambda: set_level(window, level))
+
+
+def macos_file_panel(dialog_type, title, extensions):
+    """macOS 的文件选择面板，直接在 AppKit 主线程上开。
+
+    pywebview 的 Cocoa 后端把面板丢给 AppHelper.callAfter，再在工作线程上等信号量；
+    用户取消时它也不释放信号量，工作线程会永远挂着。这里的调用点都在 AppKit 主线程上
+    （shutdown 之后会显式切回来），runModal 才是标准做法。
+    """
+    from AppKit import NSApp, NSOpenPanel, NSSavePanel
+    from PyObjCTools import AppHelper
+
+    def _show():
+        # 不激活的话面板会开在别的应用下面，看上去就是「点了没反应」
+        if NSApp.isRunning():
+            NSApp.activateIgnoringOtherApps_(True)
+        if dialog_type == 'save':
+            panel = NSSavePanel.savePanel()
+            panel.setNameFieldStringValue_(title)
+        else:
+            panel = NSOpenPanel.openPanel()
+            panel.setCanChooseFiles_(True)
+            panel.setCanChooseDirectories_(False)
+        if extensions:
+            panel.setAllowedFileTypes_(list(extensions))
+        if panel.runModal() != 1:
+            return None
+        path = panel.filename()
+        return str(path) if path else None
+
+    if threading.current_thread() is threading.main_thread():
+        return _show()
+    box = []
+    AppHelper.callAfter(lambda: box.append(_show()))
+    # runModal 自己会泵事件循环，回调随之在主线程执行完
+    while not box:
+        time.sleep(0.05)
+    return box[0]
 
 
 def _objc_sel(obj, name):

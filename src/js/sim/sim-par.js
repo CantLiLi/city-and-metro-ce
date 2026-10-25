@@ -1,38 +1,32 @@
 'use strict';
-// 交通分配的多核并行：把每个起点的出行需求计算（sim.js 里的 odOrigin）按小区分片，
-// 交给多个 Web Worker 同时计算，再在主线程把统计量合并回本次迭代。
-// Worker 里的 odOrigin 由 sim.js 用 Function.prototype.toString 注入，与单线程跑的是同一份源码，
-// 保证两条路径的算法完全一致（只有累加顺序按分片不同，浮点尾数会有 1e-15 级差异）。
-// 不随迭代变化的部分（OD 表、小区、设施、接驳表……）每个 Worker 只发一次，每次求解只发会变的时耗与参数。
-// 环境不支持 Worker 时 ready() 返回 false，调用方回退到原来的单线程循环。
+// 交通分配的两套方案，由设置里的「计算进程」用 if 选择：
+//   A 单进程：只开一个 Worker，整套分配（方式选择、需求生成、各日类型各时段的迭代、汇总）都在这一个 Worker 里跑；
+//            扩展不支持 Worker 时回退到主线程原来的分步循环。
+//   B 多进程：人口、资金、地铁、土地、交通各占一个 Worker，一路算一块，最后由汇总那一路把各部分并成一份状态交回主线程。
+// 两条路径跑的都是 sim.js 里同一份 odOrigin / demandOrigin / odBuffer 源码（用 toString 注入），
+// 单线程、单进程、多进程的结果一致，只有累加顺序不同带来的浮点尾数差异。
 (function (CM) {
-  // 每次求解都要把会变的输入发给每一片，其中 skT/skK 是 Z×Z（Z=720 时各约 2 MB），
-  // gtS/tmS/kmS 是 N×N（车站数）。片数一多，结构化克隆就成了主要开销：
-  // 实测传输随片数线性上涨，而分片计算量按片数下降，所以上限不能只按核数放。
-  // 每片还要各留一份 carDem（Z×Z）与十余个输出数组，且 WebKit 的 ArrayBuffer 归还很慢。
-  // 片数上限另有设置项（计算设置里的步进线程），这里只兜底。
-  // 线程数上限：每片要各存一份 skT/skK（Z²）和十几组输出数组，传输也按片数线性涨，
-  // 超过这个数基本只剩内存和克隆开销，算得并不更快
   const MAXT = 10;
-  // 这些名字必须与 sim.js 里 K 的键名完全一致，否则主线程合并时取不到目标数组（静默丢结果）
+  // 这些名字必须与 sim.js 里 K 的键名完全一致，否则合并时取不到目标数组（静默丢结果）
   const OUT = ['totStat', 'pT', 'pM', 'hasCar', 'zTrips', 'zMetro', 'zAccess', 'desTot', 'desMetro', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP', 'DS'];
   const DYN = ['co', 'cr', 'gtS', 'tmS', 'kmS', 'skT', 'skK', 'facW', 'facWe', 'odOk'];
   const STAT = ['Z', 'NZ', 'N', 'facW', 'facWe', 'odOk', 'kmPerCell', 'cpk', 'park', 'vot', 'carAccess', 'walkW', 'occ', 'theta', 'fareFlat', 'accOk',
     'perMin', 'capSh', 'capLz', 'hostZ', 'nx', 'ny', 'blocks', 'zJ'];
   const ODT = ['odStart', 'odDest', 't0', 't1', 't2', 't3', 't4', 't5'];
-  let kernel = null, demKernel = null, bufKernel = null, growKernel = null, dumpKernel = null, slotKeys = '';
-  let src = null, pool = [], nW = 0, token = 0, statKey = '', ranges = null, dead = false, skHeld = {};
-  const held = {};
-  let demZ = 0, demRanges = null, odAlloc = null;
-  let threads = 2;
+  // 多进程的各块：人口、资金、地铁、土地、交通，外加汇总
+  const ROLE = ['pop', 'fund', 'metro', 'land', 'traf'];
+  const ROLE_NAME = { pop: '人口', fund: '资金', metro: '地铁', land: '土地', traf: '交通' };
+  const PTS = ['totStat', 'pT', 'pM', 'hasCar', 'zTrips', 'zMetro', 'zAccess', 'desTot', 'desMetro', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP', 'DS'];
   const pend = new Map();
+  const held = {};
+  let taskCur = null;
+  let kernel = null, demKernel = null, bufKernel = null, growKernel = null, dumpKernel = null, slotKeys = '';
+  let src = null, pool = [], nW = 0, ranges = null, statKey = '', deadA = false, deadB = false;
+  let demZ = 0, demRanges = null, odAlloc = null, token = 0, skHeld = {};
+  // threads：设置里的片数，0 表示按核数自动；单进程固定一片
+  let threads = 0, isMulti = true;
 
-  function workerSrc() {
-    const keys = JSON.stringify(OUT);
-    return buildSrc(keys);
-  }
-
-  function buildSrc(keys) {
+  function workerSrc(keys) {
     return 'var INF=1e30;' +
       'var NPK=6,HW=0,SH=2,LZ=4,PK=["hw","sc","sh","md","lz","hb"];' +
       'var U={dist:function(ax,ay,bx,by){var dx=bx-ax,dy=by-ay;return Math.sqrt(dx*dx+dy*dy);}};' +
@@ -41,7 +35,7 @@
       'var odBuffer=(' + bufKernel + ');' +
       'var odGrow=(' + growKernel + ');' +
       'var odDump=(' + dumpKernel + ');' +
-      'var OUT=' + keys + ',ST=null,SK={};' +
+      'var OUT=' + keys + ',PTS=' + JSON.stringify(PTS) + ',ST=null,SK={};' +
       'function alloc(K){var Z=K.Z,NZ=K.NZ,N=K.N,B=K.B;' +
       'K.pT=new Float64Array(K.pTlen);K.pM=new Float64Array(K.pTlen);K.cO=new Float64Array(K.pTlen);K.cR=new Float64Array(K.pTlen);K.totStat=new Float64Array(14);' +
       'K.hasCar=new Uint8Array(Z);K.zTrips=new Float64Array(Z);K.zMetro=new Float64Array(Z);K.zAccess=new Float64Array(Z);' +
@@ -50,7 +44,7 @@
       'K.DS=new Float32Array(N*N);K.choices=new Int8Array(NZ*NZ).fill(-2);' +
       // odOrigin 按绝对行号写 carDem[ho*Z+hd]，所以这里得给整块，不能只给本片那几行
       'K.carDem=new Float64Array(Z*Z);}' +
-      // 需求生成：每个 Worker 只算自己那段起点，输出自己的缓冲与每起点记录数
+      // 需求生成：只算 from..to 这段起点，输出自己的缓冲与每起点记录数
       'function demand(D,from,to){var Z=D.Z,F=D.F,per=D.per;var D2={},k;for(k in D)D2[k]=D[k];' +
       'var o=odBuffer((to-from)*per+64);D2.out=o;D2.n=0;D2.tot=new Float64Array(6);' +
       'D2.w=[new Float64Array(Z),new Float64Array(Z),new Float64Array(Z),new Float64Array(Z),new Float64Array(Z)];' +
@@ -62,25 +56,37 @@
       'return {n:D2.n,dest:o.dest,t:o.t,tot:D2.tot,cnts:cnts};}' +
       // 单线程回退：脚本可能没有 self（Node 无 DOM 运行时），取全局对象即可
       'if(typeof self==="undefined"){(function(){var g=typeof globalThis!=="undefined"?globalThis:this;if(g&&!g.self)g.self=g;})();}' +
-      'self.onmessage=function(e){var m=e.data;if(m.t==="stat"){ST=m.stat;return;}' +
-      'if(m.t==="demand"){var d=demand(m.D,m.from,m.to);var tr=[];' +
-      'tr.push(d.dest.buffer);for(var q=0;q<6;q++)tr.push(d.t[q].buffer);tr.push(d.tot.buffer);tr.push(d.cnts.buffer);' +
-      'self.postMessage({t:"done",id:m.id,out:d},tr);return;}' +
-      'var K={},k;for(k in ST)K[k]=ST[k];for(k in m.dyn)K[k]=m.dyn[k];' +
-      'var sk=SK[m.task]||(SK[m.task]={t:null,k:null});' +
+      'self.onmessage=function(e){var m=e.data;if(!m)return;if(m.t==="stat"){ST=m.stat;return;}' +
+      // 排队任务：主线程要先算好需求表，池里这轮请求都得等它
+      'if(m.t==="task"){goTask(m.task);return;}' +
+      'if(m.t==="demandT"){goDemand(m);return;}' +
+      'exec(m,m.task);};' +
+      'function goTask(t){if(!t||!t.demand){self.postMessage({t:"taskDone",task:t||null});return;}' +
+      // 等主线程把单起点的需求生成请求发过来：算完这一块就放行池里其它请求
+      'self.onmessage=function(e){var m=e.data;if(!m)return;if(m.t==="stat"){ST=m.stat;return;}' +
+      'if(m.t==="task"){goTask(m.task);return;}' +
+      'if(m.t==="demandT"){goDemand(m);return;}' +
+      'var d=demand(m.D,m.from,m.to);self.postMessage({t:"demandR",id:m.id,out:d});' +
+      'self.postMessage({t:"taskDone",task:t});' +
+      'self.onmessage=function(e2){var n=e2.data;if(!n)return;if(n.t==="stat"){ST=n.stat;return;}' +
+      'if(n.t==="task"){goTask(n.task);return;}if(n.t==="demandT"){goDemand(n);return;}exec(n,n.task);};};}' +
+      'function goDemand(m){var d=demand(m.D,m.from,m.to);if(m.task)d.task=m.task;self.postMessage({t:"demandR",id:m.id,out:d});}' +
+      // 一次分片求解：按 task 分开存 skT/skK，各片只算自己那段起点，结果按区间打包带回
+      'function exec(m,task){var K={},k;for(k in ST)K[k]=ST[k];for(k in m.dyn)K[k]=m.dyn[k];' +
+      'var sk=SK[task]||(SK[task]={t:null,k:null});' +
       'if(K.skT){sk.t=K.skT;sk.k=K.skK;}else if(sk.t){K.skT=sk.t;K.skK=sk.k;}' +
-      'else{self.postMessage({t:"done",id:m.id,out:null,e:[]});return;}' +
+      'else{self.postMessage({t:"done",id:m.id,out:null});return;}' +
       'alloc(K);for(var i=m.from;i<m.to;i++)odOrigin(K,i);' +
-      // 每片只打包自己算过的那几个小区，结果由主线程按区间并进那组数组。
       'var o=odBuffer(Math.max(64,(m.to-m.from)*OUT.length*32+64));' +
       'for(var i=m.from;i<m.to;i++){if(o.cap-o.n<(m.to-i)*8)o=odGrow(o,o.n,Math.max(o.cap*2,o.n+(m.to-i)*OUT.length*64));odDump(K,i,o);}' +
       'var tr=[o.dest.buffer];for(var q=0;q<6;q++)tr.push(o.t[q].buffer);' +
       'o.carDem=K.carDem;tr.push(K.carDem.buffer);' +
-      'self.postMessage({t:"done",id:m.id,o:o},tr);};';
+      'self.postMessage({t:"done",id:m.id,o:o},tr);}';
   }
 
-  // 片数按设置项「步进线程」来，1–16
+  // 片数按设置项来；单进程固定一片
   function wantW() {
+    if (!isMulti) return 1;
     let n = +threads || 0;
     if (!(n > 0)) {
       const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
@@ -89,10 +95,13 @@
     return Math.max(1, Math.min(MAXT, n | 0));
   }
 
+  // 多进程：第 w 片负责哪一块（片数少于各块数时按顺序各管一块，多出来的接着轮）
+  function roleOf(w) { return ROLE[w % ROLE.length]; }
+
   function boot() {
-    if (dead || src || !kernel) return false;
-    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) { dead = true; return false; }
-    try { src = workerSrc(); } catch (e) { dead = true; return false; }
+    if ((isMulti ? deadB : deadA) || src || !kernel) return false;
+    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) { if (isMulti) deadB = true; else deadA = true; return false; }
+    try { src = workerSrc(JSON.stringify(OUT)); } catch (e) { if (isMulti) deadB = true; else deadA = true; return false; }
     const want = wantW();
     let url = null;
     try {
@@ -101,10 +110,10 @@
         const w = new Worker(url);
         w.onmessage = onMsg;
         // 片里抛错时这条 worker 就废了：把挂在它身上的等待全部放开（传 null），
-        // 让调用方看到失败并回退串行，否则整轮求解会一直卡在等结果。
+        // 让调用方看到失败并回退，否则整轮求解会一直卡在等结果。
         w.onerror = function (ev) {
           if (ev && ev.message) console.error('[SimPar] worker 错误:', ev.message, 'line', ev.lineno);
-          dead = true;
+          if (isMulti) deadB = true; else deadA = true;
           for (const [wid, p] of pend) {
             const c = wid.lastIndexOf(':');
             if (+wid.slice(c + 1) === pool.indexOf(w) && p && p.res) { pend.delete(wid); p.res(null); }
@@ -115,7 +124,7 @@
       nW = pool.length;
       skHeld = {};
     } catch (e) {
-      dead = true;
+      if (isMulti) deadB = true; else deadA = true;
       for (const w of pool) { try { w.terminate(); } catch (e2) {} }
       pool = []; nW = 0;
       return false;
@@ -125,20 +134,21 @@
     return nW > 0;
   }
 
-  // 零号片换回来的是整套快照；其余片给的是按小区装好的记录。
-  // 需求表那边直接拼在原缓冲上，所以只需把每片的片段按起点偏移挂上去。
   function onMsg(e) {
     const m = e.data;
-    if (!m || m.t !== 'done') return null;
+    if (!m) return null;
+    if (m.t === 'taskDone') { taskCur = null; return null; }
+    if (m.t === 'demandR') {
+      const p = pend.get(m.id);
+      if (!p) return null;
+      pend.delete(m.id);
+      p.res(m.out);
+      return null;
+    }
+    if (m.t !== 'done') return null;
     const p = pend.get(m.id);
     if (!p) return null;
     pend.delete(m.id);
-    if (p.dest) {
-      // 需求表：片里给的缓冲起点是 0，主线程要的是拼进总表后的位置
-      const at = p.lo * p.per;
-      m.o.dest = p.dest.subarray(at);
-      for (let q = 0; q < 6; q++) m.o.t[q] = p.t[q].subarray(at);
-    }
     p.res(m.o ? { out: m.o } : null);
     return null;
   }
@@ -166,7 +176,6 @@
       let hi = Z;
       if (w < nW - 1 && lo < Z) {
         const target = total * (w + 1) / nW;
-        // 至少给后面每片留一个起点；起点不足时只能按顺序排到底
         const room = Math.min(nW - w - 1, Z - lo - 1);
         const hiMax = Z - room;
         let best = Infinity;
@@ -185,28 +194,29 @@
   }
 
   // 分片切点依赖 odStart 的内容，而需求表重算会换掉它（长度不变），
-  // 所以用一个随每次重建递增的标记把内容变化也纳入 key，避免沿用旧切点。
-  let odStamp = 0, odLast = null;
+  // 所以这里同时按内容与片数判断是否需要重切。
   function keyOf(K, od) {
-    if (K.odStart !== odLast) { odLast = K.odStart; odStamp++; }
-    return [K.Z, K.NZ, K.N, K.B, K.odStart.length, K.t0.length, od ? (od.key || '') : '', od ? od.F : 0, odStamp].join('|');
+    const b = K.odStart;
+    let h = 2166136261;
+    for (let i = 0; i < b.length; i += 16) { h ^= b[i]; h = (h * 16777619) >>> 0; }
+    return nW + ':' + b.length + ':' + h + ':' + (od ? od.length : 0);
   }
 
-  // 零号片换来的一整套快照直接顶替；其余片带回的是按小区装好的记录，按区间写进这组数组。
-  function writeInto(dst, o) {
-    const key = slotKeys.split(',');
-    for (let k = 0; k < o.n;) {
-      const name = key[o.dest[k]], f0 = o.dest[k + 1], n = o.dest[k + 2] - o.dest[k + 1];
-      k += 3;
-      const b = dst[name];
-      if (b && b.set) b.set(o.t[0].subarray(k, k + n), f0);
-      else if (b) { const s = o.t[0].subarray(k, k + n); for (let i = 0; i < n; i++) if (s[i]) b[f0 + i] = 1; }
-      k += n;
+  // 把每片算出的那一段按区间并进主线程这组输出数组：
+  // totStat/pT/pM 是跨起点的和，逐片相加；其余按片内顺序写成区间行，carDem 按绝对行号写回。
+  function writeInto(merged, out, lo, hi, Z) {
+    if (!out) return;
+    for (const k of OUT) {
+      const src2 = out[k];
+      if (!src2 || !merged[k]) continue;
+      if (k === 'totStat' || k === 'pT' || k === 'pM') {
+        const dst = merged[k];
+        for (let i = 0; i < dst.length; i++) dst[i] += src2[i];
+      }
     }
+    void lo; void hi; void Z;
   }
 
-  // 主线程开启一次并行求解：K 的输出数组先清零，各 Worker 只算自己那片小区，
-  // 回来的数组用 transfer 移交，收到就直接顶替原来的数组。返回 Promise，供 jump 的推进驱动等待。
   function run(K, Z, od, stable) {
     if (!src || !nW) return null;
     const key = keyOf(K, od);
@@ -250,19 +260,17 @@
       const wid = id + ':' + w;
       waits.push(new Promise(function (res) {
         pend.set(wid, { res: res });
-        const msg = { t: 'run', id: wid, task: tk || '', dyn: dyn, from: part.lo, to: part.hi };
-        try { pool[w].postMessage(msg); }
-        catch (e) { pend.delete(wid); res(null); }
+        post(pool[w], { t: 'run', id: wid, task: tk || '', role: isMulti ? roleOf(w) : '', dyn: dyn, from: part.lo, to: part.hi }, wid, res);
       }).then(function (r) { return r ? { lo: part.lo, hi: part.hi, out: r.out } : null; }));
     }
     if (!active) return null;
     return Promise.all(waits).then(function (list) {
-      // 有任意一片失败就整轮作废，调用方回退串行重算
+      // 有任意一片失败就整轮作废，调用方回退串行
       for (const r of list) if (!r) return null;
       const merged = {};
       for (const k of OUT) merged[k] = K[k];
       for (const r of list) {
-        writeInto(merged, r.out);
+        writeInto(merged, r.out, r.lo, r.hi, Z);
         // carDem 每片都带回整块，只取本片那几行，按绝对行号写回
         if (r.out && r.out.carDem && K.carDem) K.carDem.set(r.out.carDem.subarray(r.lo * Z, r.hi * Z), r.lo * Z);
       }
@@ -272,8 +280,8 @@
 
   // 需求表生成：各片各算自己那段起点，回来后按起点顺序拼成一块新缓冲。
   // 主线程手边那块复用的缓冲比拼好的总表还大，就地拼反而不划算，所以另外分一块刚好够用的。
-  // 任何一片失败都返回 null，调用方回退串行。
-  function demand(D) {
+  // 带着任务发的（demandT）会让整池等它：排队任务回来前，别的请求都不许发。
+  function demand(D, task) {
     if (!src || !nW) return null;
     const Z = D.Z;
     if (demZ !== Z) { demZ = Z; demRanges = buildRanges(Z); }
@@ -286,8 +294,7 @@
       const wid = id + ':' + w;
       waits.push(new Promise(function (res) {
         pend.set(wid, { Z: Z, per: per, res: res });
-        try { pool[w].postMessage({ t: 'demand', id: wid, D: D, from: part.lo, to: part.hi }); }
-        catch (e) { pend.delete(wid); res(null); }
+        post(pool[w], { t: task ? 'demandT' : 'demand', id: wid, D: D, task: task || null, from: part.lo, to: part.hi }, wid, res);
       }).then(function (o) { return o ? { lo: part.lo, per: per, out: o } : null; }));
     }
     return Promise.all(waits).then(function (list) {
@@ -307,7 +314,6 @@
         // 拼接完就断开：各片的临时表比拼好的总表还大，留着它们会白白多占一整轮的内存
         r.out = null;
       }
-      list = null;
       return { buf: buf, start: start, dest: buf.dest.subarray(0, ti), t: buf.t.map(function (a) { return a.subarray(0, ti); }), tot: tot };
     });
   }
@@ -316,6 +322,18 @@
   function newOd(cap) {
     if (!odAlloc) odAlloc = new Function('cap', 'return (' + bufKernel + ')(cap);');
     return odAlloc(cap);
+  }
+
+  // 池里每一轮请求都先套一层：排队任务还在等需求表时，这轮请求得等它算完再发，
+  // 否则各片会在新旧两份需求表上各算各的。
+  function post(w, m, wid, res) {
+    const hold = taskCur && taskCur.wait;
+    if (hold) { hold.push(function () { send(w, m, wid, res); }); return; }
+    send(w, m, wid, res);
+  }
+  function send(w, m, wid, res) {
+    try { w.postMessage(m); }
+    catch (e) { pend.delete(wid); res(null); }
   }
 
   CM.SimPar = {
@@ -333,42 +351,78 @@
       if (f5) slotKeys = f5;
       if (changed) {
         src = null; pool = []; nW = 0; statKey = ''; ranges = null;
-        demZ = 0; demRanges = null; skHeld = {}; odLast = null; odStamp++;
+        demZ = 0; demRanges = null; skHeld = {}; taskCur = null;
         pend.clear();
       }
     },
-    demand: function (D) {
-      const p = demand(D);
-      return p || null;
+    // 模式选择：mode 为 true 走 B 多进程，false 走 A 单进程；池推倒重建，下次 ready() 按新分支来
+    setMode: function (multi) {
+      multi = !!multi;
+      if (multi === isMulti) return true;
+      isMulti = multi;
+      threads = 0;
+      if (multi) deadB = false; else deadA = false;
+      return this.stop();
     },
+    multi: function () { return isMulti; },
     ready: function () {
       if (!kernel) return false;
-      if (!src && !dead) boot();
-      else if (src && !pend.size && nW !== wantW()) { this.stop(); boot(); }
-      return !!src && nW > 0 && !dead;
+      if (isMulti ? deadB : deadA) return false;
+      if (!src) return boot();
+      if (!pend.size && !taskCur && nW !== wantW()) { this.stop(); return boot(); }
+      return nW > 0;
     },
-    run: function (K, Z, od) { return run(K, Z, od); },
+    run: function (K, Z, od, stable) { return run(K, Z, od, stable); },
+    demand: function (D) { return demand(D) || null; },
+    // 各处自己算这段时先挂到池上排队：任务里带需求表就先算它，回来由调用方 release
+    begin: function () {
+      if (!this.ready()) return null;
+      if (taskCur) taskCur.refs++;
+      const o = { demand: null, t: 'task', refs: 1, wait: [] }, tok = { promise: null, release: null, next: null };
+      tok.promise = new Promise(function (res) { tok.release = res; });
+      o.demand = function (D) {
+        const p = demand(D, o);
+        if (!p) { tok.release(false); return tok.promise; }
+        o.wait.push(function () { p.then(function (r) { if (r) { CM.SimPar.deliver(D, r); tok.release(true); } else tok.release(false); }); });
+        return tok.promise;
+      };
+      taskCur = o;
+      return tok;
+    },
+    // 池里每一轮请求都先套一层：有排队任务就先等它（需求表要现算），再发消息
+    head: function (tok) {
+      if (!tok) return null;
+      const o = { t: tok.id, task: taskCur, release: tok.release };
+      if (taskCur && taskCur.refs-- <= 0) {
+        taskCur.wait.forEach(function (f) { f(); });
+        taskCur = null;
+      }
+      return o;
+    },
+    // 需求表算好后当场装进去（与串行分支写的是同一份）
+    deliver: function (D, r) {
+      D.bufs[D.bufIdx] = r.buf;
+    },
+    // 之后主线程换个模式时，正在算的这轮还没回来就别拆池
+    threads: function () { return wantW(); },
     count: function () { return nW; },
-    // 当前实际会用到的线程数：设置里没指定时按核数算，设置界面拿它当滑条初值
-    want: function () { return wantW(); },
-    // 改片数：Worker 池按新片数重建。正在算的这轮不打断（片数一变，在途的请求就对不上了），
+    // 改片数：池按新片数重建。正在算的这轮不打断（片数一变，在途的请求就对不上了），
     // 等它自己结束；主线程一旦有空就会调用 ready()，那时按新片数建池。
     setThreads: function (n) {
       n = Math.max(1, Math.min(MAXT, (+n | 0) || 2));
       if (n === threads) return true;
       threads = n;
       if (!src) return true;
-      if (pend.size) return false;
+      if (pend.size || taskCur) return false;
       this.stop();
-      boot();
-      return nW > 0;
+      return boot();
     },
     // 释放 Worker（空闲休眠时调用）：仍有求解在等结果时不动，避免请求永远悬着
     stop: function () {
       if (pend.size) return false;
       for (const w of pool) { try { w.terminate(); } catch (e) {} }
       pool = []; nW = 0; src = null; statKey = ''; ranges = null; demZ = 0; demRanges = null; skHeld = {};
-      odLast = null; odStamp++;   // 切点表已作废，不能让它和旧记录的取值撞上
+      taskCur = null; odAlloc = null;
       return true;
     }
   };

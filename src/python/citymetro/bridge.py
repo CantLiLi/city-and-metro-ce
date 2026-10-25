@@ -82,6 +82,8 @@ class ShellApi:
             dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, '城市与地铁社区版-进度.cmsave.json'
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
+        if sys.platform == 'darwin':
+            return self._choose_file_macos(mode, filters, filename)
         # pywebview 的对话框会阻塞调用线程（主线程），必须与窗口生命周期错开
         try:
             with self._lock:
@@ -94,6 +96,33 @@ class ShellApi:
         if not result:
             return False, None
         path = result[0] if isinstance(result, (list, tuple)) else str(result)
+        if not path:
+            return False, None
+        return True, path
+
+    def _choose_file_macos(self, mode, filters, filename):
+        # macOS 走 window.macos_file_panel：pywebview 的 Cocoa 实现会把面板排进主线程，
+        # 却让调用线程等一个取消时永远不会释放的信号量，看起来就是点了没反应
+        from citymetro import window as shell_window
+
+        extensions = []
+        for f in filters:
+            part = f.split('(', 1)[1].rstrip(')') if '(' in f else ''
+            for ext in part.split(';'):
+                ext = ext.strip().lstrip('*').lstrip('.')
+                if ext and ext not in extensions:
+                    extensions.append(ext)
+        # 「所有文件 (*.*)」在 macOS 上是空列表（不限制类型），写成 * 会让面板什么都选不了
+        extensions = [e for e in extensions if e != '*']
+        try:
+            path = shell_window.macos_file_panel(
+                'save' if mode == 'save' else 'open',
+                filename or '选择存档文件',
+                extensions,
+            )
+        except Exception as exc:
+            log.warning('打开文件对话框失败 %s: %s', mode, exc, exc_info=True)
+            return False, '无法打开文件选择窗口：' + str(exc)
         if not path:
             return False, None
         return True, path
