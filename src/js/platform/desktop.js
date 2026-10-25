@@ -62,9 +62,37 @@
     if (!isDesktop()) return Promise.resolve(false);
     return call('cache_write', [items]).then(function (r) { return !!(r && r.ok); }, function () { return false; });
   };
-  // 由外壳关闭窗口：外壳会先等 __cmDesktopClose 把进度写完再销毁窗口
+  // 由外壳关闭窗口：外壳会先等 __cmDesktopClose 把进度写完再销毁窗口。
+  // 调不到 quit_app（启动早期外壳接口还没注进网页）时也要退出：退到 window.close()，
+  // pywebview 的窗口都走同一个关闭事件，macOS 上一样先写盘再关窗。
+  // nativeClosePending 只放行「下一次」原生 close，避免退回 close 时又绕回 quit 形成死循环
+  let nativeClosePending = false;
+  const closeNative = function () {
+    nativeClosePending = true;
+    try { window.close(); } catch (e) { /* ignore */ }
+  };
   info.quit = function () {
     if (!isDesktop()) return Promise.resolve(false);
-    return call('quit_app').then(function (r) { return !!(r && r.ok); }, function () { return false; });
+    return Promise.resolve(call('quit_app')).then(function (r) {
+      if (r && r.ok) return true;
+      closeNative();
+      return false;
+    }, function () {
+      closeNative();
+      return false;
+    });
+  };
+  // 桌面版里链接了窗口的网页会把 window.close 变成空操作：本地页面只有脚本自己开的才允许自关。
+  // 接口没就绪时前端会退到 window.close()，所以接管它：外壳接不上也还有一条能走的路。
+  // 只装一次壳，重复调用没有副作用（它每次都会重新判 isDesktop，标志到得晚也没关系）
+  const nativeClose = window.close;
+  const closeHooked = function () {
+    if (nativeClosePending) { nativeClosePending = false; return nativeClose.apply(window, arguments); }
+    if (!isDesktop()) return nativeClose.apply(window, arguments);
+    info.quit();
+  };
+  info.overrideClose = function () {
+    if (window.close !== closeHooked) window.close = closeHooked;
+    return true;
   };
 })(window.CM);

@@ -9,6 +9,12 @@ import logging
 import os
 import sys
 import threading
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import webview
+
+    AppWindow = webview.Window
 
 log = logging.getLogger('citymetro')
 
@@ -55,7 +61,7 @@ def _windows_frame():
     """标题栏加边框占掉多少逻辑像素 (宽, 高)，SPI 拿到的已经是逻辑像素，不用自己乘缩放比。"""
     import ctypes.wintypes
 
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
     user32.AdjustWindowRectEx.argtypes = [
         ctypes.POINTER(ctypes.wintypes.RECT),
         ctypes.wintypes.DWORD,
@@ -68,23 +74,23 @@ def _windows_frame():
     return max(0, frame.right - frame.left - 100), max(0, frame.bottom - frame.top - 100)
 
 
-def destroy_now(window):
+def destroy_now(win):
     """销毁窗口。
 
     Window.destroy 带 _shown_call 装饰，它会把 destroyed 事件提前置为已触发，所以再去等窗口关闭就等不到了；
     退出线程要等的是窗口真的关掉，这里直接调底层 destroy_window。
     """
-    if window is None:
+    if win is None:
         return
     try:
         import webview.guilib as guilib
 
         guilib.initialize(guilib.forced_gui_)
-        guilib.guilib.destroy_window(window.uid)
+        guilib.guilib.destroy_window(win.uid)
     except Exception:
         log.debug('底层销毁窗口失败，退回 window.destroy', exc_info=True)
         try:
-            window.destroy()
+            win.destroy()
         except Exception:
             log.debug('销毁窗口失败', exc_info=True)
 
@@ -171,7 +177,7 @@ def window_handle():
         return 0
     import ctypes.wintypes
 
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
     pid = os.getpid()
     found = []
 
@@ -197,7 +203,7 @@ def window_handle():
 
 def _set_attribute(hwnd, attribute, value):
     data = value if isinstance(value, ctypes.Structure) else ctypes.c_int(value)
-    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+    ctypes.WinDLL('dwmapi', use_last_error=True).DwmSetWindowAttribute(
         hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data)
     )
 
@@ -463,7 +469,7 @@ _window_mode = {'mode': 'window'}
 def _win32_set_attr(hwnd, attribute, value):
     data = ctypes.c_int(value)
     try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+        ctypes.WinDLL('dwmapi', use_last_error=True).DwmSetWindowAttribute(
             hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data)
         )
     except Exception:
@@ -482,7 +488,7 @@ def _win32_fill_screen(hwnd):
     try:
         import ctypes.wintypes
 
-        user32 = ctypes.windll.user32
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
         MONITOR_DEFAULTTONEAREST = 2
         monitor = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
         if not monitor:
@@ -512,11 +518,11 @@ def _win32_fill_screen(hwnd):
         log.debug('铺满显示器失败', exc_info=True)
 
 
-def _set_fullscreen(win, on):
+def _set_fullscreen(win: 'AppWindow', on: bool) -> bool:
     if bool(_window_mode['mode'] != 'window') == on:
         return False
     win.toggle_fullscreen()
-    if win is not None and sys.platform == 'win32':
+    if sys.platform == 'win32':
         hwnd = window_handle()
         if hwnd:
             if on:
@@ -527,7 +533,7 @@ def _set_fullscreen(win, on):
     return True
 
 
-def set_window_mode(win, mode):
+def set_window_mode(win: 'AppWindow | None', mode: Any) -> dict[str, Any]:
     """切换窗口方式。mode: window 普通窗口 | max 窗口化全屏。
 
     已经是目标方式时直接返回成功：前端启动时会同步一次（设置里的值），
@@ -541,9 +547,10 @@ def set_window_mode(win, mode):
     if win is None:
         return {'ok': False, 'error': '窗口未就绪'}
     try:
-        if _set_fullscreen(win, mode != 'window'):
-            _window_mode['mode'] = mode
+        # _set_fullscreen 返回 False 说明窗口本来就已经是目标方式，状态以它为准
+        changed = _set_fullscreen(win, mode != 'window')
     except Exception as exc:
         log.warning('切换窗口方式失败: %s', exc, exc_info=True)
         return {'ok': False, 'error': str(exc)}
-    return {'ok': True, 'mode': mode, 'changed': True}
+    _window_mode['mode'] = mode
+    return {'ok': True, 'mode': mode, 'changed': changed}

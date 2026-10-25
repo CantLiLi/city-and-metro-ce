@@ -279,6 +279,13 @@
     if (!g || ui.isSaved()) return Promise.resolve();
     return Promise.resolve(ui.doAutosave(true)).catch(function () {});
   };
+  // 外壳接管 window.close：网页里关不掉自己，桌面版点「退出」时外壳接口又可能还没就绪。
+  // 标志与接口都要等 Python 注入，所以现在挂一次，之后每次就绪事件再挂一次（重复挂只换壳不叠加）。
+  if (CM.desktop && CM.desktop.overrideClose) {
+    CM.desktop.overrideClose();
+    window.addEventListener('pywebviewready', function () { CM.desktop.overrideClose(); });
+    window.addEventListener('__cmDesktopReady', function () { CM.desktop.overrideClose(); });
+  }
 
   R.resize();
   R.cam.zoom = R.cam.tz = 17; R.cam.view = 1; R.cam.t = 1; previewCamera(0);

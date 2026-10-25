@@ -1867,9 +1867,10 @@
     const desktop = !!(CM.desktop && CM.desktop.isDesktop());
     const title = '退出游戏？';
     const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。';
+    // 桌面性要在点按钮时再判一次：卡片是在启动早期弹的，那时外壳可能还没把接口注进网页
     const go = function () {
-      if (desktop) { CM.desktop.quit(); return; }
-      try { window.close(); } catch (e) { /* ignore */ }
+      if (CM.desktop && CM.desktop.isDesktop()) CM.desktop.quit();
+      else { try { window.close(); } catch (e) { /* ignore */ } }
       setTimeout(function () { if (!window.closed) self.showQuitFallback(); }, 120);
     };
     // 主界面：滑出一张确认卡片；游戏内：同样的悬浮面板

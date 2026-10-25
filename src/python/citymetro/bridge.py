@@ -12,11 +12,15 @@ import subprocess
 import sys
 import threading
 import webbrowser
+from typing import TYPE_CHECKING, Any
 
 import webview
 
 from citymetro import paths, perf, prefs, saves, storage
 from citymetro.about import APP_NAME, UPDATE_INFO, VERSION
+
+if TYPE_CHECKING:
+    from citymetro.window import AppWindow
 
 log = logging.getLogger('citymetro')
 
@@ -52,17 +56,19 @@ class ShellApi:
     # pywebview 会把 js_api 对象的公开属性递归反射成 window.pywebview.api，
     # 遇到 Window / COM 这类非方法对象会一路展开到 maximum recursion depth，并刷满 COM 告警。
     # 标注为不可序列化即可让反射跳过。
-    window = None
+    window: 'AppWindow | None' = None
     close_requested = None
 
-    def __init__(self, window=None):
+    def __init__(self, window: 'AppWindow | None' = None):
         self.window = window
         self._lock = threading.Lock()
         self.close_requested = threading.Event()
         self.close_requested._serializable = False
+        # 关窗动作由外壳决定（要等存档写盘），这里只转告一声；没接上就走 close_requested 轮询
+        self.on_quit = None
         self._store = saves.SaveStore()
 
-    def bind(self, window):
+    def bind(self, window: 'AppWindow'):
         self.window = window
         self.window._serializable = False
 
@@ -78,7 +84,7 @@ class ShellApi:
         okay, payload = self._choose_file(mode)
         return payload if okay else None
 
-    def _choose_file(self, mode):
+    def _choose_file(self, mode: str) -> 'tuple[bool, Any]':
         # 对话框失败与用户取消要分开：前端只把 false 当取消，失败要能看到原因
         window = self.window
         if window is None:
@@ -115,7 +121,7 @@ class ShellApi:
             return False, None
         return True, path
 
-    def _dialog_macos(self, window, dialog, filename, filters):
+    def _dialog_macos(self, window: 'AppWindow', dialog, filename, filters):
         # 先用 pywebview 自己的实现（布局、类型下拉、保存文件名都由它配好）。它在 macOS 上取消时
         # 不释放信号量，工作线程会永远挂住，所以调用前清掉 _file_name：回来还是 None 就说明没处理成，
         # 翻到原生面板，不能把「新面板」叠在挂住的旧面板上，也不能让按钮变成点了没反应
@@ -319,10 +325,18 @@ class ShellApi:
         return self._store.info()
 
     def quit_app(self):
-        # 只登记意图：关窗与存档等待都在 main.py 的退出线程里做，避免在 JS 调用线程里销毁窗口
+        # 后端侧不在这里销毁窗口：只通知外壳去走「等存档写完再关窗」这一条路径。
+        # 前端拿不到这个接口时（启动早期 api 还没注入、或窗口还没显示），
+        # 还会调用 window.close()，macOS 的关闭按钮同样落到外壳的退出路径上
         if self.window is None:
             return {'ok': False, 'error': '窗口未就绪'}
         self.close_requested.set()
+        if self.on_quit is not None:
+            try:
+                self.on_quit()
+            except Exception:
+                log.warning('通知外壳退出失败', exc_info=True)
+                return {'ok': False, 'error': '退出失败'}
         return {'ok': True}
 
 

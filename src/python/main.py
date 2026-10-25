@@ -57,11 +57,11 @@ FLUSH_JS = (
 )
 
 
-def wait_for_engine(window):
+def wait_for_engine(win):
     deadline = time.time() + ENGINE_TIMEOUT
     while time.time() < deadline:
         try:
-            if window.evaluate_js('typeof window.CM === "object" && !!window.CM.ui') is True:
+            if win.evaluate_js('typeof window.CM === "object" && !!window.CM.ui') is True:
                 return True
         except Exception:
             pass
@@ -69,46 +69,82 @@ def wait_for_engine(window):
     return False
 
 
-def flush_and_destroy(window):
-    """先等正在写的存档落盘，再销毁窗口。"""
+def flush_and_destroy(win):
+    """先等正在写的存档落盘，再销毁窗口；销毁后窗口仍没退出就强制结束进程。"""
+    # 存档等待与销毁共用这一个期限：evaluate_js 自己也可能卡住，不能只给等待存档计时
+    deadline = time.time() + SAVE_TIMEOUT
     try:
-        window.evaluate_js(FLUSH_JS)
+        win.evaluate_js(FLUSH_JS)
     except Exception:
         log.debug('flush 脚本执行失败', exc_info=True)
-    deadline = time.time() + SAVE_TIMEOUT
     while time.time() < deadline:
         try:
-            if window.evaluate_js(WAIT_SAVED_JS) != 'busy':
+            if win.evaluate_js(WAIT_SAVED_JS) != 'busy':
                 break
         except Exception:
             break
         time.sleep(0.1)
     else:
         log.warning('等待存档超时 %ss，仍然关闭', SAVE_TIMEOUT)
-    destroy_now(window)
+    force_exit_after()
+    if win is None:
+        return
+    try:
+        # 不能用 win.destroy()：它带 _shown_call，窗口没显示出来时会一直等 shown 事件；
+        # destroy_now 直接调底层 destroy_window，卡住的情况交给上面定的强制退出
+        window.destroy_now(win)
+    except Exception:
+        log.debug('销毁窗口失败，交给强制退出', exc_info=True)
+        destroy_and_quit(win)
 
 
 # 关窗只有一条路径：主线程只做登记，存档等待与销毁都放在后台线程，
 # 前端「退出」调用 quit_app 与点窗口关闭按钮都走这里，保证不会出现两次关闭或丢掉存档。
-def make_on_closing(window, state):
+def request_quit(win, state):
+    """登记退出并交给后台线程写盘关窗；主线程不直接碰窗口生命周期。"""
+    if state['closing']:
+        return
+    state['closing'] = True
+    threading.Thread(target=lambda: flush_and_destroy(win), daemon=True).start()
+
+
+def make_on_closing(win, state):
     def on_closing():
-        if state['closing']:
-            return True
-        state['closing'] = True
-        threading.Thread(target=lambda: flush_and_destroy(window), daemon=True).start()
+        request_quit(win, state)
         return False
 
     return on_closing
 
 
-def watch_quit_request(window, api, state):
+def watch_quit_request(win, api, state):
     """前端点「退出」时 api.quit_app 只登记请求，存档等待统一在这里做。"""
     while not api.close_requested.wait(0.2):
         pass
-    if state['closing']:
-        return
-    state['closing'] = True
-    flush_and_destroy(window)
+    request_quit(win, state)
+
+
+# 兜底退出：pywebview 的 cocoa 后端先建窗口、再注入 window.pywebview.api 与 ready 事件，
+# 启动早期（加载页、开始界面）点「退出」时 quit_app 常常还没暴露给网页，或 evaluate_js 直接失败。
+# 写盘与销毁仍走上面那一条路径，那条路径走不通时不再依赖界面，直接结束进程。
+QUIT_FORCE_DELAY = 12
+
+
+def force_exit_after(seconds=QUIT_FORCE_DELAY):
+    def run():
+        log.warning('%ss 内窗口没有关掉，强制结束进程', seconds)
+        os._exit(0)
+
+    timer = threading.Timer(seconds, run)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def destroy_and_quit(win):
+    """窗口没关掉（或窗口对象本身就不在了）时的兜底：能销毁就销毁，销毁完仍没退出就结束进程。"""
+    if win is not None:
+        window.destroy_now(win)
+    force_exit_after(3)
 
 
 def setup_logging():
@@ -122,35 +158,47 @@ def setup_logging():
 
 def set_app_user_model_id():
     """让任务栏/Alt+Tab 按本应用分组，而不是挂在 python.exe 上显示 Python 图标。"""
+    if sys.platform != 'win32':
+        return
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+        shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+        shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except (ImportError, AttributeError, OSError):
         log.debug('设置 AppUserModelID 失败', exc_info=True)
 
 
 def clear_web_cache():
-    """丢掉 WebView2 的磁盘缓存与 JS 字节码缓存：本地 file:// 资源不走 HTTP 缓存头，
+    """丢掉内核的磁盘缓存与 JS 字节码缓存：本地 file:// 资源不走 HTTP 缓存头，
     也不按文件时间失效，缓存里留着旧 js 的字节码，表现为改了前端却不生效。
-    返回是否全部清干净：删不掉时说明还有别的 WebView2 进程占着这些文件，
-    下一次启动会再试（指纹没写进去，所以下次仍判定为「变过」）。"""
+
+    可清范围内一个目录都没找到也算失败：说明内核的数据目录不在预判位置（例如 macOS 上
+    没走 .app 而是直接 python main.py，bundle id 是 Python 的），此时清不掉任何东西，
+    不能让指纹写进去把它当成「已经清过」。下一次启动会按新位置再试。
+    删不掉时说明还有内核进程占着这些文件，同样下次再试。"""
+    found = 0
     ok = True
     for path in storage.web_cache_dirs():
         if not os.path.isdir(path):
             continue
+        found += 1
         try:
             shutil.rmtree(path)
             log.info('已清理缓存 %s', path)
         except OSError:
             ok = False
-            log.warning('清理缓存失败 %s（可能仍有 WebView2 进程占用）', path, exc_info=True)
+            log.warning('清理缓存失败 %s（可能仍有内核进程占用）', path, exc_info=True)
+    if not found:
+        log.warning('未找到任何内核缓存目录，跳过；下次启动会重试')
+        return False
     return ok
 
 
 def refresh_cache_if_changed(src_dir):
     """按前端资源指纹决定要不要清缓存：只在代码确实变过时清，平时启动不受影响。
-    清理没成功就不写指纹，下次启动会重试，不会把「没清成」当成「已经清过」。"""
+    清理没成功就不写指纹，下次启动会重试，不会把「没清成」当成「已经清过」。
+    代价是清理始终失败时（缓存目录一直找不到）每次启动都会多走一遍指纹计算。"""
     try:
         stamp = storage.src_stamp(src_dir)
         path = storage.stamp_path()
@@ -163,7 +211,7 @@ def refresh_cache_if_changed(src_dir):
             return
         # 清缓存会重建 service worker、网络缓存与前端代码的 V8 字节码，启动会慢几秒：
         # 只在真的重建时记一条，日志里才看得出「这次是不是清过缓存」，便于把「存档读不到」和「刚清过缓存」对上时间
-        log.info('前端代码已变化，重建 WebView2 缓存（存档在 saves 目录，不受影响）')
+        log.info('前端代码已变化，重建内核缓存（存档在 saves 目录，不受影响）')
         if not clear_web_cache():
             return
         with open(path, 'w', encoding='utf-8') as fh:
@@ -218,7 +266,7 @@ def main():
     try:
         app_window, state = build_window()
     except RuntimeError as exc:
-        log.exception('启动失败: %s', exc)
+        log.error('启动失败: %s', exc)
         lock.release()
         show_error(str(exc))
         return 2
@@ -235,7 +283,7 @@ def main():
     return 0
 
 
-def build_window():
+def build_window() -> 'tuple[AppWindow, dict[str, Any]]':
     src_dir = paths.find_src_dir()
     size, min_size = window.window_size()
     dark = window.dark_mode()
@@ -244,7 +292,8 @@ def build_window():
              APP_ID, VERSION, src_dir, size[0], size[1], dark)
 
     api = ShellApi()
-    app_window = webview.create_window(
+    api.on_quit = lambda: request_quit(app_window, state)
+    app_window: AppWindow = webview.create_window(
         WINDOW_TITLE,
         url=os.path.join(src_dir, 'index.html'),
         js_api=api,
@@ -256,17 +305,20 @@ def build_window():
         background_color=BG_DARK if dark else BG_LIGHT,
     )
     api.bind(app_window)
-    state = {'closing': False, 'dark': dark}
+    state: dict[str, Any] = {'closing': False, 'dark': dark, 'on_top': False}
 
     def on_loaded():
         apply_window_chrome(state)
+        # __CM_DESKTOP__ 只能由这里注入：它是前端认「这是桌面版」的唯一依据，
+        # 注入失败就别认，否则网页会走桌面分支却调不到任何一个桌面接口
         if not wait_for_engine(app_window):
             log.error('前端未在 %ss 内就绪', ENGINE_TIMEOUT)
             return
         try:
             app_window.evaluate_js(bridge_script())
         except Exception:
-            log.exception('注入桌面外壳信息失败')
+            log.error('注入桌面外壳信息失败', exc_info=True)
+            return
         log.info('前端就绪, renderer=%s', webview.renderer)
 
     app_window.events.loaded += on_loaded

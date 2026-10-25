@@ -5,6 +5,9 @@ import os
 import sys
 
 APP_DIR_NAME = 'CityAndMetro'
+# 与 build.py 的 BUNDLE_ID 一致；macOS 的 WKWebView 数据目录按它命名。
+# 没走 .app 启动（直接跑 python main.py）时落在 python 的 bundle id 下，此时清不到，属预期。
+WEBKIT_BUNDLE_ID = 'com.cityandmetro.ce'
 
 
 def _base_dir():
@@ -22,18 +25,42 @@ def data_dir():
 
 
 def profile_dir():
-    """WebView2 的配置目录：设置与页面存储在这里，必须跨启动保留。"""
+    """页面数据的配置目录：设置与页面存储在这里，必须跨启动保留。
+
+    Windows 上是 webview.start(storage_path=...) 用的 WebView2 用户目录；
+    macOS 的 Cocoa 后端不认 storage_path（见 web_cache_dirs 的说明），WKWebView 用的是
+    这个数据目录下的 WebKit 子目录。
+    """
     path = os.path.join(data_dir(), 'profile')
     os.makedirs(path, exist_ok=True)
     return path
 
 
+def _webkit_default_dir():
+    """WKWebsiteDataStore.defaultDataStore() 在磁盘上的落点。
+
+    pywebview 的 Cocoa 后端忽略 storage_path，一律用 defaultDataStore()，它按 bundle id
+    落在 ~/Library/WebKit/<bundle id>/WebsiteData/Default。
+    """
+    return os.path.join(
+        os.path.expanduser('~'), 'Library', 'WebKit', WEBKIT_BUNDLE_ID, 'WebsiteData', 'Default')
+
+
 def web_cache_dirs():
-    """WebView2 里可以随时丢弃的缓存目录：磁盘缓存与 JS 字节码缓存。
+    """可以随时丢弃的缓存目录：磁盘缓存与 JS 字节码缓存，按平台返回。
 
     File 协议的资源不走 HTTP 缓存头，也不按修改时间失效，改了 js 还会用旧的字节码，
     所以这几处整目录清掉最稳；IndexedDB / Local Storage 不在其中，清缓存不影响存档。
     """
+    if sys.platform == 'darwin':
+        # WKWebView 的 network cache / GPU 进程缓存 / code cache 都是独立目录，
+        # WebKit 自己按修改时间管；同 Windows 一样整目录清。
+        data = _webkit_default_dir()
+        return [
+            os.path.join(data, 'NetworkCache', 'WebKitCache'),
+            os.path.join(data, 'WebKitCache'),
+            os.path.join(data, 'CacheStorage'),
+        ]
     base = os.path.join(profile_dir(), 'EBWebView', 'Default')
     return [
         os.path.join(base, 'Cache'),
