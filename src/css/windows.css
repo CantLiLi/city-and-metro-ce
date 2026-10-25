@@ -113,18 +113,44 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .msel-modes .map-mode .badge .ico { width: 16px; height: 16px; }
 .msel-modes .map-mode > .ico { width: 15px; height: 15px; }
 /* 选择游戏模式 */
-.mode-list { display: flex; flex-direction: column; gap: 8px; }
-.mode-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface-solid); color: var(--text); text-align: left; cursor: pointer; transition: border-color .18s, box-shadow .2s, transform .22s var(--spring); }
+.msel-left > .msel-head, .msel-left > .msel-lh, .msel-left > .mode-list, .msel-left > .mode-sep, .msel-left > .msel-note { flex: none; }
+/* 矮屏（横屏手机）：高度不够，模式卡收成一行，存档列表自己滚动 */
+@media (max-height: 540px) {
+  .mode-list { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .mode-card { min-height: 0; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 7px 9px; }
+  .mode-ico { width: 22px; height: 22px; border-radius: 7px; margin-bottom: 0; }
+  .mode-ico .ico { width: 13px; height: 13px; }
+  .mode-tx { gap: 0; }
+  .mode-tx b { font-size: 12.5px; }
+  .mode-tx small, .msel-note, .msel-lh .tiny { display: none; }
+  .mode-sep { margin: 8px 0 6px; }
+  .old-list { flex: 1 1 auto; }
+  .old-row { padding: 6px 10px; }
+  .old-row .badge { width: 26px; height: 26px; border-radius: 8px; }
+  .old-tx b { font-size: 12.5px; }
+  .old-tx small { font-size: 11px; }
+}
+.mode-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mode-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; min-height: 124px; padding: 10px 11px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--surface-solid); color: var(--text); text-align: left; cursor: pointer; transition: border-color .18s, box-shadow .2s, transform .22s var(--spring); }
 .mode-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); border-color: var(--line-strong); }
 .mode-card.primary { border-color: var(--accent); box-shadow: var(--ring); }
 .mode-card:active { transform: scale(.99); }
-.mode-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; flex: none; }
-.mode-ico .ico { width: 20px; height: 20px; }
-.mode-tx { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.mode-tx b { font-size: 15px; }
-.mode-tx small { font-size: 12px; color: var(--muted); }
-.mode-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.mode-card > .ico:last-child { color: var(--faint); width: 16px; height: 16px; }
+.mode-ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; flex: none; margin-bottom: 2px; }
+.mode-ico .ico { width: 15px; height: 15px; }
+.mode-tx { display: flex; flex-direction: column; gap: 1px; min-width: 0; width: 100%; }
+.mode-tx b { font-size: 13.5px; }
+.mode-tx small { font-size: 11px; color: var(--muted); line-height: 1.35; }
+/* 打开以前的存档 */
+.mode-sep { height: 1px; background: var(--line); margin: 14px 0 12px; flex: none; }
+.old-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 0 1 auto; min-height: 0; max-height: 34vh; -webkit-overflow-scrolling: touch; }
+.old-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--text); text-align: left; cursor: pointer; transition: border-color .16s, background .16s; }
+.old-row:hover { border-color: var(--accent); background: var(--hover); }
+.old-row .badge { width: 30px; height: 30px; border-radius: 9px; flex: none; }
+.old-row .badge .ico { width: 16px; height: 16px; }
+.old-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.old-tx b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.old-tx small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.old-row .tag { flex: none; }
 .msel-detail { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface-solid); }
 .msel-dwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .msel-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 10px; }

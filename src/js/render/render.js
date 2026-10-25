@@ -123,7 +123,7 @@
     this.th = TH; this.themeName = 'light';
     this.mapLabelsOn = true; this.agentsOn = true;
     this.fx = [];
-    this.detail = { tier: 0, ema: 8, busy: 0, calm: 0 };
+    this.detail = { tier: 0, ema: 8, busy: 0, calm: 0, hold: 0, jitter: 0, since: -1e9 };
     this.shadows = true;
     this.bldDensity = 'full';
     this.modelDetail = 'high'; this.renderRes = 'high';
@@ -201,15 +201,22 @@
     const d = this.detail, elapsed = Math.min(0.1, dt || 1 / 60), mq = this.modelQo();
     // 缩放缓动期间不改档位：档位一变分块与地铁层缓存整体作废，交互中等于自己给自己加活
     if (Math.abs(this.cam.zoom - this.cam.tz) > 1e-3) return;
+    // 迟滞带：升档门槛是 hot，降回去的门槛压在 hot 之下、落在 calm 之上的死区里。
+    // 没有死区的话，帧耗时只要在 hot 附近抖，两个计数器就同时在累加，档位在相邻两档之间来回跳；
+    // 而档位一动，车辆与行人密度跟着跳，看着就是整片画面粗细反复变化。真抖成一片时每秒最多来回一次
+    if (d.jitter == null) d.jitter = 0;
+    const lvl0 = d.tier;
+    if (d.tier > 0 && d.calm > 1.1) { d.tier = 0; d.calm = 0; }
+    d.hold = mq.hot - (mq.hot - mq.calm) * 0.6;
     const work = this.lastFrameMs == null ? (this.lastRenderMs || 0) : this.lastFrameMs;
     const missedFrame = dt > 1 / 45 ? dt * 1000 : 0;
     const cost = Math.min(100, Math.max(work, missedFrame, this.cachePx + this.bigPx() > CFG.perf.cacheMaxPx ? 20 : 0));
     d.ema += (cost - d.ema) * 0.12;
     d.busy = d.ema > mq.hot ? d.busy + elapsed : Math.max(0, d.busy - elapsed * 2);
-    d.calm = d.ema < mq.calm ? d.calm + elapsed : 0;
-    if (d.busy > 0.35 && d.tier < mq.maxTier) { d.tier++; d.busy = 0; d.calm = 0; }
-    if (d.calm > 1.1 && d.tier > 0) { d.tier--; d.calm = 0; }
-    this.stats.detailTier = d.tier;
+    d.calm = d.ema < d.hold ? d.calm + elapsed : 0;
+    if (d.busy > 0.35 && d.tier < mq.maxTier) { d.tier++; d.busy = 0; d.calm = 0; d.since = this.time; }
+    if (d.tier !== lvl0) d.jitter = d.since != null && this.time - d.since < 8 ? d.jitter + 1 : 0;
+    if (d.jitter < 3) this.stats.detailTier = d.tier;
     this.stats.modelQuality = this.modelDetail + '/' + this.renderRes;
   };
   // 内部渲染分辨率自适应：整帧成本（全画布填充、分块放大贴图、地铁层与标注层整屏位图）都跟屏幕画布的
@@ -305,9 +312,13 @@
     // 迟滞带不跟着自动降档走：档位在相邻两档之间来回跳时，每跳一次都要重建视口内全部分块，
     // 上一档的块全成垃圾。这里只在跨过一整档时才换，同样的缩放抖动不会让 target 逐帧变化
     const previous = this.requestedLevel;
-    if (previous && target) {
-      if (target > previous && need <= previous * 1.35) target = previous;
-      else if (target < previous && need >= previous / 2 * 0.82) target = previous;
+    // 0 也是一档（最远只贴整城底图）。缩放拉到最远时精度正好停在 5 这条线上，而 5 以下整档清零，
+    // 没有迟滞就会在「底图」和「分块」之间逐帧来回翻——这就是缩到能看见全图时背景在高低两种画质
+    // 之间闪的来源。把 0 当成比最低分块（LEVELS[0]）再粗一档来算迟滞，边界两侧都留出死区
+    if (previous != null) {
+      const lo = previous > 0 ? previous : LEVELS[0] / 2;
+      if (target > previous && need <= lo * 1.35) target = previous;
+      else if (target < previous && need >= lo / 2 * 0.82) target = previous;
     }
     this.requestedTier = this.detail.tier;
     this.requestedLevel = target;
@@ -319,11 +330,16 @@
     // 显示中的档位有缺口由地面/建筑循环自己补（有低分辨率块可贴就先贴），缩放停下后这里再统一补建并换档。
     // 平移时档位不变，补的块之后还要用，照常预建。开了实时 LOD 就照常预建——档位本来就跟着缩放走。
     const staging = this.lodLive || !this.zoomEasing;
-    let ready = true;
+    let ready = true, needGround = false, needBuildings = false;
     // 每帧入队的补块有硬上限：档位在抖动或视口很大时，一帧把上百块全排进来就会连着重建上百张分块位图，
     // 上一帧刚建好这一帧又换档，分配量按帧翻倍。剩下的留给后面几帧，画面慢一点但内存不失控
     let room = CFG.perf.chunkPerFrame || 12;
     const C = CHUNK_PX / target;
+    // 地面分块同理：一个档位在缩小到能看见全图时要铺三四十块，而每帧只补得进十块左右，只等铺满会一直等不到。
+    // 先有地面才谈得上建筑，所以这里也按时限放行，缺的由后面的补块循环接着补
+    const waitMs = CFG.perf.lodWaitMs || 650;
+    if (this._lgLvl !== target) { this._lgLvl = target; this._lgAt = performance.now(); }
+    let lack = 0;
     const ci0 = Math.max(0, Math.floor(bounds.x0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(bounds.x1 / C));
     const cj0 = Math.max(0, Math.floor(bounds.y0 / C)), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(bounds.y1 / C));
     for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) {
@@ -332,24 +348,34 @@
       if (e) e.used = this.frame; // Protect completed staging tiles until the atomic handover.
       if (!e || e.stale) {
         ready = false;
+        lack++;
         if (staging && room > 0) { room--; queue.push({ kind: 'g', key: key, lvl: target, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - this.cam.cx) + Math.abs((cj + 0.5) * C - this.cam.cy) - 1 }); }
       }
     }
+    this.stats.groundLack = lack;
+    if (lack && performance.now() - this._lgAt <= waitMs) needGround = true;
     const staged = [];
     if (buildings) {
       const size = this.isoChunkGeom(target);
       const x0 = Math.max(0, Math.floor(bounds.x0 / size) - 1), x1 = Math.min(Math.ceil(CFG.W / size) - 1, Math.floor(bounds.x1 / size) + 1);
       const y0 = Math.max(0, Math.floor(bounds.y0 / size) - 1), y1 = Math.min(Math.ceil(CFG.H / size) - 1, Math.floor(bounds.y1 / size) + 1);
+      // 视野里要铺满的这一个档位可能装着几十甚至上百个建筑分块（缩小到能看见全图时），而每帧只补得进十几块，
+      // 只等「全部铺满」的话永远等不到，这一档就一直换不上；更糟的是每退一块旧档分块就标一次需重建，退了又建。
+      // 于是给等待设时限：等过一阵就按已有的块直接换档，缺的由换档后的循环接着补
+      let lack = 0;
       for (let cj = y0; cj <= y1; cj++) for (let ci = x0; ci <= x1; ci++) {
         const key = 'i' + target + ':' + ci + ':' + cj, e = this.iso.get(key);
         if (!this.isoVisible(e, target, ci, cj, size)) continue;
         if (e) { e.used = this.frame; staged.push(e); }
         if (!e || e.stale) {
-          ready = false;
+          lack++;
           if (staging && room > 0) { room--; queue.push({ kind: 'i', key: key, lvl: target, ci: ci, cj: cj, C: size, d: Math.abs((ci + 0.5) * size - this.cam.cx) + Math.abs((cj + 0.5) * size - this.cam.cy) - 1.5 }); }
         }
       }
+      this.stats.chunksLack = lack;
+      if (lack && performance.now() - this._lgAt <= waitMs) needBuildings = true;
     }
+    if (needGround || needBuildings) ready = false;
     if (ready) {
       this.displayedLevel = target;
       for (const e of staged) e.born = this.time - 1;
@@ -496,7 +522,7 @@
     if (this._atmo) this._atmo.width = this._atmo.height = 1;
     this._atmoKey = '';
     this._hd = null; this._hdCity = null; this._lmc = null; this._lmcCity = null;
-    this.lastFrameMs = null; this.detail = { tier: 0, ema: 8, busy: 0, calm: 0 };
+    this.lastFrameMs = null; this.detail = { tier: 0, ema: 8, busy: 0, calm: 0, hold: 0, jitter: 0, since: -1e9 };
     this.roadVer = g ? g.city.roadVersion : -1;
     // 换城市（含换地图）时清掉按城市版本号缓存的数据，避免不同城市的版本号恰好相同
     this.linkGrid = null; this.linkGridVer = -1; this._cgIdx = null; this._cgRuns = null; this._fa = null; this._fl = null; this._flKey = null;
@@ -1094,7 +1120,11 @@
     ctx.fillStyle = GROUND.water;
     const city = this.game.city;
     for (let c = 0; c < city.N; c++) if (city.lu[c] === LU.WATER) ctx.fillRect((c % city.W) * lvl, ((c / city.W) | 0) * lvl, lvl, lvl);
-    this.overview = cv; this.overviewStale = false; this.overviewAt = performance.now();
+    // 新底图不能一建好就挂上去：这张画布此刻只有陆地与水的底色，地形要分二十来帧才补满，
+    // 而它一旦成了 this.overview 就会被直接铺到屏幕上，等于每重建一次背景就退化成粗糙的纯色再长回来。
+    // 缩到能看见全图时这一张就是整个背景，看着就是高低两种画质来回闪。旧的留到新图整张画完再交接
+    if (!this.overview) this.overview = cv;
+    this.overviewStale = false; this.overviewAt = performance.now();
     this.overviewJob = { cv: cv, row: 0, version: city.version };
   };
   Renderer.prototype.stepOverview = function () {
@@ -1104,7 +1134,7 @@
     ctx.save(); ctx.setTransform(4, 0, 0, 4, 0, 0); ctx.beginPath(); ctx.rect(0, y0, CFG.W, y1 - y0); ctx.clip();
     this.drawGround(ctx, 0, y0, CFG.W, y1, 4); ctx.restore();
     job.row = y1;
-    if (y1 >= CFG.H) { this.overviewJob = null; this.overviewAt = performance.now(); this.overviewStale = job.version !== this.game.city.version; }
+    if (y1 >= CFG.H) { this.overview = job.cv; this.overviewJob = null; this.overviewAt = performance.now(); this.overviewStale = job.version !== this.game.city.version; }
   };
 
   // ---------------- 等距建筑分块 ----------------
@@ -2050,9 +2080,11 @@
     ctx.globalAlpha = groundAlpha;
     ctx.imageSmoothingEnabled = true;
     const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.px, dpr * this.py);
-    const detailScale = z >= 28 ? 1 : (this.detail.tier === 2 ? 0.68 : this.detail.tier === 1 ? 0.85 : 1);
     const mq = this.modelQo();
-    const baseEff = z * Math.min(dpr, mq.dprCap) * (1 - 0.28 * t) * detailScale;
+    // 注意这里不能再乘自动降档系数（detail.tier 那套 0.85 / 0.68）：档位是随帧耗时来回变的，
+    // 一旦它参与算精度，档位抖一下背景就要整体换档重铺，看起来就是地图在高低两种质量之间闪。
+    // 自动降档只管车辆与行人的密度、地铁细节，不碰地面与建筑的分块精度
+    const baseEff = z * Math.min(dpr, mq.dprCap) * (1 - 0.28 * t);
     const lodMul = mq.lod;
     // 高性能模式按较低的精度铺地面与模型分块；最远视野仍保底一层分块，避免整城建筑直接消失
     let eff = Math.max(baseEff * lodMul, Math.min(baseEff, 6));

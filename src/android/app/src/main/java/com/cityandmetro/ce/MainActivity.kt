@@ -192,15 +192,21 @@ class MainActivity : AppCompatActivity(), ShellApi.Host {
             })();
         """.trimIndent()
 
-        // desktop.js 找的是 window.pywebview.api；这里把注入对象的 API 面拼成同一个形状
+        // desktop.js 找的是 window.pywebview.api；这里把注入对象的 API 面拼成同一个形状。
+        // 注入对象的 call 只收得下 JSON 文本、也只回 JSON 文本，这一层统一编码解码：
+        // 前端拿到的参数和返回值就是桌面版 pywebview 那样的原生对象
         val shape = """
             (function(){
               if(window.pywebview && window.pywebview.api) return;
               var raw = window.pywebviewApiJs;
               if(!raw) return;
+              var decode = function (text) {
+                if (typeof text !== 'string') return text;
+                try { return JSON.parse(text); } catch (e) { return { ok: false, error: '外壳返回的内容不是 JSON：' + text }; }
+              };
               var api = {};
               ${ShellApiMethods.METHODS.joinToString("\n              ") { m ->
-            "api['$m'] = function(){ return raw.call('$m', Array.prototype.slice.call(arguments)); };"
+            "api['$m'] = function(){ return decode(raw.call('$m', JSON.stringify(Array.prototype.slice.call(arguments)))); };"
         }}
               window.pywebview = { api: api };
               window.dispatchEvent(new Event('pywebviewready'));
@@ -215,7 +221,10 @@ class MainActivity : AppCompatActivity(), ShellApi.Host {
         @JavascriptInterface
         fun call(name: String, args: String): String {
             val arr = runCatching { JSONArray(args) }.getOrNull() ?: JSONArray()
-            val arg = { i: Int -> if (i < arr.length()) arr.opt(i) else null }
+            // 缺省的参数与 JSON null 都当「没传」，别把 "null" 这串字面量塞给 api
+            val arg = { i: Int ->
+                if (i < arr.length()) arr.opt(i).let { if (it == null || it == JSONObject.NULL) null else it } else null
+            }
             val result: Any = when (name) {
                 "app_info" -> api.app_info()
                 "log_client" -> api.log_client(arg(0)?.toString())

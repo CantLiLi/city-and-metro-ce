@@ -2,7 +2,7 @@
 
 APP_NAME = '城市与地铁社区版'
 APP_ID = 'city-and-metro-ce'
-VERSION = '2.1.3'
+VERSION = '2.1.4'
 UPDATE_INFO = ["修复了macOS的已知问题",
                "实验性多进程计算时间步进(多进程计算出现错误时请选择单进程计算)",
                "更多的画质选项",

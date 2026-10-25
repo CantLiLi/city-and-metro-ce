@@ -122,6 +122,26 @@
   #zoomCtl .zbtn { width: 38px; height: 38px; min-width: 38px; }
 }
 
+/* 横屏手机：保留竖屏的紧凑尺寸，但排布回到桌面式——操作按钮贴右上、详情面板贴右侧、时间条回到底部右下 */
+@media (max-width: 760px) and (orientation: landscape) {
+  #hudTop > .spacer { display: block; }
+  #hudTop { flex-wrap: nowrap; }
+  /* 详情面板：右侧一列，不再是底部抽屉；关闭时向右侧收起 */
+  #rightPanel { top: calc(92px + env(safe-area-inset-top)); left: auto; right: calc(8px + env(safe-area-inset-right)); bottom: calc(60px + env(safe-area-inset-bottom)); width: min(360px, 54vw); max-height: none; padding-bottom: 0; border-radius: 16px; }
+  #rightPanel.closed { transform: translateX(calc(100% + 20px)); }
+  #rightPanel::before { display: none; }
+  /* 时间条与建设工具栏、缩放条同处底部一行；宽度不足以放下 +1月 / +1年 / +N月 */
+  #timeBar { bottom: calc(8px + env(safe-area-inset-bottom)); right: calc(8px + env(safe-area-inset-right)); padding: 3px; gap: 3px; }
+  #timeBar .jumps { display: none; }
+  #toolbar { bottom: calc(8px + env(safe-area-inset-bottom)); padding: 3px; }
+  .tbtn { width: 40px; height: 40px; border-radius: 12px; }
+  #toolbar .tind { top: 3px; height: calc(100% - 6px); border-radius: 12px; }
+  #zoomCtl { bottom: calc(8px + env(safe-area-inset-bottom)); padding: 3px; }
+  #zoomCtl .zbtn { width: 32px; height: 30px; min-width: 32px; }
+  /* 提示条让出右侧面板的位置 */
+  #feed { right: calc(min(360px, 54vw) + 20px); }
+}
+
 /* 地理线网：保留原始地形轮廓，使用淡色让线路与车站保持清晰 */
 #netmap { --nm-water: #dcecf8; --nm-water-edge: #c3dcf0; --nm-green: #e6f2e2; --nm-wlabel: #6f9cc4; }
 :root[data-theme="dark"] #netmap { --nm-water: #1c3249; --nm-water-edge: #24405d; --nm-green: #1c2c26; --nm-wlabel: #6f95bd; }

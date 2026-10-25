@@ -80,9 +80,9 @@
 .start-sheet { position: relative; justify-self: center; align-self: center; padding: 4px; }
 /* 卡片默认停在起点（右侧偏外、透明），插入时不会先在终点露一帧；
    .sheet-in 把它滑到原位。只动位移和不透明度，不缩放 */
-.start-sheet > .card { --sheet-from: 160px; width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 32px); animation: none; transform: translateX(var(--sheet-from)); opacity: 0; }
-.start-sheet > .card.settings { width: min(980px, calc(100vw - 32px)); }
-.start-sheet > .card.solo { width: min(420px, calc(100vw - 32px)); }
+.start-sheet > .card { --sheet-from: 160px; zoom: var(--uiz, 1); width: min(470px, calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(100vh / var(--uiz, 1) - 32px); animation: none; transform: translateX(var(--sheet-from)); opacity: 0; }
+.start-sheet > .card.settings { width: min(980px, calc(100vw / var(--uiz, 1) - 32px)); }
+.start-sheet > .card.solo { width: min(420px, calc(100vw / var(--uiz, 1) - 32px)); }
 .start-sheet.sheet-in > .card { transition: transform .46s var(--ease), opacity .32s var(--ease); transform: translateX(0); opacity: 1; }
 .start-sheet.sheet-settled > .card { transform: translateX(0); opacity: 1; }
 .start-sheet.sheet-leave > .card { transition: transform .26s var(--ease), opacity .22s var(--ease); transform: translateX(var(--sheet-from)); opacity: 0; }
@@ -104,7 +104,7 @@
   #screen.start.sheet-open { grid-template-columns: minmax(0, 1fr); }
   .start-sheet { position: absolute; inset: 0; display: grid; place-items: center; padding: 8px; }
   /* 窄屏放不下两列：卡片从下往上滑，主菜单退到后面 */
-  .start-sheet > .card { --sheet-from: 0px; transform: translateY(40px); max-height: calc(100vh - 24px); }
+  .start-sheet > .card { --sheet-from: 0px; transform: translateY(40px); max-height: calc(100vh / var(--uiz, 1) - 24px); }
   .start-sheet.sheet-in > .card { transform: translateY(0); }
   .start-sheet.sheet-settled > .card { --sheet-from: 0px; transform: translateY(0); }
   .start-sheet.sheet-leave > .card { transform: translateY(40px); }
@@ -117,7 +117,7 @@
   /* 窄屏：列表贴在屏幕右侧竖着排，详情改在游戏内的「地图信息」里看 */
   #screen.start.sheet-open:has(.msel-sheet) { place-items: center stretch; padding-right: 12px; }
   .start-sheet:has(.msel-sheet) { position: relative; inset: auto; display: block; justify-self: end; align-self: stretch; }
-  .start-sheet:has(.msel-sheet) > .card { --sheet-from: 120px; transform: translateX(0); height: auto; max-height: calc(100vh - 24px); width: auto; }
+  .start-sheet:has(.msel-sheet) > .card { --sheet-from: 120px; transform: translateX(0); height: auto; max-height: calc(100vh / var(--uiz, 1) - 24px); width: auto; }
   .start-sheet.sheet-leave:has(.msel-sheet) > .card { transform: translateX(120px); }
   .msel-sheet { height: auto; max-height: 100%; }
   .msel-sheet .msel-left { height: 100%; border-right: 0; border-bottom: 0; padding: 12px 10px 10px; gap: 10px; }
@@ -140,8 +140,8 @@
    这时仍按开始界面的两列站位，让卡片停在原来的位置 */
 #screen.overlay { place-items: center; background: rgba(28, 46, 74, .14); backdrop-filter: blur(3px) saturate(.96); -webkit-backdrop-filter: blur(3px) saturate(.96); transition: opacity .3s var(--ease); }
 :root[data-theme="dark"] #screen.overlay { background: rgba(4, 8, 16, .34); }
-#screen.overlay > .card { zoom: var(--uiz, 1); width: min(470px, calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(100vh / var(--uiz, 1) - 32px); }
-#screen.overlay > .card.mapinfo { width: min(760px, calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(100vh / var(--uiz, 1) - 40px); }
+#screen.overlay > .card, #screen:not(.start) > .card { zoom: var(--uiz, 1); width: min(470px, calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(100vh / var(--uiz, 1) - 32px); }
+#screen.overlay > .card.mapinfo, #screen:not(.start) > .card.mapinfo { width: min(760px, calc(100vw / var(--uiz, 1) - 32px)); max-height: calc(100vh / var(--uiz, 1) - 40px); }
 #screen.overlay:not(.start) { place-items: center; }
 #screen.overlay .start-sheet { position: relative; justify-self: center; }
 @media (max-width: 900px) {

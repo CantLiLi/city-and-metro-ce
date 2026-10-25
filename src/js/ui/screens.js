@@ -69,22 +69,54 @@
   UI.prototype.showModeSelect = function () {
     const self = this;
     const back = function () { self.showStart(); };
-    const card = function (icon, badge, title, desc, tags, onclick) {
+    const card = function (icon, badge, title, desc, onclick) {
       return h('button', { class: 'mode-card', onclick: function () { snd('click'); onclick(); } },
         h('span', { class: 'mode-ico ' + badge }, ic(icon)),
-        h('div', { class: 'mode-tx' }, h('b', null, title), h('small', null, desc),
-          h('span', { class: 'mode-tags' }, tags.map(function (t) { return h('span', { class: 'tag' }, t); }))),
-        ic('chev', 18));
+        h('div', { class: 'mode-tx' }, h('b', null, title), h('small', null, desc)));
     };
     const left = h('div', { class: 'msel-left' },
       h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择游戏模式'), h('span', { class: 'grow' })),
       h('div', { class: 'msel-lh' }, ic('flag', 14), '模式'),
       h('div', { class: 'mode-list' },
-        card('sparkle', 'b-teal', '自由建造', '不限资金，随意布线看效果', ['无任务', '随便建'], function () { self._mode = 'free'; self.showMapSelect(null, 'free'); }),
-        card('trophy', 'b-orange', '经营挑战', '有限资金、任务目标与拨款结算', ['有目标', '有评级'], function () { self._mode = 'challenge'; self.showMapSelect(null, 'challenge'); })),
-      h('span', { class: 'grow' }),
-      h('div', { class: 'msel-note' }, '选定模式后进入地图列表。'));
+        card('sparkle', 'b-teal', '自由建造', '不限资金，随意布线看效果', function () { self._mode = 'free'; self.showMapSelect(null, 'free'); }),
+        card('trophy', 'b-orange', '经营挑战', '有限资金、任务目标与拨款结算', function () { self._mode = 'challenge'; self.showMapSelect(null, 'challenge'); })),
+      h('div', { class: 'mode-sep' }),
+      h('div', { class: 'msel-lh' }, ic('folder', 14), '以前的存档'),
+      this.oldSaveList(),
+      h('div', { class: 'msel-note' }, '存档可以直接打开，也可以继续在该进度上玩。'));
     this.openSheet(h('div', { class: 'card msel-card', tabindex: '-1' }, left), { esc: function () { self.closeSheet(); }, back: back });
+  };
+  // 选定模式下方：直接列出存档目录里的所有存档（跨地图、跨模式），点一条就打开
+  UI.prototype.oldSaveList = function () {
+    const self = this;
+    const box = h('div', { class: 'old-list' });
+    const all = CM.Save.list();
+    if (!all.length) {
+      box.appendChild(h('div', { class: 'note' }, CM.Save.indexOk() ? '还没有任何存档。' : CM.Save.describeFailure()));
+      return box;
+    }
+    for (const gm of all) {
+      const mp = CM.MAPS[gm.map || 'gz'] || {};
+      for (const sl of gm.slots) {
+        const free = sl.mode === 'free';
+        const kind = sl.kind === 'auto' ? '自动' : sl.kind === 'backup' ? '备份' : '手动';
+        box.appendChild(h('button', { class: 'old-row', title: sl.key || sl.slotId, onclick: function () {
+          snd('click');
+          self.showLoading('正在打开存档…');
+          CM.Save.load(sl.slotId).then(function (d) { self.closeSheet(); CM.loadGame(d); }, function (e) {
+            self.closeSheet();
+            self.toast((e && e.message) || '存档读不出来', 'bad');
+          });
+        } },
+          h('span', { class: 'badge ' + (free ? 'b-teal' : 'b-orange') }, ic(free ? 'sparkle' : 'trophy')),
+          h('div', { class: 'old-tx' },
+            h('b', null, gm.name),
+            h('small', null, (mp.name || gm.map || '') + ' · ' + sl.date[0] + '年' + sl.date[1] + '月 · ' + kind + ' · ' + (sl.label || ''))),
+          h('span', { class: 'tag' }, free ? '自由' : '经营'),
+          ic('chev', 16)));
+      }
+    }
+    return box;
   };
 
   // ======================== 选择地图 ========================
