@@ -4,11 +4,11 @@
    ====================================================================== */
 @media (max-width: 760px) {
   #hudTop { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; flex-wrap: wrap; gap: 6px; align-items: center; }
-  /* 窄屏指标换到第二行占满宽度，操作按钮仍在右上 */
+  /* 窄屏指标条仍居中，但整体下移，避免和日期、操作按钮挤在同一行 */
   #hudTop > .spacer { display: none; }
-  #hudTop > .cluster.metrics { order: 3; flex: 1 1 100%; }
+  #hudMetrics { top: calc(64px + env(safe-area-inset-top)); }
   .citybar { flex: 0 1 auto; min-width: 0; padding: 4px; gap: 4px; }
-  .citybar .speed { margin-left: auto; }
+  #timeBar { left: 8px; right: 8px; bottom: calc(84px + env(safe-area-inset-bottom)); flex-wrap: wrap; justify-content: center; }
   .brand { width: 36px; height: 36px; border-radius: 11px; }
   .brand img { width: 28px; height: 28px; }
   .pill { height: 38px; padding: 3px 8px 3px 4px; gap: 6px; }
@@ -17,12 +17,8 @@
   .dayring { width: 30px; height: 30px; }
   .dayring .ico { inset: 7px; width: 16px; height: 16px; }
   .speed .sbtn { height: 30px; min-width: 32px; padding: 0 6px; }
-  .cluster.metrics { flex: 1 1 0; padding: 3px; }
+  .cluster.metrics { padding: 3px; }
   .cluster.actions { padding: 3px; }
-  /* 收起后的 bar 只剩一个小按钮：别占满一行，也别被上面的 100% 宽度带走 */
-  .cluster.collapsed { flex: none; }
-  .citybar.collapsed { flex: 0 0 auto; }
-  .cluster.collapsed .barfold.on { width: 38px; height: 36px; }
   .hbtn { width: 36px; height: 38px; }
   .hbtn.wide-only { display: none; }
   #dock { top: calc(104px + env(safe-area-inset-top)); left: 8px; width: 46px; padding: 4px; gap: 2px; max-height: calc(100vh - 260px); }
@@ -41,10 +37,10 @@
   #zoomCtl::-webkit-scrollbar { display: none; }
   #zoomCtl .zbtn { width: 36px; height: 34px; min-width: 32px; }
   #zoomCtl .zsep { margin: 0 2px; height: 18px; }
-  #feed { top: calc(110px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
+  #feed { top: calc(150px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
   #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
   .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
-  #coach { top: calc(104px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; gap: 6px; padding: 10px 12px 9px; border-radius: 14px; }
+  #coach { top: calc(150px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; gap: 6px; padding: 10px 12px 9px; border-radius: 14px; }
   #coach.mini { width: calc(100vw - 68px); }
   #coach .co-step { font-size: 11.5px; }
   #coach .co-title { font-size: 14px; line-height: 1.35; }
@@ -71,6 +67,10 @@
   .msel-left { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 12px 10px; gap: 9px; }
   .msel-list { flex-direction: row; overflow-x: auto; overflow-y: hidden; flex: none; margin: 0 -12px; padding: 2px 12px 6px; }
   .msel-item { width: 236px; }
+  .msel-modes { flex-direction: row; gap: 5px; padding: 6px; }
+  .msel-modes .map-mode { width: auto; flex: 1 1 0; }
+  .msel-modes .map-mode small { display: none; }
+  .mode-tx small { display: none; }
   .msel-thumb { width: 72px; height: 54px; }
   .msel-note { display: none; }
   .msel-scroll, .brief-scroll { padding: 12px 12px 8px; }

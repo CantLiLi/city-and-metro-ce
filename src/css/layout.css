@@ -123,6 +123,11 @@
   .msel-sheet .msel-list { flex-direction: column; overflow-x: hidden; overflow-y: auto; flex: 1 1 auto; min-height: 0; margin: 0 -6px; padding: 2px 6px 4px; }
   .msel-sheet .msel-item { width: auto; }
   .msel-sheet .msel-thumb { width: 44px; height: 32px; border-radius: 8px; }
+  .msel-sheet .msel-modes { gap: 4px; padding: 5px; }
+  .msel-sheet .msel-modes .map-mode { padding: 7px 8px; gap: 7px; }
+  .msel-sheet .msel-modes .map-mode small, .msel-sheet .msel-modes .map-mode .badge { display: none; }
+  .msel-sheet .msel-modes .map-mode b { font-size: 12px; white-space: nowrap; }
+  .msel-sheet .msel-modes .map-mode > .ico { width: 13px; height: 13px; }
   .msel-sheet .msel-it b { font-size: 12px; white-space: nowrap; }
   .msel-sheet .msel-it small, .msel-sheet .msel-meta, .msel-sheet .msel-count { display: none; }
   .msel-sheet .msel-head h2 { font-size: 14px; }

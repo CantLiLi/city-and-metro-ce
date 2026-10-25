@@ -74,8 +74,8 @@ body.has-coach #legendCard { top: calc(84px + var(--coach-h, 0px) * var(--uiz, 1
 #followCard .fc-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 #followCard .fc-acts kbd { margin-left: 4px; }
 body.following #toolbar, body.following #buildStack { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(20px); }
-body.cinema #hudTop, body.cinema #dock, body.cinema #legendCard, body.cinema #zoomCtl, body.cinema #rightPanel, body.cinema #toolbar, body.cinema #buildStack, body.cinema #feed, body.cinema #coach { opacity: 0 !important; pointer-events: none !important; }
-#hudTop, #dock, #legendCard, #zoomCtl, #feed, #coach { transition: opacity .35s var(--ease); }
+body.cinema #hudTop, body.cinema #timeBar, body.cinema #hudMetrics, body.cinema #dock, body.cinema #legendCard, body.cinema #zoomCtl, body.cinema #rightPanel, body.cinema #toolbar, body.cinema #buildStack, body.cinema #feed, body.cinema #coach { opacity: 0 !important; pointer-events: none !important; }
+#hudTop, #timeBar, #hudMetrics, #dock, #legendCard, #zoomCtl, #feed, #coach { transition: opacity .35s var(--ease); }
 body.cinema #followCard { width: max-content; max-width: calc(100vw - 24px); min-width: 300px; padding: 9px 16px; background: rgba(12, 20, 32, 0.55); border-color: transparent; color: #fff; backdrop-filter: blur(6px); }
 body.cinema #followCard .fc-grid, body.cinema #followCard .fc-acts { display: none; }
 body.cinema #followCard .fc-dir, body.cinema #followCard .fc-hint { color: rgba(255, 255, 255, 0.78); }

@@ -45,11 +45,11 @@
     const wrap = h('div', { class: 'start-wrap' },
       title, edition, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
-        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),
+        btn('play', '开始游戏', function () { self.showModeSelect(); }, { primary: true, sub: '选择游戏模式' }),
         btn('clock', '继续游戏', function () { if (cont) self.loadLatest(); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : '暂无存档' }),
         btn('gear', '设置', function () { self.showSettings(); }),
         btn('power', '退出', function () { self.quitGame(); })),
-      CM.MAPS.tutorial ? h('button', { class: 'start-learn', onclick: function () { self.showMapSelect('tutorial'); } }, ic('help', 16), h('span', null, '第一次玩？先试试'), h('b', null, '新手教程 · 青湾'), ic('chev', 14)) : null,
+      CM.MAPS.tutorial ? h('button', { class: 'start-learn', onclick: function () { self._mapSel = 'tutorial'; self.showMapSelect('tutorial', 'free'); } }, ic('help', 16), h('span', null, '第一次玩？先试试'), h('b', null, '新手教程 · 青湾'), ic('chev', 14)) : null,
       !storageOk ? h('div', { class: 'callout bad', style: { marginTop: '14px' } }, ic('error'), h('div', { class: 'ct' }, '当前浏览器禁止本地存储，进度将无法自动保存。')) : null,
       h('div', { class: 'start-foot' }, '规划地铁、改变出行、塑造城市。', h('br'),
         h('a', { href: 'LICENSE.txt', target: '_blank', rel: 'noopener' }, '© 2026 VinsonFung · 仅限非商业使用'), h('br'),
@@ -64,53 +64,98 @@
     this.renderThemeBtns();
   };
 
+  // ======================== 选择游戏模式 ========================
+  // 自由建造只需选地图；经营挑战要再选一条难度档
+  UI.prototype.showModeSelect = function () {
+    const self = this;
+    const back = function () { self.showStart(); };
+    const card = function (icon, badge, title, desc, tags, onclick) {
+      return h('button', { class: 'mode-card', onclick: function () { snd('click'); onclick(); } },
+        h('span', { class: 'mode-ico ' + badge }, ic(icon)),
+        h('div', { class: 'mode-tx' }, h('b', null, title), h('small', null, desc),
+          h('span', { class: 'mode-tags' }, tags.map(function (t) { return h('span', { class: 'tag' }, t); }))),
+        ic('chev', 18));
+    };
+    const left = h('div', { class: 'msel-left' },
+      h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择游戏模式'), h('span', { class: 'grow' })),
+      h('div', { class: 'msel-lh' }, ic('flag', 14), '模式'),
+      h('div', { class: 'mode-list' },
+        card('sparkle', 'b-teal', '自由建造', '不限资金，随意布线看效果', ['无任务', '随便建'], function () { self._mode = 'free'; self.showMapSelect(null, 'free'); }),
+        card('trophy', 'b-orange', '经营挑战', '有限资金、任务目标与拨款结算', ['有目标', '有评级'], function () { self._mode = 'challenge'; self.showMapSelect(null, 'challenge'); })),
+      h('span', { class: 'grow' }),
+      h('div', { class: 'msel-note' }, '选定模式后进入地图列表。'));
+    this.openSheet(h('div', { class: 'card msel-card', tabindex: '-1' }, left), { esc: function () { self.closeSheet(); }, back: back });
+  };
+
   // ======================== 选择地图 ========================
-  // 只负责挑一张地图：第一次点选中，再点一次才开局。地图的详细介绍在进入游戏后由右上角「地图信息」打开
-  UI.prototype.showMapSelect = function (selId) {
+  // 选中即进入：点哪张地图就用哪张开局
+  UI.prototype.showMapSelect = function (selId, mode, diff) {
     const self = this, all = CM.MAP_ORDER.slice();
     const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-    const back = function () { self.showStart(); };
-    let sel = selId && CM.MAPS[selId] ? selId : (this._mapSel && CM.MAPS[this._mapSel] ? this._mapSel : null);
+    let cur = mode || this._mode || 'challenge';
+    const back = function () { self.showModeSelect(); };
 
-    const list = h('div', { class: 'msel-list', role: 'listbox', 'aria-label': '地图' });
-    const items = {};
     const start = function (id) {
       const mp = CM.MAPS[id], y0 = mp.cfg.START.y;
       self._mapSel = id;
       snd('build');
       if (mp.tutorial) CM.newGame({ map: id, mode: 'free', tutorial: true, name: '新手教程 · ' + mp.data.city });
-      else CM.newGame({ map: id, mode: 'challenge', name: '经营挑战 · ' + mp.data.city + ' ' + y0 });
+      else if (cur === 'free') CM.newGame({ map: id, mode: 'free', name: '自由建造 · ' + mp.data.city + ' ' + y0 });
+      else CM.newGame({ map: id, mode: 'challenge', diff: diff || self._diff || 'normal', name: '经营挑战 · ' + mp.data.city + ' ' + y0 });
     };
+    const latest = function (id) {
+      const sl = CM.Save.latest(id);
+      if (!sl) return null;
+      return h('button', { class: 'map-mode sub', onclick: function (e) { e.stopPropagation(); snd('click'); CM.Save.load(sl.slotId).then(function (d) { CM.loadGame(d); }, function (err) { self.toast(err && err.message ? err.message : '存档读不出来', 'bad'); }); } },
+        h('span', { class: 'badge b-slate' }, ic('play')), h('div', { class: 'grow' }, h('b', null, '继续进度'), h('small', null, (sl.mode === 'free' ? '自由建造' : '经营挑战') + ' · ' + sl.date[0] + '年' + sl.date[1] + '月')),
+        h('span', { class: 'tag info' }, '最近'), ic('chev', 16));
+    };
+    const list = h('div', { class: 'msel-list', role: 'listbox', 'aria-label': '地图' });
+    const wraps = {};
     const mark = function () {
-      for (const id in items) { items[id].classList.toggle('on', id === sel); items[id].setAttribute('aria-selected', id === sel ? 'true' : 'false'); }
+      for (const id in wraps) {
+        const on = String(id) === String(selId);
+        const w = wraps[id];
+        w.it.classList.toggle('on', on);
+        w.it.setAttribute('aria-selected', on ? 'true' : 'false');
+        w.el.classList.toggle('open', on);
+        if (on && !w.modes.childElementCount) { const l = latest(id); if (l) w.modes.appendChild(l); }
+      }
     };
     for (const id of all) {
       const mp = CM.MAPS[id], n = CM.Save.list(id).length;
-      const it = h('button', { class: 'msel-item', role: 'option', 'data-id': id, onclick: function () { if (sel === id) start(id); else { sel = id; mark(); } } },
+      const it = h('button', { class: 'msel-item', role: 'option', 'data-id': id, onclick: function () { start(id); } },
         h('span', { class: 'msel-thumb' }, h('img', { alt: '', src: CM.mapThumb(id, theme) || '' }), mp.tutorial ? h('span', { class: 'msel-flag' }, '教程') : null),
         h('span', { class: 'msel-it' },
           h('b', null, mp.title || mp.name),
           h('small', null, mp.tagline || mp.sub),
           h('span', { class: 'msel-meta' }, h('span', { class: 'tag' }, mp.region || ''), levelEl(mp.difficulty || 2), n ? h('span', { class: 'msel-prog' }, ic('save', 12), n + ' 个进度') : null)),
         ic('chev', 16));
-      items[id] = it; list.appendChild(it);
+      const modes = h('div', { class: 'msel-modes' });
+      const el = h('div', { class: 'msel-map' }, it, modes);
+      wraps[id] = { el: el, it: it, modes: modes };
+      list.appendChild(el);
     }
+    let sel = selId && CM.MAPS[selId] ? selId : null;
     const left = h('div', { class: 'msel-left' },
-      h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图'), h('span', { class: 'grow' }), h('span', { class: 'msel-count' }, '共 ' + all.length + ' 张地图')),
-      h('div', { class: 'msel-lh' }, ic('map', 14), '地图', h('span', { class: 'tiny muted' }, '选中后再次点击进入')),
+      h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '重新选择模式', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图'), h('span', { class: 'grow' }), h('span', { class: 'msel-count' }, '共 ' + all.length + ' 张地图')),
+      h('div', { class: 'msel-lh' }, ic('map', 14), cur === 'free' ? '自由建造' : '经营挑战', h('span', { class: 'tiny muted' }, '点击地图开始')),
       list,
       h('div', { class: 'msel-note' }, '每张地图的进度与存档各自独立。'));
     mark();
     const card = h('div', { class: 'card msel-card', tabindex: '-1' }, left);
     const ids = all.slice();
+    let focused = sel || ids[0];
     card.addEventListener('keydown', function (e) {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
       e.preventDefault();
-      if (e.key === 'Enter') { if (sel) start(sel); return; }
-      const k = ids.indexOf(sel);
-      sel = ids[(k + (e.key === 'ArrowDown' ? 1 : -1) + ids.length) % ids.length];
+      if (e.key === 'Enter') { start(focused); return; }
+      const k = ids.indexOf(focused);
+      focused = ids[(k + (e.key === 'ArrowDown' ? 1 : -1) + ids.length) % ids.length];
+      selId = focused;
       mark();
-      if (items[sel].scrollIntoView) items[sel].scrollIntoView({ block: 'nearest' });
+      const w = wraps[focused];
+      if (w && w.el.scrollIntoView) w.el.scrollIntoView({ block: 'nearest' });
     });
     this.openSheet(card, { esc: function () { self.closeSheet(); }, back: back });
     requestAnimationFrame(function () { card.focus({ preventScroll: true }); });

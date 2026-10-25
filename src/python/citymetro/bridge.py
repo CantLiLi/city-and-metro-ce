@@ -330,8 +330,8 @@ class ShellApi:
     def save_latest(self, with_text):
         # 哪个文件最新由这一侧判定：主页面只要结论，继续游戏时连正文一起给
         res = self._store.latest(with_text)
-        log.info('save_latest(%s) -> ok=%s slot=%s', with_text, res.get('ok'),
-                 (res.get('slot') or {}).get('key'))
+        log.debug('save_latest(%s) -> ok=%s slot=%s', with_text, res.get('ok'),
+                  (res.get('slot') or {}).get('key'))
         return res
 
     def save_slot_write(self, key, text):

@@ -94,7 +94,6 @@
     return true;
   };
   Tools.prototype.onDown = function (e) {
-    if (this.ui && this.ui.closeFolds) this.ui.closeFolds(e);   // 地图上按下即收起顶栏的折叠条
     const g = this.game(); if (!g) return;
     try { if (this.R.cv.setPointerCapture) this.R.cv.setPointerCapture(e.pointerId); } catch (err) { /* 指针已失效时忽略 */ }
     this.ptr = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: false, shift: e.shiftKey, alt: e.altKey, t: performance.now() };

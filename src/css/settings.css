@@ -122,7 +122,7 @@
 .batch-pv > b { display: block; margin-bottom: 4px; }
 
 /* 线路示意图 */
-.nm-win { width: min(1560px, calc(100vw - 24px)); height: calc(100vh - 24px); }
+.nm-win { zoom: var(--uiz, 1); width: min(1560px, calc(100vw / var(--uiz, 1) - 24px)); height: calc(100vh / var(--uiz, 1) - 24px); }
 #netmap { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(8, 14, 26, 0.38); backdrop-filter: blur(6px); --nm-xfer: #1b365c; }
 #netmap.hidden { display: none; }
 :root[data-theme="dark"] #netmap { --nm-xfer: #e5ecf6; }

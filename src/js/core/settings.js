@@ -24,7 +24,6 @@
     sound: true, volume: 0.6,   // 总开关与总音量
     trainVol: 0.7, ambVol: 0.6, // 列车音效、城市环境音（v2.0）
     autosave: true,
-    hudBars: null,        // 顶栏三个 bar 的展开状态：{ city: 1, metrics: 1, actions: 1 }，缺省表示收起
   };
   let cur = Object.assign({}, DEF);
   try {

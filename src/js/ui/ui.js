@@ -76,19 +76,16 @@
     this.pills.date = { el: datePill, v: dateV, k: dateK };
     this.tbtns = {};
     const jmp = function (id, label, n, tip) { const b = h('button', { class: 'jbtn', 'data-tip': tip, onclick: function () { if (typeof n === 'function') n(); else self.jump(n); } }, label); self.tbtns[id] = b; return b; };
-    // 速度档：前三档常显（0.5× / 1× / 2×），其余收在箭头里，选中后自动收起；末位固定一个「自定义」入口
+    // 速度档：三档常显（0.5× / 1× / 2×），末位一个按钮呼出自定义倍速
     const SPD = CFG.time.speeds;
     const pauseBtn = h('button', { class: 'sbtn pz', 'data-tip': '暂停 / 继续', 'data-key': '空格', onclick: function () { self.togglePause(); } }, ic('pause'));
     this.tbtns.pause = pauseBtn;
     this.speedBtn = function (v, n) {
-      const b = h('button', { class: 'sbtn', 'data-tip': v + ' 倍速' + (v === 1 ? ' · 正常速度' : ''), 'data-key': String(n), onclick: function () { self.setSpeed(n); } }, v + '×');
+      const b = h('button', { class: 'sbtn', 'data-tip': v + ' 倍速' + (v === 1 ? ' · 正常速度' : ''), onclick: function () { self.setSpeed(n); } }, v + '×');
       self.tbtns['s' + n] = b; return b;
     };
-    this.spdBtns = SPD.map(function (v, i) { return self.speedBtn(v, i + 1); });
-    this.speedCur = h('span', { class: 'fl' }, '');
-    this.speedArrow = h('button', { class: 'foldarrow', 'data-tip': '更多加速档位', onclick: function (e) { e.stopPropagation(); self.toggleFold('speed'); } }, ic('chev'), this.speedCur);
+    this.spdBtns = SPD.slice(0, 3).map(function (v, i) { return self.speedBtn(v, i + 1); });
     this.speedCustom = h('button', { class: 'sbtn wide', 'data-tip': '自定义倍速（可超过 1024×，不设上限）', onclick: function () { self.askSpeed(); } }, '自定义');
-    this.speedMore = h('div', { class: 'foldbar' }, this.spdBtns.slice(3), this.speedCustom);
     // 百分制指标用圆环：环里是图标，环的弧长表示占满值 100 的比例
     const ringPill = function (key, label, icon, tone) {
       const C = 2 * Math.PI * 11;
@@ -102,15 +99,8 @@
       self.pills[key] = { el: b, v: v, k: k, ring: wrap, arc: wrap.querySelector('.arc'), ico: ico, C: C, icon: icon };
       return b;
     };
-    // 顶栏每个 bar 都能收成一个小按钮：收起时只留这个按钮，图标标出是哪一块
-    this.barFold = {};
-    const barFold = function (key, icon, tip) {
-      const b = h('button', { class: 'barfold', 'data-tip': tip, onclick: function (e) { e.stopPropagation(); self.toggleBar(key); } }, ic(icon));
-      self.barFold[key] = b;
-      return b;
-    };
-    // 指标：全部常显
-    this.metricsGroup = h('div', { class: 'cluster glass metrics' },
+    // 指标：顶部居中常显
+    this.metricsGroup = h('div', { id: 'hudMetrics', class: 'hud hidden glass cluster metrics' },
       pill('money', '资金', 'coin', 'b-gold'), pill('pop', '人口', 'people', 'b-blue'),
       pill('econ', '经济增长', 'trend', 'b-violet'), pill('cong', '拥堵指数', 'car', 'b-orange'),
       ringPill('sat', '满意度', 'smile', 't-good'), ringPill('share', '地铁分担率', 'metro', 't-teal'));
@@ -124,37 +114,24 @@
     const planBtn = hb('plans', 'layers', '方案：分步规划要建设的车站、线路与调整', function () { self.openTop('plans'); });
     planBtn.appendChild(this.planCnt);
     this.top = h('header', { id: 'hudTop', class: 'hud hidden' },
-      h('div', { class: 'cluster glass citybar' },
-        barFold('city', 'clock', '收起时间栏'),
-        h('div', { class: 'cluster-body' }, h('div', { class: 'cluster-in' },
-          h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁社区版' })),
-          datePill,
-          h('div', { class: 'speed' }, pauseBtn, this.spdBtns[0], this.spdBtns[1], this.spdBtns[2], this.speedArrow, this.speedMore),
-          h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'), jmp('custom', '+N月', function () { self.jumpCustom(); }, '自定义推进的月份数（同样按月度结算，结束后显示变化）'))))),
+      this.citybar = h('div', { class: 'cluster glass citybar' },
+        h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁社区版' })),
+        datePill),
       h('div', { class: 'spacer' }),
-      this.metricsGroup,
       this.actionsGroup = h('div', { class: 'cluster glass actions' },
-        barFold('actions', 'menu', '收起操作栏'),
-        h('div', { class: 'cluster-body' }, h('div', { class: 'cluster-in' },
-          hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
-          taskBtn,
-          planBtn,
-          hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
-          hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
-          hb('settings', 'gear', '设置', function () { self.showSettings(); }),
-          hb('menu', 'menu', '菜单', function (e) { self.showMenu(e.currentTarget); })))));
+        hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
+        taskBtn,
+        planBtn,
+        hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
+        hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
+        hb('settings', 'gear', '设置', function () { self.showSettings(); }),
+        hb('menu', 'menu', '菜单', function (e) { self.showMenu(e.currentTarget); })));
+    // 加速与时间推进单独成一条，停在右下角
+    this.timebar = h('div', { id: 'timeBar', class: 'hud glass hidden' },
+      h('div', { class: 'speed' }, pauseBtn, this.spdBtns[0], this.spdBtns[1], this.spdBtns[2], this.speedCustom),
+      h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'), jmp('custom', '+N月', function () { self.jumpCustom(); }, '自定义推进的月份数（同样按月度结算，结束后显示变化）')));
     // 窄屏（手机）顶栏只保留常用按钮：深浅模式与设置改在菜单中
     this.hbtns.theme.classList.add('wide-only'); this.hbtns.settings.classList.add('wide-only');
-    this.fold = {};
-    document.addEventListener('pointerdown', function (e) { self.closeFolds(e); }, true);
-    this.applyFold();
-    // 顶栏两个 bar 默认收起（只留各自小按钮），由玩家决定展开哪一个；状态记进设置
-    this.barOff = { city: true, metrics: true, actions: true };
-    const savedBars = CM.Settings.get('hudBars');
-    if (savedBars && typeof savedBars === 'object') {
-      for (const k in this.barOff) this.barOff[k] = !savedBars[k];
-    }
-    this.applyBarFold();
     // 左侧：视图（2D / 2.5D / 地下 / 线路图）与图层（一个按钮，弹出图层列表）
     const vb = function (id, icon, tip, key, onclick, cls) { const b = h('button', { class: 'dockbtn ' + (cls || 'view'), 'data-tip': tip, 'data-key': key || null, 'data-side': 'right', onclick: onclick }, ic(icon)); self.tbtns[id] = b; return b; };
     this.dock = h('aside', { id: 'dock', class: 'hud glass hidden' },
@@ -234,7 +211,7 @@
     this.statsEl = h('div', { id: 'stats', class: 'hidden' });
     this.fxLayer = h('div', { id: 'fxLayer' });
     this.jumpLayer = h('div', { id: 'jumpLayer', class: 'hidden' });
-    app.append(this.top, this.toolbar, this.dock, this.legendCard, this.zoomCtl, this.right, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.jumpLayer, this.screen);
+    app.append(this.top, this.timebar, this.metricsGroup, this.toolbar, this.dock, this.legendCard, this.zoomCtl, this.right, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.jumpLayer, this.screen);
     this.initTips();
     this.initPress();
     this.renderDock();
@@ -273,11 +250,11 @@
       }
     }
   };
-  // 顶栏按有效宽度收起次要内容（界面放大时同样适用）
+  // 顶栏、时间条与指标条按有效宽度收起次要内容（界面放大时同样适用）
   UI.prototype.layoutHud = function () {
     this.placeFeed();
     const w = window.innerWidth / (CM.Settings.get('uiScale') || 1);
-    for (const b of [1540, 1400, 1260, 1080, 960, 820]) this.top.classList.toggle('lt' + b, w < b);
+    for (const b of [1540, 1400, 1260, 1080, 960, 820]) { this.top.classList.toggle('lt' + b, w < b); this.timebar.classList.toggle('lt' + b, w < b); this.metricsGroup.classList.toggle('lt' + b, w < b); }
     for (const k in this.pills) this.pills[k].el.classList.remove('squeezed');
     const self = this; requestAnimationFrame(function () { self.fitHud(); if (self.dropdown && self.dropdown._place) self.dropdown._place(); });
   };
@@ -302,19 +279,29 @@
     b.setAttribute('data-tip', iso ? '切换到 2D 地图' : '切换到 2.5D 城市');
     b.classList.toggle('on', iso);
   };
-  // 指标栏放不下时，按优先级从低到高收起（经济 → 满意度 → 分担率 → 人口 → 拥堵）；
-  // 先放宽再收起：界面大小或窗口变化后，原先被收起的指标要能自己回来
+  // 指标条浮在顶部居中，放不下时按优先级从低到高收起（经济 → 满意度 → 分担率 → 人口 → 拥堵 → 资金）；
+  // 先放宽再收起：界面大小或窗口变化后，原先被收起的指标要能自己回来。两侧空间不够时整体缩小。
   UI.prototype.fitHud = function () {
-    const m = this.metricsGroup; if (!m || !m.clientWidth) return;
+    const m = this.metricsGroup; if (!m) return;
     const keys = ['econ', 'sat', 'share', 'pop', 'cong', 'money'];
     for (const k of keys) this.pills[k].el.classList.remove('squeezed');
+    m.style.maxWidth = '';
+    if (!m.clientWidth) return;
+    const zw = window.innerWidth / (CM.Settings.get('uiScale') || 1);
+    const bar = this.citybar, act = this.actionsGroup;
+    let room = zw;
+    if (bar && act && bar.offsetWidth && act.offsetWidth) {
+      const l = bar.getBoundingClientRect().right, r = act.getBoundingClientRect().left;
+      if (r > l) room = Math.min(room, (r - l) / (CM.Settings.get('uiScale') || 1) - 24);
+    }
+    if (room < zw - 1) m.style.maxWidth = Math.max(160, room) + 'px';
     for (const k of keys) {
       if (m.scrollWidth <= m.clientWidth + 1) break;
       const el = this.pills[k].el; if (getComputedStyle(el).display !== 'none') el.classList.add('squeezed');
     }
   };
   UI.prototype.showHUD = function (on) {
-    for (const el of [this.top, this.dock, this.right, this.toolbar, this.zoomCtl, this.feed, this.bstack]) {
+    for (const el of [this.top, this.timebar, this.metricsGroup, this.dock, this.right, this.toolbar, this.zoomCtl, this.feed, this.bstack]) {
       const inactive = !on || (el === this.right && el.classList.contains('closed'));
       if (inactive && el.contains(document.activeElement)) document.activeElement.blur();
       el.classList.toggle('hidden', !on);
@@ -736,10 +723,7 @@
     if (pz._paused !== (sp === 0)) { pz._paused = sp === 0; pz.innerHTML = ''; pz.appendChild(ic(sp === 0 ? 'play' : 'pause')); pz.setAttribute('data-tip', sp === 0 ? '继续' : '暂停'); }
     pz.classList.toggle('on', sp === 0);
     for (let i = 0; i < this.spdBtns.length; i++) this.spdBtns[i].classList.toggle('on', sp === i + 1);
-    // 当前档位落在折叠区时，箭头按钮直接显示倍速
-    const folded = sp > 3;
-    this.speedCur.textContent = folded ? CFG.time.speeds[sp - 1] + '×' : '';
-    this.speedArrow.classList.toggle('on', folded);
+    this.speedCustom.classList.toggle('on', sp > 3);
     this.tbtns.d2.classList.toggle('on', this.R.cam.view === 0);
     this.tbtns.iso.classList.toggle('on', this.R.cam.view === 1);
     this.tbtns.under.classList.toggle('on', this.R.cam.tu === 1);
@@ -754,14 +738,12 @@
     if (s !== g.speed) snd(s === 0 ? 'pause' : 'play');
     const was = g.speed;
     g.setSpeed(s);
-    if (this.fold && this.fold.speed) { this.fold.speed = false; this.applyFold(); }
     this.renderToolbar();
     if (s === 0 && was > 0 && !this.isSaved()) this.scheduleAutosave();   // 暂停时自动保存当前进度
   };
   UI.prototype.togglePause = function () { const g = this.g(); if (!g) return; this.setSpeed(g.speed > 0 ? 0 : (this.prevSpeed || 2)); };
   // 自定义倍速：不设上限；超过 2048× 先提示可能崩溃。自定义值占用档位表末尾的一个固定槽位。
   UI.prototype.askSpeed = function () {
-    if (this.fold && this.fold.speed) { this.fold = {}; this.applyFold(); }
     const self = this;
     this.prompt('自定义倍速', String(this.lastSpeed || 16), function (txt) {
       const v = Number(String(txt).replace(/[×xX\s]/g, ''));
@@ -781,70 +763,9 @@
       if (this.speedSlot == null) { SPD.push(v); this.speedSlot = SPD.length - 1; }
       else SPD[this.speedSlot] = v;
       idx = this.speedSlot;
-      this.rebuildSpeedBtns();
     }
     this.lastSpeed = v;
     this.setSpeed(idx + 1);
-  };
-  // 档位表变化后只重建折叠区：前 3 档常显按钮不变，「自定义」按钮始终在末尾
-  UI.prototype.rebuildSpeedBtns = function () {
-    const SPD = CFG.time.speeds, more = this.speedMore, self = this;
-    for (let i = 3; i < this.spdBtns.length; i++) {
-      const b = this.spdBtns[i];
-      if (b && b.parentNode === more) more.removeChild(b);
-      delete this.tbtns['s' + (i + 1)];
-    }
-    this.spdBtns.length = 3;
-    for (let i = 3; i < SPD.length; i++) {
-      const b = this.speedBtn(SPD[i], i + 1);
-      this.spdBtns.push(b);
-      more.insertBefore(b, this.speedCustom);
-    }
-  };
-  // 折叠条：速度档位的展开状态
-  UI.prototype.toggleFold = function (which) {
-    if (!this.fold) this.fold = {};
-    const on = !this.fold[which];
-    this.fold = {};
-    this.fold[which] = on;
-    this.applyFold();
-  };
-  UI.prototype.applyFold = function () {
-    const f = this.fold || {};
-    this.speedMore.classList.toggle('open', !!f.speed);
-    this.speedArrow.classList.toggle('open', !!f.speed);
-  };
-  UI.prototype.closeFolds = function (e) {
-    if (!this.fold || !this.fold.speed) return;
-    const t = e && e.target;
-    // 只有箭头与展开的折叠条内部不关闭：点在顶栏缝隙或地图空白处都收起
-    if (t && t.closest && (t.closest('.foldbar') || t.closest('.foldarrow'))) return;
-    this.fold = {}; this.applyFold();
-  };
-  // 顶栏每个 bar 独立收起：收起后只留自身的小按钮，再点一次展开
-  // 默认全部收起；状态记进设置，下次打开保持上次的样子
-  UI.prototype.toggleBar = function (key) {
-    if (!this.barOff) this.barOff = {};
-    this.barOff[key] = !this.barOff[key];
-    const st = {};
-    for (const k in this.barOff) if (!this.barOff[k]) st[k] = 1;
-    CM.Settings.set('hudBars', st);
-    snd('toggle');
-    this.applyBarFold();
-  };
-  UI.prototype.applyBarFold = function () {
-    const off = this.barOff || {};
-    const bars = { city: this.citybar, metrics: this.metricsGroup, actions: this.actionsGroup };
-    const tips = { city: '时间栏', metrics: '指标栏', actions: '操作栏' };
-    for (const k in bars) {
-      const el = bars[k], b = this.barFold && this.barFold[k];
-      if (!el || !b) continue;
-      const on = !!off[k];
-      el.classList.toggle('collapsed', on);
-      b.classList.toggle('on', on);
-      b.setAttribute('data-tip', (on ? '展开' : '收起') + tips[k]);
-    }
-    if (this.onBarFold) this.onBarFold();
   };
   UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); this.renderToolbar(); this.renderZoomCtl(); };
   UI.prototype.toggleView = function () { this.setView(this.R.cam.view !== 1); };
@@ -1281,7 +1202,6 @@
   };
   UI.prototype.openPage = function (kind, id, opts) {
     opts = opts || {};
-    if (this.fold && this.fold.speed) { this.fold = {}; this.applyFold(); }
     const top = this.stack[this.stack.length - 1];
     if (top && top.kind === kind && top.id === id && !this.right.classList.contains('closed')) { if (opts.toggle) this.closePanel(); else this.renderPage(false); return; }
     if (opts.replaceTop && top) this.stack[this.stack.length - 1] = { kind: kind, id: id };
@@ -1765,7 +1685,6 @@
   };
   UI.prototype.openScreen = function (card, onEsc, cls) {
     this.discardSheet();
-    if (this.fold && this.fold.speed) { this.fold = {}; this.applyFold(); }
     if (this.tools) this.tools.cancelDrag();
     this.screen.onpointerdown = null;
     this.screen.innerHTML = '';
