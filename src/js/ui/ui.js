@@ -157,12 +157,19 @@
       this.dockBtns[L.id] = b; this.dock.appendChild(b);
     }
     this.legendCard = h('aside', { id: 'legendCard', class: 'hud glass hidden' });
-    // 左下：缩放
+    // 左下：镜头缩放 → 界面缩放 → 视图切换 → 全图（横向一排）
     const R = this.R;
+    const zb = function (tip, key, onclick, icon) { return h('button', { class: 'zbtn', 'data-tip': tip, 'data-key': key || null, onclick: onclick }, ic(icon)); };
     this.zoomCtl = h('div', { id: 'zoomCtl', class: 'hud glass hidden' },
-      h('button', { 'data-tip': '放大', 'data-key': '+', 'data-side': 'right', onclick: function () { R.zoomAt(R.w / 2, R.h / 2, 1.5); } }, ic('plus')),
-      h('button', { 'data-tip': '缩小', 'data-key': '−', 'data-side': 'right', onclick: function () { R.zoomAt(R.w / 2, R.h / 2, 1 / 1.5); } }, ic('minus')),
-      h('button', { 'data-tip': '全图', 'data-key': 'F', 'data-side': 'right', onclick: function () { R.fitAll(); } }, ic('expand')));
+      zb('放大', '+', function () { R.zoomAt(R.w / 2, R.h / 2, 1.5); }, 'plus'),
+      zb('缩小', '−', function () { R.zoomAt(R.w / 2, R.h / 2, 1 / 1.5); }, 'minus'),
+      h('span', { class: 'zsep' }),
+      zb('放大界面', 'O', function () { self.stepUiScale(1); }, 'zoomIn'),
+      zb('缩小界面', null, function () { self.stepUiScale(-1); }, 'zoomOut'),
+      h('span', { class: 'zsep' }),
+      this.viewBtn = zb('2.5D 城市', 'T', function () { self.toggleView(); }, 'view3d'),
+      h('span', { class: 'zsep' }),
+      zb('全图', 'F', function () { R.fitAll(); }, 'expand'));
     // 右侧详情
     this.right = h('aside', { id: 'rightPanel', class: 'hud glass panel closed hidden', inert: true, 'aria-hidden': 'true' });
     this.rTitle = h('div', { class: 'p-title' }, '');
@@ -213,6 +220,7 @@
     this.initTips();
     this.initPress();
     this.renderDock();
+    this.renderZoomCtl();
     this.layoutHud();
     window.addEventListener('resize', function () { self.layoutHud(); });
     CM.Settings.on(function (k) {
@@ -254,6 +262,27 @@
     for (const b of [1540, 1400, 1260, 1080, 960, 820]) this.top.classList.toggle('lt' + b, w < b);
     for (const k in this.pills) this.pills[k].el.classList.remove('squeezed');
     const self = this; requestAnimationFrame(function () { self.fitHud(); if (self.dropdown && self.dropdown._place) self.dropdown._place(); });
+  };
+  // 界面大小一键回到 100%（O 键），已经 100% 时不做任何事
+  UI.prototype.resetUiScale = function () {
+    if (Math.round((CM.Settings.get('uiScale') || 1) * 100) === 100) return false;
+    CM.Settings.set('uiScale', 1); snd('good');
+    return true;
+  };
+  // 界面大小按档位步进（25%–200%）：zoomCtl 的 + / − 两个按钮
+  UI.prototype.stepUiScale = function (dir) {
+    const S = CM.Settings, cur = Math.round((S.get('uiScale') || 1) * 100);
+    const next = dir > 0 ? Math.min(200, (Math.floor(cur / 10) + 1) * 10) : Math.max(25, (Math.ceil(cur / 10) - 1) * 10);
+    if (next === cur) return;
+    S.set('uiScale', next / 100); snd('good');
+  };
+  // 左下缩放条里的视图按钮：图标与提示跟随当前 2D / 2.5D 状态
+  UI.prototype.renderZoomCtl = function () {
+    const b = this.viewBtn; if (!b || !this.R) return;
+    const iso = this.R.cam.view === 1;
+    b.innerHTML = ''; b.appendChild(ic(iso ? 'view2d' : 'view3d'));
+    b.setAttribute('data-tip', iso ? '切换到 2D 地图' : '切换到 2.5D 城市');
+    b.classList.toggle('on', iso);
   };
   // 指标栏放不下时，按优先级从低到高收起（经济 → 满意度 → 分担率 → 人口 → 拥堵）
   UI.prototype.fitHud = function () {
@@ -768,7 +797,7 @@
     if (t && t.closest && (t.closest('.foldbar') || t.closest('.foldarrow'))) return;
     this.fold = {}; this.applyFold();
   };
-  UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); this.renderToolbar(); };
+  UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); this.renderToolbar(); this.renderZoomCtl(); };
   UI.prototype.toggleView = function () { this.setView(this.R.cam.view !== 1); };
   UI.prototype.toggleUnder = function () { snd('swoosh'); this.R.setUnder(this.R.cam.tu !== 1); this.renderToolbar(); };
   // 浅色 / 深色：顶栏与开始界面上的按钮直接切换（不在设置里）
@@ -1920,7 +1949,6 @@
       const btns = opts.map(function (o) {
         return h('button', { class: S.get(key) === o[0] ? 'on' : '', 'data-silent': '1', onclick: function () {
           if (S.get(key) === o[0]) return;
-          if (key === 'uiScale' && !S.reducedMotion()) document.getElementById('app').animate([{ opacity: 0.25 }, { opacity: 1 }], { duration: 380, easing: 'ease-out' });
           S.set(key, o[0]); snd('soft');
           btns.forEach(function (b, k) { b.classList.toggle('on', opts[k][0] === o[0]); });
           if (after) after();
@@ -1929,13 +1957,20 @@
       btns.forEach(function (b) { c.appendChild(b); });
       return c;
     };
-    // 界面缩放：0.5–1.5 倍滑动条。拖动只更新 --uiz，松手才广播（否则每帧重排导致闪烁）
-    const scaleVal = h('span', { class: 'set-val' }, Math.round(S.get('uiScale') * 100) + '%');
+    // 界面缩放：手动输入百分比（25–200），只在点底部「完成」时确认，输入过程中不改变界面
+    const pctOf = function (v) { return Math.round(v * 100); };
+    const readScale = function () {
+      const v = U.clamp(Math.round(+scaleIn.value) || pctOf(S.get('uiScale')), 25, 200);
+      scaleIn.value = v;
+      return v;
+    };
     const scaleIn = h('input', {
-      type: 'range', min: 0.5, max: 1.5, step: 0.05, value: Math.min(1.5, S.get('uiScale')), 'aria-label': '界面大小',
-      oninput: function (e) { S.preview('uiScale', +e.target.value); scaleVal.textContent = Math.round(e.target.value * 100) + '%'; },
-      onchange: function () { S.commit('uiScale'); snd('good'); },
+      type: 'number', class: 'set-num', min: 25, max: 200, step: 1, value: pctOf(S.get('uiScale')),
+      inputmode: 'numeric', 'aria-label': '界面大小（百分比，25–200）',
+      onblur: function () { if (scaleIn.value !== '') readScale(); },
+      onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); scaleIn.blur(); } },
     });
+    const scaleCtl = h('div', { class: 'set-slider set-scale' }, scaleIn, h('span', { class: 'set-val' }, '%'));
     // 计算进程：单进程 = 整套出行分配在一个 Worker 里跑完；多进程 = 人口、资金、地铁、土地、交通各一个 Worker，
     // 最后汇成一份状态交回主线程。切换后下一轮求解按新分支走。
     const parSeg = seg('simPar', [['one', '单进程'], ['multi', '多进程']]);
@@ -1973,7 +2008,7 @@
       ],
       display: [
         row('car', '车辆与行人', toggle('agents'), '关闭后交通模拟照常进行，只是不显示运动的车辆和行人'),
-        row('expand', '界面大小', h('div', { class: 'set-slider' }, scaleIn, scaleVal), '按倍率缩放游戏内界面与主菜单', 'scale-row'),
+        row('expand', '界面大小', scaleCtl, '手动输入 25–200，按百分比缩放游戏内界面与主菜单', 'scale-row'),
         row('label', '地图标注', seg('labels', [['all', '全部'], ['stations', '仅车站'], ['none', '关闭']]), '地图上显示的名称：全部包含车站、线路、片区与兴趣点'),
         row('expand', '全屏方式', winCtl, '窗口：普通窗口；窗口化全屏：无边框铺满屏幕，可随时切到其它窗口'),
       ],
@@ -2054,6 +2089,13 @@
     };
     homeRows.forEach(function (el) { body.appendChild(el); });
     const closeAll = function () { if (cat) home(); else back(); };
+    // 界面大小只在点「完成」时确认：输入框里改的值到这里才提交
+    const applyScale = function () {
+      scaleIn.blur();
+      const v = readScale();
+      if (pctOf(S.get('uiScale')) === v) return;
+      S.set('uiScale', v / 100); snd('good');
+    };
     const card = h('div', { class: 'card settings' },
       h('div', { class: 'card-head' }, h('span', { class: 'badge b-slate' }, ic('gear')), backBtn, title, h('span', { class: 'grow' }), h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: back }, ic('close'))),
       body,
@@ -2063,7 +2105,7 @@
           const ask = function () { self.sheetConfirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear'); };
           if (self.screen.querySelector('.start-sheet')) ask(); else self.confirm('恢复默认设置？', '所有设置恢复为默认值，存档不受影响。', '恢复默认', function () { S.reset(); self.showSettings(); self.toast('已恢复默认设置', 'info'); }, true, 'gear');
         } }, '恢复默认'),
-        h('button', { class: 'btn primary sm', onclick: back }, '完成')));
+        h('button', { class: 'btn primary sm', onclick: function () { applyScale(); back(); } }, '完成')));
     if (asSheet) this.openSheet(card, { esc: closeAll });
     else this.openOverlay(card, { esc: closeAll });
     // 点空白关闭：点到卡片、主菜单、按钮输入等可交互元素时不处理

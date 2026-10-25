@@ -16,6 +16,8 @@
     minus: S('<path d="M5 12h14"/>'),
     power: S('<path d="M12 3v8"/><path d="M7.1 6.3a7.5 7.5 0 1 0 9.8 0"/>'),
     expand: S('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+    zoomIn: S('<circle cx="11" cy="11" r="6.5"/><path d="M20.5 20.5L16 16M11 8.5v5M8.5 11h5"/>'),
+    zoomOut: S('<circle cx="11" cy="11" r="6.5"/><path d="M20.5 20.5L16 16M8.5 11h5"/>'),
     info: S('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/>'),
     warn: S('<path d="M12 3.5L2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17v.4"/>'),
     error: S('<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>'),

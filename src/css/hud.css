@@ -2,9 +2,9 @@
 /* ---------- 顶部 HUD ---------- */
 /* 界面大小：HUD 各部件按 --uiz 缩放，涉及视口尺寸的值除以 --uiz 抵消 */
 #hudTop, #dock, #legendCard, #zoomCtl, #rightPanel, #toolbar, #buildStack, #feed { zoom: var(--uiz, 1); }
-/* 主界面的开始菜单与滑出卡片跟随界面大小；设置卡片本身不缩放，否则拖动滑块时卡片跟着变，
-   指针与滑块刻度互相追逐形成抖动 */
-.start-wrap, .start-sheet > .card:not(.settings) { zoom: var(--uiz, 1); }
+/* 主界面的开始菜单与滑出卡片跟随界面大小（含设置卡片：界面大小改成手动输入百分比后，
+   卡片不再随输入实时缩放，不会出现指针追逐刻度的问题） */
+.start-wrap, .start-sheet > .card { zoom: var(--uiz, 1); }
 #hudTop { top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: flex-start; pointer-events: none; }
 #hudTop > * { pointer-events: auto; }
 #hudTop.hidden { transform: translateY(-14px); }
@@ -143,13 +143,15 @@
 #legendCard .lc-body { overflow-y: auto; padding: 0 14px 14px; }
 .legend .bar { height: 10px; border-radius: 5px; margin: 6px 0 3px; }
 .legend .li { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 5px 0; }
-/* 右下：缩放 */
-#zoomCtl { left: 12px; bottom: 16px; display: flex; flex-direction: column; padding: 5px; gap: 2px; border-radius: 15px; }
+/* 左下横排：镜头缩放 → 界面缩放 → 视图切换 → 全图 */
+#zoomCtl { left: 12px; bottom: 16px; display: flex; flex-direction: row; align-items: center; padding: 5px; gap: 2px; border-radius: 15px; }
 #zoomCtl.hidden { transform: translateY(12px); }
-#zoomCtl button { position: relative; overflow: hidden; width: 38px; height: 38px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: background .15s, color .15s, transform .2s var(--spring); }
-#zoomCtl button .ico { width: 19px; height: 19px; }
-#zoomCtl button:hover { background: var(--hover); color: var(--text); }
-#zoomCtl button:active { transform: scale(.9); }
+#zoomCtl .zbtn { position: relative; overflow: hidden; width: 38px; height: 38px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: background .15s, color .15s, transform .2s var(--spring); }
+#zoomCtl .zbtn .ico { width: 19px; height: 19px; }
+#zoomCtl .zbtn:hover { background: var(--hover); color: var(--text); }
+#zoomCtl .zbtn:active { transform: scale(.9); }
+#zoomCtl .zbtn.on { background: var(--accent-soft); color: var(--accent); }
+#zoomCtl .zsep { width: 1px; height: 22px; margin: 0 4px; background: var(--line-strong); flex: none; }
 
 /* ---------- 右侧面板 ---------- */
 .panel { display: flex; flex-direction: column; overflow: hidden; }

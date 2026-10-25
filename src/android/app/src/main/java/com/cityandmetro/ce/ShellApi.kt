@@ -8,6 +8,95 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
+ * 进程占用采样，对应 Python 端 perf.py 里 Windows/macOS 那两套实现。
+ *
+ * CPU 取 /proc 里本进程的 utime+stime，与上次采样差分后除以经过的时间，再摊到整机核数上——
+ * 与桌面版一个口径（1 核跑满时多核机器显示 100/核数%）。Android 8 起 /proc 里别的进程不可读，
+ * 本进程的仍可读，所以只报本进程，子进程（WebView 渲染等）不在统计内。
+ * GPU 在 Android 上没有可移植的进程级入口，只在系统暴露 /sys/class/kgsl 等计数器时才有值。
+ */
+class Perf {
+    private var lastCpu = 0.0
+    private var lastAt = 0L
+    private val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+
+    private fun ticksPerSec(): Double = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).toDouble()
+
+    private fun cpuSeconds(): Double? {
+        val stat = runCatching { File("/proc/self/stat").readText() }.getOrNull() ?: return null
+        // 第 2 项 comm 带括号、里面可能有空格，所以从最后一个 ')' 之后再数
+        val tail = stat.substring(stat.lastIndexOf(')') + 1).trim().split(' ')
+        val utime = tail.getOrNull(11)?.toLongOrNull() ?: return null
+        val stime = tail.getOrNull(12)?.toLongOrNull() ?: return null
+        return (utime + stime) / ticksPerSec()
+    }
+
+    fun cpu(): Double? {
+        val now = cpuSeconds() ?: return null
+        val at = System.nanoTime()
+        val prevCpu = lastCpu
+        val prevAt = lastAt
+        lastCpu = now
+        lastAt = at
+        if (prevAt == 0L) return null
+        val elapsed = (at - prevAt) / 1e9
+        if (elapsed <= 0) return null
+        return round1(((now - prevCpu) / elapsed * 100 / cores).coerceIn(0.0, 100.0 * cores))
+    }
+
+    fun ram(): Int {
+        // 先用内核的 RSS（不含 WebView 进程共享页的开销），拿不到再退回虚拟机统计
+        val statm = runCatching { File("/proc/self/statm").readText() }.getOrNull()
+        if (statm != null) {
+            val pages = statm.trim().split(' ').getOrNull(1)?.toLongOrNull()
+            if (pages != null) {
+                val pageKb = android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE) / 1024
+                return (pages * pageKb).toInt()
+            }
+        }
+        val rt = Runtime.getRuntime()
+        return ((rt.totalMemory() - rt.freeMemory()) / 1024 / 1024).toInt()
+    }
+
+    fun gpu(): Double? {
+        val u = gpuBusyUs() ?: return null
+        val at = System.nanoTime()
+        val prev = lastGpu
+        val prevAt = lastGpuAt
+        lastGpu = u
+        lastGpuAt = at
+        if (prevAt == 0L || prev == null) return null
+        val elapsedUs = (at - prevAt) / 1000.0
+        if (elapsedUs <= 0) return null
+        return round1(((u - prev) / elapsedUs * 100).coerceIn(0.0, 100.0))
+    }
+
+    private var lastGpu: Long? = null
+    private var lastGpuAt = 0L
+
+    private fun gpuBusyUs(): Long? {
+        // Adreno：kgsl 把本进程的 gpu 忙时间写成纳秒
+        runCatching { readFirstLine("/sys/class/kgsl/kgsl-3d0/gpubusy") }.getOrNull()?.let { line ->
+            val parts = line.trim().split(' ')
+            if (parts.size >= 2) {
+                val busy = parts[0].toLongOrNull()
+                if (busy != null) return busy / 1000
+            }
+        }
+        // Mali：只有全局 busy 百分比，没有进程级计数，这里不猜
+        return null
+    }
+
+    private fun readFirstLine(path: String): String? {
+        val f = File(path)
+        if (!f.canRead()) return null
+        return f.bufferedReader().use { it.readLine() }
+    }
+
+    private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
+}
+
+/**
  * 桌面壳的数据目录，对应 Python 端的 storage.py + saves.py。
  *
  * 目录结构照搬桌面版：files/saves/index.json 是清单，files/saves/slots/ 下每个存档一个文件。
@@ -101,6 +190,8 @@ class ShellApi(
     private val store: Store,
     private val host: Host,
 ) {
+    private val perf = Perf()
+
     interface Host {
         fun openExternal(url: String): Boolean
         fun shareExport(file: File, title: String)
@@ -282,8 +373,15 @@ class ShellApi(
     @Suppress("UNUSED_PARAMETER")
     fun set_window_mode(mode: Any?): JSONObject = JSONObject().put("ok", false).put("error", "Android 上不支持")
 
+    // 与 Python 端 perf.py 的 snapshot() 同形：CPU 按本进程占整机核数的百分比，
+    // RAM 取本进程实际用掉的物理内存（MB），GPU 一并取当前进程的占用。
+    // 取不到的项显式放 JSONObject.NULL，前端照旧显示成 —，不要留下缺键
     @Suppress("UNUSED_PARAMETER")
-    fun perf_stats(wantGpu: Any?): JSONObject = JSONObject().put("ok", false)
+    fun perf_stats(wantGpu: Any?): JSONObject = JSONObject()
+        .put("ok", true)
+        .put("cpu", perf.cpu() ?: JSONObject.NULL)
+        .put("ram", perf.ram())
+        .put("gpu", perf.gpu() ?: JSONObject.NULL)
 
     fun quit_app(): JSONObject {
         host.quit()

@@ -16,7 +16,7 @@
       try { s = JSON.parse(localStorage.getItem('cm1.settings') || 'null'); t = (s && s.theme) || localStorage.getItem('cm1.theme') || 'auto'; } catch (e) {}
       if (t !== 'light' && t !== 'dark') t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', t);
-      if (s && s.uiScale) document.documentElement.style.setProperty('--uiz', String(s.uiScale));
+      if (s && s.uiScale) document.documentElement.style.setProperty('--uiz', String(Math.min(2, Math.max(0.25, +s.uiScale || 1))));
     })();
   </script>
   <link rel="stylesheet" href="css/base.css">

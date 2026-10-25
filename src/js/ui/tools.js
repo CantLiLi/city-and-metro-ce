@@ -520,6 +520,12 @@
     if (e.isComposing || e.keyCode === 229) return;
     const g = this.game();
     const t = e.target, tag = (t && t.tagName) || '';
+    // 界面大小复位（O）：开始界面、设置弹窗、读档页里也要能用，所以在输入框与 blocking 判断之前处理；
+    // 只跳过真正在输入的文本框，滑块、开关等控件上的按键照常生效
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'o' || e.key === 'O') && !(t && t.isContentEditable)
+      && !(tag === 'INPUT' && /^(text|search|number|email|password|url|tel)$/i.test(t.type || 'text')) && tag !== 'TEXTAREA') {
+      if (this.ui.resetUiScale()) return;
+    }
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       // 文本框内 Esc 只取消编辑（移出焦点）；滑块、复选框、下拉框等控件上的 Esc 按全局关闭处理

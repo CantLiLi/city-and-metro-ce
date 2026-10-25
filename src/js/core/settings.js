@@ -2,8 +2,8 @@
 // 设置：只保留常用项（主题、界面大小、地图标注、交通动画、显卡与模型渲染、建筑密度、帧率、运行监控、声音与三路音量、自动保存），保存在本地；变化时立即生效并通知各模块
 (function (CM) {
   const KEY = 'cm1.settings';
-  const SCALE_MIN = 0.5, SCALE_MAX = 1.5;
-  const clampScale = function (v) { v = +v; return isFinite(v) ? Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) : 1; };
+  const SCALE_MIN = 0.25, SCALE_MAX = 2;
+  const clampScale = function (v) { v = +v; return isFinite(v) ? Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) * 100) / 100 : 1; };
   const DEF = {
     theme: 'auto',        // light | dark | auto（跟随系统）
     uiScale: 1,           // 界面大小

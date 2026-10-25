@@ -25,6 +25,9 @@
 .switch:focus-visible { outline: none; box-shadow: var(--ring); }
 .set-slider { display: flex; align-items: center; gap: 10px; width: 220px; flex: none; }
 .set-slider input { flex: 1; accent-color: var(--accent); }
+.set-slider.set-scale { width: auto; gap: 6px; }
+.set-slider.set-scale .set-num { width: 74px; }
+.set-slider.set-scale .set-val { width: auto; text-align: left; }
 .set-val { width: 40px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
 .set-num { width: 62px; flex: none; text-align: center; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 9px; padding: 6px 8px; }
 .set-num:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }

@@ -32,7 +32,7 @@
   #buildStack { bottom: calc(68px + env(safe-area-inset-bottom)); max-width: calc(100vw - 16px); }
   #draftbar { max-width: calc(100vw - 16px); overflow-x: auto; }
   #zoomCtl { left: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 3px; }
-  #zoomCtl button { width: 36px; height: 34px; }
+  #zoomCtl .zbtn { width: 36px; height: 34px; }
   #feed { top: calc(110px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
   #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
   .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
@@ -89,12 +89,13 @@
   .nm-win .stats-head .btn.sm { display: none; }
 }
 @media (max-width: 760px) and (max-height: 620px) { #dock { max-height: calc(100vh - 200px); } }
-/* 触屏：没有悬停，不显示按钮提示气泡；地图缩放按钮可用双指代替，只保留「全图」 */
+/* 触屏：没有悬停，不显示按钮提示气泡；镜头缩放用双指代替，界面缩放、视图切换与「全图」保留 */
 @media (pointer: coarse) {
   #uitip { display: none !important; }
   .pausechip kbd, .pausechip .muted { display: none; }
   .search-pop .srch-in kbd { display: none; }
-  #zoomCtl button[data-tip="放大"], #zoomCtl button[data-tip="缩小"] { display: none; }
+  #zoomCtl .zbtn[data-tip="放大"], #zoomCtl .zbtn[data-tip="缩小"] { display: none; }
+  #zoomCtl .zsep:first-of-type { display: none; }
 }
 
 /* 地理线网：保留原始地形轮廓，使用淡色让线路与车站保持清晰 */
