@@ -25,9 +25,11 @@ if TYPE_CHECKING:
 WINDOW_TITLE = APP_NAME + ' v' + VERSION
 ENGINE_TIMEOUT = 15
 SAVE_TIMEOUT = 20
-# 关窗前的存档等待上限：必须远小于 QUIT_FORCE_DELAY，否则时间全耗在等存档上，
-# 窗口还没被销毁就被强制结束，用户看到的是「点了退出，卡几秒才没」
-FLUSH_TIMEOUT = 4
+# 关窗前催一次存档后等它落盘的上限：存档要存得下，但窗口不能等它，
+# 这个等待只决定「先关窗还是先等存档」，超时就先关窗，进程在退出前继续等它写完
+FLUSH_TIMEOUT = 2
+# 等存档的上限给到和正常存盘一样的量级：关窗已经很慢了，再丢进度得不偿失
+QUIT_SAVE_WAIT = 6
 QUIT_FORCE_DELAY = 12
 APP_USER_MODEL_ID = 'CityAndMetro.' + APP_ID
 
@@ -73,27 +75,32 @@ def wait_for_engine(win):
     return False
 
 
+def wait_saved(win, seconds):
+    """等正在写的存档落盘：busy = 还有存档在写，其余（clean / dirty）都不用再等。"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            if win.evaluate_js(WAIT_SAVED_JS) != 'busy':
+                return True
+        except Exception:
+            log.debug('等待存档状态失败', exc_info=True)
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def flush_and_destroy(win):
-    """先等正在写的存档落盘，再销毁窗口；销毁后窗口仍没退出就强制结束进程。"""
-    # 存档等待与销毁共用这一个期限：evaluate_js 自己也可能卡住，不能只给等待存档计时。
-    # 这个等待必须短于 force_exit_after 的兜底，否则时间全花在等存档上，窗口还没碰就被强杀。
-    deadline = time.time() + min(SAVE_TIMEOUT, FLUSH_TIMEOUT)
+    """催一次保存就关窗，进程退出前再把存档等完。
+
+    关窗速度优先，存档不能拖住窗口：关窗会把 GUI 线程一起带走，之后 evaluate_js 根本等不到回调，
+    所以等待挪到另一个线程，窗口该关就关，剩下的时间由 force_exit_after 兜底。
+    """
     try:
         win.evaluate_js(FLUSH_JS)
     except Exception:
         log.debug('flush 脚本执行失败', exc_info=True)
-    while time.time() < deadline:
-        try:
-            if win.evaluate_js(WAIT_SAVED_JS) != 'busy':
-                break
-        except Exception:
-            log.debug('等待存档状态失败', exc_info=True)
-            break
-        time.sleep(0.1)
-    else:
-        log.warning('等待存档超时 %ss，仍然关闭', FLUSH_TIMEOUT)
-    if win is None:
-        os._exit(0)
+    # 存档还没写完就先挂着，窗口照关：关窗会把 GUI 线程一起带走，那之后再去 evaluate_js 就是等一个不存在的线程
+    threading.Thread(target=wait_saved, args=(win, QUIT_SAVE_WAIT), daemon=True).start()
     try:
         # 不能用 win.destroy()：它带 _shown_call，窗口没显示出来时会一直等 shown 事件；
         # destroy_now 直接调底层 destroy_window，关不掉时再按句柄兜底
@@ -108,9 +115,10 @@ def flush_and_destroy(win):
 # 前端「退出」调用 quit_app 与点窗口关闭按钮都走这里，保证不会出现两次关闭或丢掉存档。
 def request_quit(win, state):
     """登记退出并交给后台线程写盘关窗；主线程不直接碰窗口生命周期。"""
-    if state['closing']:
-        return
-    state['closing'] = True
+    with state['lock']:
+        if state['closing']:
+            return
+        state['closing'] = True
     # 兜底必须先设：写盘那一步会调 evaluate_js，它同步等 GUI 线程回调，
     # 窗口卡住时这次调用可能永远不返回，等它后面的 force_exit 就永远等不到
     force_exit_after(QUIT_FORCE_DELAY)
@@ -124,11 +132,19 @@ def request_quit(win, state):
 
 
 def make_on_closing(win, state):
+    # pywebview 把回调的返回值当「要不要取消关闭」：返回 False 等于取消关闭，窗口会留下来，
+    # pywebview 那边还会取消关窗，这里只能返回 None
     def on_closing():
         request_quit(win, state)
-        return False
 
     return on_closing
+
+
+def hold_close(win):
+    """把 pywebview 自己的关窗回调串起来：它每次拆窗都要等 GUI 线程跑完回调，回调里再等它就互锁。"""
+    closing = getattr(win.events, 'closing', None)
+    if closing is not None:
+        closing._should_lock = True
 
 
 def watch_quit_request(win, api, state):
@@ -316,7 +332,7 @@ def build_window() -> 'tuple[AppWindow, dict[str, Any]]':
         background_color=BG_DARK if dark else BG_LIGHT,
     )
     api.bind(app_window)
-    state: dict[str, Any] = {'closing': False, 'dark': dark, 'on_top': False}
+    state: dict[str, Any] = {'closing': False, 'lock': threading.Lock(), 'dark': dark, 'on_top': False}
 
     def on_loaded():
         apply_window_chrome(state)
@@ -334,6 +350,7 @@ def build_window() -> 'tuple[AppWindow, dict[str, Any]]':
 
     app_window.events.loaded += on_loaded
     app_window.events.closing += make_on_closing(app_window, state)
+    hold_close(app_window)
     threading.Thread(target=watch_quit_request, args=(app_window, api, state), daemon=True).start()
     return app_window, state
 

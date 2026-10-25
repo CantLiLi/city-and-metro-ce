@@ -52,6 +52,13 @@ def _prune_cache(base):
             pass
 
 
+def _notify_quit(callback):
+    try:
+        callback()
+    except Exception:
+        log.warning('通知外壳退出失败', exc_info=True)
+
+
 class ShellApi:
     # pywebview 会把 js_api 对象的公开属性递归反射成 window.pywebview.api，
     # 遇到 Window / COM 这类非方法对象会一路展开到 maximum recursion depth，并刷满 COM 告警。
@@ -327,16 +334,14 @@ class ShellApi:
     def quit_app(self):
         # 后端侧不在这里销毁窗口：只通知外壳去走「等存档写完再关窗」这一条路径。
         # 前端拿不到这个接口时（启动早期 api 还没注入、或窗口还没显示），
-        # 还会调用 window.close()，macOS 的关闭按钮同样落到外壳的退出路径上
+        # 还会调用 window.close()，macOS 的关闭按钮同样落到外壳的退出路径上。
+        # 关窗动作要交给别的线程：这个函数跑在内核的 JS 调用线程上，在这里等窗口销毁就是等自己
         if self.window is None:
             return {'ok': False, 'error': '窗口未就绪'}
         self.close_requested.set()
-        if self.on_quit is not None:
-            try:
-                self.on_quit()
-            except Exception:
-                log.warning('通知外壳退出失败', exc_info=True)
-                return {'ok': False, 'error': '退出失败'}
+        callback = self.on_quit
+        if callback is not None:
+            threading.Thread(target=_notify_quit, args=(callback,), daemon=True).start()
         return {'ok': True}
 
 

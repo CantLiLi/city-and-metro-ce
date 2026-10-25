@@ -30,4 +30,11 @@ __pycache__/
 desktop-build/
 .tmp/
 
+# android
+src/android/.gradle
+src/android/gradle-tools
+src/android/gradle
+src/android/sdk
+src/android/app/build
+
 

@@ -3,3 +3,7 @@ app/build/
 .gradle/
 local.properties
 app/src/main/assets/
+
+# 本地工具链（cmdline-tools 装的 SDK、解压的 Gradle）
+sdk/
+gradle-tools/

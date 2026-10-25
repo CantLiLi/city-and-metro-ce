@@ -84,24 +84,78 @@ def destroy_now(win):
     底层 destroy_window 是同步的：它要 Invoke 到 GUI 线程执行 Close()，而 Close() 会触发
     on_closing / on_close 事件回调——回调若跑在调用方线程，就和这次的 Invoke 互相等待，两边都卡死，
     窗口永远不关。所以关窗前先把 pywebview 自己那几个事件的回调线程锁摘掉，让回调在 GUI 线程里跑完。
+
+    调用方可能正是那个被卡住的线程（从内核的 JS 调用里发起的退出），它 Invoke 到 GUI 线程只会一起等死，
+    所以销毁动作全部放后台线程，这里只等到窗口消失就返回，让调用方尽早脱身。
     """
     if win is None:
         return
     _unlock_events(win)
+    hwnd = window_handle()
+    if hwnd and _tear_down(win, hwnd):
+        return
+    worker = threading.Thread(target=_destroy_win, args=(win, hwnd), daemon=True)
+    worker.start()
+    worker.join(2 if hwnd else 6)
+    if not hwnd or wait_gone(hwnd, 0.3):
+        return
+    _kill_window(win)
+
+
+def _tear_down(win, hwnd):
+    """从窗口自己的线程以外拆窗：只敲句柄，不碰 GUI 线程。
+
+    内核的 Close 走的是同步的 guilib.destroy_window，它 Invoke 到 GUI 线程，GUI 线程再回调进来等调用方，
+    从非 GUI 线程发起就是互相等。这里先让 GUI 线程自己处理 WM_CLOSE（它上面没有任何等待），
+    再把窗口对象从 pywebview 的表里摘掉，退出流程也就不需要再等那一次 Invoke。
+    """
+    if not _post_until_gone(hwnd, 2.5):
+        return False
+    _forget_window(win)
+    # 窗口没了，退出流程已经跑过；剩下的 GUI 线程由进程退出结束
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+    return True
+
+
+def _post_until_gone(hwnd, seconds):
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    WM_CLOSE = 0x0010
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        # 内核自己的线程忙时消息要等一会儿才被取走：一口气灌进去，它闲着时就是一个都取不到
+        if wait_gone(hwnd, 0.3):
+            return True
+    return False
+
+
+def _forget_window(win):
+    try:
+        import webview
+
+        views = getattr(webview.platforms.winforms.BrowserView, 'instances', None)
+        if views:
+            views.pop(win.uid, None)
+        if win in webview.windows:
+            webview.windows.remove(win)
+    except Exception:
+        log.debug('摘除窗口记录失败', exc_info=True)
+
+
+def _destroy_win(win, hwnd):
     try:
         import webview.guilib as guilib
 
         guilib.initialize(guilib.forced_gui_)
-        hwnd = window_handle()
         guilib.guilib.destroy_window(win.uid)
-        wait_gone(hwnd, 2)
     except Exception:
         log.debug('底层销毁窗口失败，退回 window.destroy', exc_info=True)
         try:
             win.destroy()
         except Exception:
             log.debug('销毁窗口失败', exc_info=True)
-    _kill_window(win)
+    if not wait_gone(hwnd, 2):
+        _kill_window(win)
 
 
 def _unlock_events(win):

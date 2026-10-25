@@ -9,9 +9,9 @@
 
 前置条件（脚本会检查并给出提示）：
     - JDK 17 或更高（JAVA_HOME 或 PATH 里的 java）
-    - Android SDK（ANDROID_HOME / ANDROID_SDK_ROOT / local.properties 的 sdk.dir），需含
-      platforms;android-34 与 build-tools;34.0.0
-    - Gradle：优先用工程里的 gradlew，没有就走系统 gradle
+    - Android SDK：优先用本目录的 sdk/（cmdline-tools 装的 platforms;android-34 +
+      build-tools;34.0.0），其次 ANDROID_HOME / ANDROID_SDK_ROOT / local.properties
+    - Gradle：优先用工程里的 gradlew，其次本目录的 gradle-tools/gradle-*，最后 PATH
 
 产物（工作区的 .tmp/build/android/，这个目录被 .gitignore 忽略）：
     .tmp/build/android/CityAndMetroCE_v2.1.0-debug.apk
@@ -40,6 +40,9 @@ SYNC = HERE / "sync_assets.py"
 
 WORK = ROOT / ".tmp" / "build" / "android"
 OUTPUT = WORK / "output"
+
+SDK = HERE / "sdk"
+GRADLE_TOOLS = HERE / "gradle-tools"
 
 APP_NAME_DEFAULT = "城市与地铁社区版"
 IS_WINDOWS = platform.system() == "Windows"
@@ -131,14 +134,13 @@ def find_sdk() -> str:
                 value = line.split("=", 1)[1].strip().replace("\\\\", "\\")
                 if Path(value).is_dir():
                     return value
-    # 和 find_gradle 一样，工作区 .tmp 里解压的 SDK 也算数
     for guess in (
-        ROOT / ".tmp" / "android-sdk" / "sdk-root",
+        SDK,
         Path(os.environ.get("LOCALAPPDATA", "")) / "Android" / "Sdk",
         Path.home() / "Android" / "Sdk",
         Path.home() / "Library" / "Android" / "sdk",
     ):
-        if guess.is_dir():
+        if (guess / "platforms" / "android-34").is_dir():
             return str(guess)
     return ""
 
@@ -147,14 +149,13 @@ def find_gradle() -> list[str]:
     gradlew = HERE / ("gradlew.bat" if IS_WINDOWS else "gradlew")
     if gradlew.is_file():
         return [str(gradlew)]
+    exe = "gradle.bat" if IS_WINDOWS else "gradle"
+    for home in sorted(GRADLE_TOOLS.glob("gradle-*")):
+        if (home / "bin" / exe).is_file():
+            return [str(home / "bin" / exe)]
     found = shutil.which("gradle")
     if found:
         return [found]
-    # 随手解压到工作区里的 gradle 也算数（.tmp 被忽略，不进版本控制）
-    for home in sorted((ROOT / ".tmp" / "tools").glob("gradle-*")):
-        exe = home / "bin" / ("gradle.bat" if IS_WINDOWS else "gradle")
-        if exe.is_file():
-            return [str(exe)]
     return []
 
 
@@ -180,9 +181,13 @@ def check_env(name: str, number: str, skip_deps: bool) -> tuple[list[str], str]:
     if not java:
         problems.append("没有可用的 JDK 17+：装 JDK 17 并设置 JAVA_HOME（GraalVM 的 jlink 不可用）")
     if not sdk:
-        problems.append("没有 Android SDK：设置 ANDROID_HOME，或复制 local.properties.example 为 local.properties")
+        problems.append(
+            f"没有 Android SDK：把 sdkmanager 装到 {SDK.relative_to(ROOT)}，或设置 ANDROID_HOME"
+        )
     if not gradle:
-        problems.append("没有 Gradle：用 Android Studio 打开本目录生成 gradlew，或安装 gradle")
+        problems.append(
+            f"没有 Gradle：把 gradle-8.x 解压到 {GRADLE_TOOLS.relative_to(ROOT)}，或设置 PATH 里的 gradle"
+        )
     if problems:
         for p in problems:
             print(f"      [错误] {p}")
