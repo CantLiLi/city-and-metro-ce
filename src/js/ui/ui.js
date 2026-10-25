@@ -2176,14 +2176,12 @@
   UI.prototype.pickImportFile = function (keepScreen) {
     const self = this;
     const desk = CM.desktop.isDesktop();
-    // 临时诊断：确认点击后走的是桌面分支还是网页分支
-    if (CM.desktop.call) CM.desktop.call('log_client', ['pickImportFile desktop=' + desk]).catch(function () {});
     if (!desk) { if (this._importInput) this._importInput.click(); return; }
     CM.desktop.importJSON().then(function (picked) {
       if (!picked) return;
       if (picked.text.length > 30 * 1024 * 1024) { self.toast('文件过大，不是有效的存档', 'bad'); return; }
       self.importText(picked.text, keepScreen);
-    }).catch(function (e) { self.toast('读取文件失败：' + (e && e.message || e), 'bad'); });
+    }, function (e) { self.toast('读取文件失败：' + (e && e.message || e), 'bad'); });
   };
   UI.prototype.importFile = function (file, keepScreen) {
     const self = this;
