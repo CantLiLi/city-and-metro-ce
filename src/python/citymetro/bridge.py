@@ -88,8 +88,17 @@ class ShellApi:
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
         if sys.platform == 'darwin':
-            log.info('走 macOS 原生面板 mode=%s filters=%s', mode, filters)
-            return self._choose_file_macos(mode, filters, filename)
+            log.info('macOS 文件对话框 mode=%s filters=%s', mode, filters)
+            try:
+                with self._lock:
+                    path = self._dialog_macos(window, dialog, filename, filters)
+            except Exception as exc:
+                log.warning('打开文件对话框失败 %s: %s', mode, exc, exc_info=True)
+                return False, '无法打开文件选择窗口：' + str(exc)
+            log.info('macOS 文件对话框返回 path=%r', path)
+            if not path:
+                return False, None
+            return True, path
         # pywebview 的对话框会阻塞调用线程（主线程），必须与窗口生命周期错开
         try:
             with self._lock:
@@ -106,9 +115,29 @@ class ShellApi:
             return False, None
         return True, path
 
-    def _choose_file_macos(self, mode, filters, filename):
-        # macOS 走 window.macos_file_panel：pywebview 的 Cocoa 实现会把面板排进主线程，
-        # 却让调用线程等一个取消时永远不会释放的信号量，看起来就是点了没反应
+    def _dialog_macos(self, window, dialog, filename, filters):
+        # 先用 pywebview 自己的实现（布局、类型下拉、保存文件名都由它配好）。它在 macOS 上取消时
+        # 不释放信号量，工作线程会永远挂住，所以调用前清掉 _file_name：回来还是 None 就说明没处理成，
+        # 翻到原生面板，不能把「新面板」叠在挂住的旧面板上，也不能让按钮变成点了没反应
+        gui = getattr(window, 'gui', None)
+        if getattr(gui, '_file_name_semaphore', None) is not None:
+            gui._file_name = None
+            try:
+                result = window.create_file_dialog(
+                    dialog, directory='', save_filename=filename, file_types=filters
+                )
+            except Exception as exc:
+                log.debug('pywebview 文件对话框不可用，改用原生面板: %s', exc)
+            else:
+                if result:
+                    return result[0]
+                if gui._file_name is not None:
+                    return None
+        return self._native_dialog_macos(dialog, filename, filters)
+
+    def _native_dialog_macos(self, dialog, filename, filters):
+        # macOS 走 window.macos_file_panel：面板由 AppKit 主线程的队列逐个跑 runModal，
+        # 在工作线程上等结果，不再经 pywebview 那个取消时会挂死的信号量
         from citymetro import window as shell_window
 
         extensions = []
@@ -120,19 +149,11 @@ class ShellApi:
                     extensions.append(ext)
         # 「所有文件 (*.*)」在 macOS 上是空列表（不限制类型），写成 * 会让面板什么都选不了
         extensions = [e for e in extensions if e != '*']
-        try:
-            path = shell_window.macos_file_panel(
-                'save' if mode == 'save' else 'open',
-                filename or '选择存档文件',
-                extensions,
-            )
-            log.info('macOS 面板返回 path=%r', path)
-        except Exception as exc:
-            log.warning('打开文件对话框失败 %s: %s', mode, exc, exc_info=True)
-            return False, '无法打开文件选择窗口：' + str(exc)
-        if not path:
-            return False, None
-        return True, path
+        return shell_window.macos_file_panel(
+            'save' if dialog == webview.FileDialog.SAVE else 'open',
+            filename or '选择存档文件',
+            extensions,
+        )
 
     def write_export_file(self, path, text):
         try:

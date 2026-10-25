@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 import threading
-import time
 
 log = logging.getLogger('citymetro')
 
@@ -269,42 +268,133 @@ def set_macos_on_top(on):
     AppHelper.callAfter(lambda: set_level(window, level))
 
 
-def macos_file_panel(dialog_type, title, extensions):
-    """macOS 的文件选择面板，直接在 AppKit 主线程上开。
+def _macos_parent_window():
+    """挂面板的父窗口：本进程的 pywebview 窗口。
 
-    pywebview 的 Cocoa 后端把面板丢给 AppHelper.callAfter，再在工作线程上等信号量；
-    用户取消时它也不释放信号量，工作线程会永远挂着。这里的调用点都在 AppKit 主线程上
-    （shutdown 之后会显式切回来），runModal 才是标准做法。
+    不能用 NSApp.windows() 里的 keyWindow / mainWindow：点按钮的时候焦点常常还在菜单栏
+    （启动器、Dock、系统通知），那两个都可能是空的，面板就成了没有父窗口的独立面板。
     """
-    from AppKit import NSApp, NSOpenPanel, NSSavePanel
+    try:
+        import webview
+
+        owners = [w for w in (getattr(webview, 'windows', None) or []) if w.native is not None]
+    except Exception:
+        log.debug('取窗口列表失败', exc_info=True)
+        return None
+    for win in owners:
+        if win.uid == 'master':
+            return win.native
+    return owners[0].native if owners else None
+
+
+# 面板请求排队：runModal 会泵事件循环，工作线程等 runModal 返回，主线程上跑的是排队的另一个请求
+_panel_lock = threading.Lock()
+_panel_queue = []
+_panel_pump_scheduled = False
+
+
+def _macos_pump_panels():
+    """AppKit 主线程上的面板泵：一次只开一个 runModal，排队进来的请求依次处理。
+
+    之前是在工作线程上 callAfter 把 _show 排进主线程，再让工作线程空转等结果：
+    主线程一旦正卡在另一个模态面板里（runModal 会泵事件循环，callAfter 要等它退出才被调用），
+    那个 _show 就永远轮不到，用户看到的就是「点了没反应」。
+    """
+    global _panel_pump_scheduled
+    with _panel_lock:
+        _panel_pump_scheduled = False
+    while True:
+        with _panel_lock:
+            if not _panel_queue:
+                return
+            request = _panel_queue.pop(0)
+        try:
+            request['result'] = _macos_run_panel(request['dialog_type'], request['title'], request['extensions'])
+        except Exception as exc:
+            log.warning('macOS 文件面板失败: %s', exc, exc_info=True)
+            request['error'] = exc
+        finally:
+            request['event'].set()
+
+
+def _macos_run_panel(dialog_type, title, extensions):
+    from AppKit import NSApp, NSOpenPanel, NSSavePanel, NSApplicationActivationPolicyRegular
+
+    parent = _macos_parent_window()
+    if NSApp.activationPolicy() != NSApplicationActivationPolicyRegular:
+        # 从命令行起的 python 不是常规应用：窗口没有激活权限，面板会开在别的应用后面
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+    # 不激活的话面板会开在别的应用下面，看上去就是「点了没反应」
+    NSApp.activateIgnoringOtherApps_(True)
+    if parent is not None:
+        # 窗口也要提到最前：面板挂在它上面，窗口在别的应用后面时面板一样看不到
+        parent.makeKeyAndOrderFront_(None)
+
+    if dialog_type == 'save':
+        panel = NSSavePanel.savePanel()
+        panel.setNameFieldStringValue_(title)
+    else:
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(True)
+        panel.setCanChooseDirectories_(False)
+        panel.setAllowsMultipleSelection_(False)
+    if extensions:
+        # 用 UTType 而不是只认扩展名的 setAllowedFileTypes_：后者会把「所有文件」变成什么都选不了
+        try:
+            from UniformTypeIdentifiers import UTType
+
+            types = []
+            for ext in extensions:
+                ut = UTType.typeWithFilenameExtension_(ext)
+                if ut is not None:
+                    types.append(ut)
+            if types:
+                panel.setAllowedContentTypes_(types)
+        except Exception:
+            panel.setAllowedFileTypes_(list(extensions))
+
+    if parent is not None:
+        code = panel.runModalForWindow_(parent)
+    else:
+        code = panel.runModal()
+    if code != 1:
+        return None
+    # savePanel 与 openPanel 都有 filename()，用 URL 更稳（沙箱下 filename 偶尔为空串）
+    url = panel.URL()
+    if url is not None:
+        path = url.path()
+        return str(path) if path else None
+    path = panel.filename()
+    return str(path) if path else None
+
+
+def macos_file_panel(dialog_type, title, extensions):
+    """macOS 的文件选择面板。
+
+    在主线程上开着时直接开；在工作线程上（JS 调用一定在工作线程）就排进主线程的队列，
+    由主线程的分发器逐个跑 runModal —— 主线程只负责跑面板，不会自己阻塞等结果。
+    """
+    if threading.current_thread() is threading.main_thread():
+        # 主线程自己开：runModal 在这一点上就把本次面板跑完
+        return _macos_run_panel(dialog_type, title, extensions)
+
     from PyObjCTools import AppHelper
 
-    def _show():
-        # 不激活的话面板会开在别的应用下面，看上去就是「点了没反应」
-        if NSApp.isRunning():
-            NSApp.activateIgnoringOtherApps_(True)
-        if dialog_type == 'save':
-            panel = NSSavePanel.savePanel()
-            panel.setNameFieldStringValue_(title)
-        else:
-            panel = NSOpenPanel.openPanel()
-            panel.setCanChooseFiles_(True)
-            panel.setCanChooseDirectories_(False)
-        if extensions:
-            panel.setAllowedFileTypes_(list(extensions))
-        if panel.runModal() != 1:
-            return None
-        path = panel.filename()
-        return str(path) if path else None
-
-    if threading.current_thread() is threading.main_thread():
-        return _show()
-    box = []
-    AppHelper.callAfter(lambda: box.append(_show()))
-    # runModal 自己会泵事件循环，回调随之在主线程执行完
-    while not box:
-        time.sleep(0.05)
-    return box[0]
+    global _panel_pump_scheduled
+    request = {'dialog_type': dialog_type, 'title': title, 'extensions': list(extensions),
+               'event': threading.Event(), 'result': None, 'error': None}
+    # 先排分发器再入队：反过来的话另一个线程可能刚入队就看到还没排分发器，于是再排一个
+    with _panel_lock:
+        schedule = not _panel_pump_scheduled
+        if schedule:
+            _panel_pump_scheduled = True
+        _panel_queue.append(request)
+    if schedule:
+        AppHelper.callAfter(_macos_pump_panels)
+    request['event'].wait()
+    if request['error'] is not None:
+        raise request['error']
+    return request['result']
 
 
 def _objc_sel(obj, name):
