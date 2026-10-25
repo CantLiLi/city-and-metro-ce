@@ -91,13 +91,13 @@ class ShellApi:
         okay, payload = self._choose_file(mode)
         return payload if okay else None
 
-    def _choose_file(self, mode: str) -> 'tuple[bool, Any]':
+    def _choose_file(self, mode: str, filename: str = '') -> 'tuple[bool, Any]':
         # 对话框失败与用户取消要分开：前端只把 false 当取消，失败要能看到原因
         window = self.window
         if window is None:
             return False, '窗口未就绪'
         if mode == 'save':
-            dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, '城市与地铁社区版-进度.cmsave.json'
+            dialog, filters, filename = webview.FileDialog.SAVE, SAVE_FILTERS, filename or '城市与地铁社区版-进度.cmsave.json'
         else:
             dialog, filters, filename = webview.FileDialog.OPEN, OPEN_FILTERS, ''
         if sys.platform == 'darwin':
@@ -190,8 +190,8 @@ class ShellApi:
             result['name'] = os.path.basename(payload)
         return result
 
-    def export_to_file(self, text):
-        okay, payload = self._choose_file('save')
+    def export_to_file(self, text, filename=''):
+        okay, payload = self._choose_file('save', filename)
         if not okay:
             return {'ok': False, 'error': payload} if payload else {'ok': False}
         return self.write_export_file(payload, text)
@@ -306,15 +306,33 @@ class ShellApi:
             return {'ok': False, 'error': str(exc)}
 
     def save_index_get(self):
-        # 存档索引（进度与存档的清单）：不存在时 index=None，前端按空索引处理
-        return self._store.get_index()
+        # 清单（槽位指向哪个文件）：不存在时 index=None，前端按空清单处理。
+        # 顺手带上「哪份最新」的结论：两份信息来自同一次磁盘扫描，前端不必再问一次
+        res = self._store.read_index()
+        if res.get('ok'):
+            latest = self._store.latest(False)
+            res['latest'] = latest.get('slot') if latest.get('ok') else None
+        log.debug('save_index_get -> ok=%s slots=%s latest=%s', res.get('ok'),
+                  len((res.get('index') or {}).get('slots') or {}),
+                  ((res.get('latest') or {}).get('key')))
+        return res
 
     def save_index_set(self, index):
-        return self._store.set_index(index)
+        return self._store.write_index(index)
+
+    def save_rebuild(self):
+        # 清单丢了、或与 slots 里的文件对不上时，按文件重建一份
+        return self._store.rebuild()
 
     def save_index_rebuild(self):
-        # 清单丢了或和 slots 里的文件对不上时，按文件重建一份（进度名称会退化成进度 id）
-        return self._store.rebuild_index()
+        return self._store.rebuild()
+
+    def save_latest(self, with_text):
+        # 哪个文件最新由这一侧判定：主页面只要结论，继续游戏时连正文一起给
+        res = self._store.latest(with_text)
+        log.info('save_latest(%s) -> ok=%s slot=%s', with_text, res.get('ok'),
+                 (res.get('slot') or {}).get('key'))
+        return res
 
     def save_slot_write(self, key, text):
         return self._store.write_slot(key, text)

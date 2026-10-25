@@ -97,7 +97,7 @@
 
 /* 收藏按钮与搜索 */
 .iconbtn.fav.on { color: var(--gold); }
-.search-pop { position: fixed; z-index: 46; width: 340px; max-width: calc(100vw - 16px); background: var(--surface-solid); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 8px; animation: menuIn .22s var(--spring); transform-origin: top right; }
+.search-pop { position: fixed; z-index: 46; zoom: var(--uiz, 1); width: min(340px, calc(100vw / var(--uiz, 1) - 16px)); background: var(--surface-solid); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 8px; animation: menuIn .22s var(--spring); transform-origin: top right; }
 .srch-in { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; border-bottom: 1px solid var(--line); }
 .srch-in .ico { width: 17px; height: 17px; color: var(--muted); }
 .srch-in input { flex: 1; border: 0; outline: none; background: transparent; font-size: 14px; padding: 6px 0; }

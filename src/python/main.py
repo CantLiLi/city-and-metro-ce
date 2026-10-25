@@ -334,21 +334,42 @@ def build_window() -> 'tuple[AppWindow, dict[str, Any]]':
     api.bind(app_window)
     state: dict[str, Any] = {'closing': False, 'lock': threading.Lock(), 'dark': dark, 'on_top': False}
 
-    def on_loaded():
-        apply_window_chrome(state)
-        # __CM_DESKTOP__ 只能由这里注入：它是前端认「这是桌面版」的唯一依据，
-        # 注入失败就别认，否则网页会走桌面分支却调不到任何一个桌面接口
-        if not wait_for_engine(app_window):
-            log.error('前端未在 %ss 内就绪', ENGINE_TIMEOUT)
+    def inject_desktop():
+        # __CM_DESKTOP__ 是前端认「这是桌面版」的唯一依据，必须在 page 脚本跑完前注入：
+        # 前端的 Save.init 在脚本执行到 main.js 时就调用，等 loaded 事件已经太晚。
+        # 所以这里不等窗口事件，直接在后台轮询，api 一建好就注入。
+        # 前端还有一个 waitDesk 兜底（最多等 2.5 秒），两条路任何一条先到都算数
+        deadline = time.time() + ENGINE_TIMEOUT
+        while time.time() < deadline:
+            try:
+                if app_window.evaluate_js('!!(window.pywebview && window.pywebview.api)') is True:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.02)
+        else:
+            log.error('pywebview.api 未在 %ss 内建好，前端将按网页版运行', ENGINE_TIMEOUT)
             return
         try:
             app_window.evaluate_js(bridge_script())
         except Exception:
             log.error('注入桌面外壳信息失败', exc_info=True)
             return
+        try:
+            ok = app_window.evaluate_js('!!(window.__CM_DESKTOP__ && window.pywebview && window.pywebview.api)')
+        except Exception:
+            ok = False
+        log.info('已注入桌面标志, isDesktop=%s', ok)
+
+    def on_loaded():
+        apply_window_chrome(state)
+        if not wait_for_engine(app_window):
+            log.error('前端未在 %ss 内就绪', ENGINE_TIMEOUT)
+            return
         log.info('前端就绪, renderer=%s', webview.renderer)
 
     app_window.events.loaded += on_loaded
+    threading.Thread(target=inject_desktop, daemon=True).start()
     app_window.events.closing += make_on_closing(app_window, state)
     hold_close(app_window)
     threading.Thread(target=watch_quit_request, args=(app_window, api, state), daemon=True).start()

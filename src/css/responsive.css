@@ -3,9 +3,11 @@
    手机与平板：窄屏重新排布（顶栏两行、详情改为底部抽屉、窗口全屏、选图上下排列）
    ====================================================================== */
 @media (max-width: 760px) {
-  #hudTop { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; flex-wrap: wrap; gap: 6px; }
-  #hudTop .spacer { display: none; }
-  .citybar { flex: 1 1 100%; min-width: 0; padding: 4px; gap: 4px; }
+  #hudTop { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; flex-wrap: wrap; gap: 6px; align-items: center; }
+  /* 窄屏指标换到第二行占满宽度，操作按钮仍在右上 */
+  #hudTop > .spacer { display: none; }
+  #hudTop > .cluster.metrics { order: 3; flex: 1 1 100%; }
+  .citybar { flex: 0 1 auto; min-width: 0; padding: 4px; gap: 4px; }
   .citybar .speed { margin-left: auto; }
   .brand { width: 36px; height: 36px; border-radius: 11px; }
   .brand img { width: 28px; height: 28px; }
@@ -17,6 +19,10 @@
   .speed .sbtn { height: 30px; min-width: 32px; padding: 0 6px; }
   .cluster.metrics { flex: 1 1 0; padding: 3px; }
   .cluster.actions { padding: 3px; }
+  /* 收起后的 bar 只剩一个小按钮：别占满一行，也别被上面的 100% 宽度带走 */
+  .cluster.collapsed { flex: none; }
+  .citybar.collapsed { flex: 0 0 auto; }
+  .cluster.collapsed .barfold.on { width: 38px; height: 36px; }
   .hbtn { width: 36px; height: 38px; }
   .hbtn.wide-only { display: none; }
   #dock { top: calc(104px + env(safe-area-inset-top)); left: 8px; width: 46px; padding: 4px; gap: 2px; max-height: calc(100vh - 260px); }
@@ -31,12 +37,21 @@
   .tind { top: 4px; height: calc(100% - 8px); border-radius: 14px; }
   #buildStack { bottom: calc(68px + env(safe-area-inset-bottom)); max-width: calc(100vw - 16px); }
   #draftbar { max-width: calc(100vw - 16px); overflow-x: auto; }
-  #zoomCtl { left: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 3px; }
-  #zoomCtl .zbtn { width: 36px; height: 34px; }
+  #zoomCtl { left: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 3px; gap: 0; max-width: calc(100vw - 16px); overflow-x: auto; scrollbar-width: none; }
+  #zoomCtl::-webkit-scrollbar { display: none; }
+  #zoomCtl .zbtn { width: 36px; height: 34px; min-width: 32px; }
+  #zoomCtl .zsep { margin: 0 2px; height: 18px; }
   #feed { top: calc(110px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; max-width: none; min-width: 0; transform: none; }
   #app:has(#legendCard:not(.hidden)) .pausechip { display: none; }
   .toast { max-width: calc(100vw - 24px); font-size: 12.5px; }
-  #coach { top: calc(104px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; }
+  #coach { top: calc(104px + env(safe-area-inset-top)); left: 60px; right: 8px; width: auto; gap: 6px; padding: 10px 12px 9px; border-radius: 14px; }
+  #coach.mini { width: calc(100vw - 68px); }
+  #coach .co-step { font-size: 11.5px; }
+  #coach .co-title { font-size: 14px; line-height: 1.35; }
+  #coach .co-body { font-size: 12.5px; line-height: 1.5; }
+  #coach .co-hint { font-size: 11.5px; line-height: 1.45; }
+  #coach .co-acts .btn.sm { height: 30px; padding: 0 10px; font-size: 12.5px; }
+  #coach .co-bar { height: 3px; }
   body.has-coach #feed { left: 50%; top: auto; bottom: 140px; }
   .search-pop { left: 8px !important; right: 8px !important; width: auto; }
   .dropdown { max-width: calc(100vw - 16px); }
@@ -50,7 +65,7 @@
   .start-edition { font-size: 12.5px; letter-spacing: 2px; }
   .title-deco { margin-bottom: 22px; }
   .start-btn { height: 54px; font-size: 16.5px; }
-  .start-corner { top: calc(12px + env(safe-area-inset-top)); left: 12px; }
+  .start-corner { top: calc((12px + env(safe-area-inset-top)) / var(--uiz, 1)); left: calc(12px / var(--uiz, 1)); }
   /* 选择地图：上方横向列表，下方详情 */
   .card.msel { width: calc(100vw - 12px); height: calc(100vh - 12px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); padding: 0; }
   .msel-left { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 12px 10px; gap: 9px; }
@@ -68,8 +83,6 @@
   .msel-dwrap .map-mode b { font-size: 13px; }
   .msel-dwrap .map-mode .badge { width: 30px; height: 30px; border-radius: 9px; }
   .msel-dwrap .map-mode > .ico { display: none; }
-  .msel-frow .fchips { flex-wrap: nowrap; overflow-x: auto; }
-  .msel-frow { align-items: center; }
   .brief-acts { padding: 10px 12px 12px; }
   .brief-acts > .tiny { flex-basis: 100%; }
   /* 统计、线路示意图：全屏 */
@@ -89,13 +102,13 @@
   .nm-win .stats-head .btn.sm { display: none; }
 }
 @media (max-width: 760px) and (max-height: 620px) { #dock { max-height: calc(100vh - 200px); } }
-/* 触屏：没有悬停，不显示按钮提示气泡；镜头缩放用双指代替，界面缩放、视图切换与「全图」保留 */
+/* 触屏：没有悬停，不显示按钮提示气泡；镜头缩放既保留了 + / − 按钮，也支持双指捏合 */
 @media (pointer: coarse) {
   #uitip { display: none !important; }
   .pausechip kbd, .pausechip .muted { display: none; }
   .search-pop .srch-in kbd { display: none; }
-  #zoomCtl .zbtn[data-tip="放大"], #zoomCtl .zbtn[data-tip="缩小"] { display: none; }
-  #zoomCtl .zsep:first-of-type { display: none; }
+  /* 点按命中区域放大一点，手指不容易点偏 */
+  #zoomCtl .zbtn { width: 38px; height: 38px; min-width: 38px; }
 }
 
 /* 地理线网：保留原始地形轮廓，使用淡色让线路与车站保持清晰 */

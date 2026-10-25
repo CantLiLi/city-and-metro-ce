@@ -218,9 +218,7 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 .lp-sw { width: 6px; height: 28px; border-radius: 3px; flex: none; }
 @media (pointer: coarse) { .lp-opt kbd { display: none; } }
 
-/* ---------- v1.8 选择地图：左侧筛选与列表、右侧分区块与操作区更易区分 ---------- */
-.msel-filterbox { display: flex; flex-direction: column; gap: 10px; padding: 10px; border-radius: 16px; background: var(--surface-solid); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(36, 66, 104, 0.05); flex: none; }
-.msel-filterbox .msel-search { background: var(--surface-2); border-color: var(--line); }
+/* ---------- v1.8 选择地图：左侧列表、右侧分区块与操作区更易区分 ---------- */
 .msel-lh { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; color: var(--text); margin: 2px 2px -4px; flex: none; }
 .msel-lh .ico { color: var(--accent); }
 .msel-lh .tiny { margin-left: auto; font-weight: 500; }
@@ -238,7 +236,7 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 .msel-acth { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
 .msel-acth .tiny { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .msel-acth .tiny .ico { width: 12px; height: 12px; }
-.msel-actbar .map-actions { margin: 0; gap: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.msel-actbar .map-actions { margin: 0; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); }
 .msel-actbar .map-mode { min-width: 0; }
 .msel-actbar .map-mode small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msel-actbar .map-mode .grow { min-width: 0; }
@@ -249,7 +247,6 @@ td .tag { margin-left: 4px; padding: 0 6px; font-size: 10px; }
 .msel-actbar .map-mode.sub b { font-size: 13px; }
 .msel-actbar .map-mode.sub small { font-size: 11px; }
 @media (max-width: 760px) {
-  .msel-filterbox { padding: 8px; gap: 8px; }
   .msel-lh .tiny { display: none; }
   .msel-block { margin-top: 10px; padding: 10px 11px 12px; }
   .msel-actbar { padding: 8px 10px 10px; }

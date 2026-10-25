@@ -102,6 +102,13 @@
       self.pills[key] = { el: b, v: v, k: k, ring: wrap, arc: wrap.querySelector('.arc'), ico: ico, C: C, icon: icon };
       return b;
     };
+    // 顶栏每个 bar 都能收成一个小按钮：收起时只留这个按钮，图标标出是哪一块
+    this.barFold = {};
+    const barFold = function (key, icon, tip) {
+      const b = h('button', { class: 'barfold', 'data-tip': tip, onclick: function (e) { e.stopPropagation(); self.toggleBar(key); } }, ic(icon));
+      self.barFold[key] = b;
+      return b;
+    };
     // 指标：全部常显
     this.metricsGroup = h('div', { class: 'cluster glass metrics' },
       pill('money', '资金', 'coin', 'b-gold'), pill('pop', '人口', 'people', 'b-blue'),
@@ -118,25 +125,36 @@
     planBtn.appendChild(this.planCnt);
     this.top = h('header', { id: 'hudTop', class: 'hud hidden' },
       h('div', { class: 'cluster glass citybar' },
-        h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁社区版' })),
-        datePill,
-        h('div', { class: 'speed' }, pauseBtn, this.spdBtns[0], this.spdBtns[1], this.spdBtns[2], this.speedArrow, this.speedMore),
-        h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'), jmp('custom', '+N月', function () { self.jumpCustom(); }, '自定义推进的月份数（同样按月度结算，结束后显示变化）'))),
+        barFold('city', 'clock', '收起时间栏'),
+        h('div', { class: 'cluster-body' }, h('div', { class: 'cluster-in' },
+          h('div', { class: 'brand' }, h('img', { src: 'resources/logo-white.png', alt: '城市与地铁社区版' })),
+          datePill,
+          h('div', { class: 'speed' }, pauseBtn, this.spdBtns[0], this.spdBtns[1], this.spdBtns[2], this.speedArrow, this.speedMore),
+          h('div', { class: 'jumps' }, jmp('month', '+1月', 1, '推进 1 个月'), jmp('year', '+1年', 12, '推进 1 年（结束后显示变化）'), jmp('custom', '+N月', function () { self.jumpCustom(); }, '自定义推进的月份数（同样按月度结算，结束后显示变化）'))))),
       h('div', { class: 'spacer' }),
       this.metricsGroup,
-      h('div', { class: 'cluster glass actions' },
-        hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
-        taskBtn,
-        planBtn,
-        hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
-        hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
-        hb('settings', 'gear', '设置', function () { self.showSettings(); }),
-        hb('menu', 'menu', '菜单', function (e) { self.showMenu(e.currentTarget); })));
+      this.actionsGroup = h('div', { class: 'cluster glass actions' },
+        barFold('actions', 'menu', '收起操作栏'),
+        h('div', { class: 'cluster-body' }, h('div', { class: 'cluster-in' },
+          hb('search', 'search', '搜索车站、线路、道路、区域', function () { self.openSearch(); }, '/'),
+          taskBtn,
+          planBtn,
+          hb('stats', 'chart', '城市统计', function () { self.openStats(); }, 'G'),
+          hb('theme', 'moon', '深色模式', function () { self.toggleTheme(); }, 'N'),
+          hb('settings', 'gear', '设置', function () { self.showSettings(); }),
+          hb('menu', 'menu', '菜单', function (e) { self.showMenu(e.currentTarget); })))));
     // 窄屏（手机）顶栏只保留常用按钮：深浅模式与设置改在菜单中
     this.hbtns.theme.classList.add('wide-only'); this.hbtns.settings.classList.add('wide-only');
     this.fold = {};
     document.addEventListener('pointerdown', function (e) { self.closeFolds(e); }, true);
     this.applyFold();
+    // 顶栏两个 bar 默认收起（只留各自小按钮），由玩家决定展开哪一个；状态记进设置
+    this.barOff = { city: true, metrics: true, actions: true };
+    const savedBars = CM.Settings.get('hudBars');
+    if (savedBars && typeof savedBars === 'object') {
+      for (const k in this.barOff) this.barOff[k] = !savedBars[k];
+    }
+    this.applyBarFold();
     // 左侧：视图（2D / 2.5D / 地下 / 线路图）与图层（一个按钮，弹出图层列表）
     const vb = function (id, icon, tip, key, onclick, cls) { const b = h('button', { class: 'dockbtn ' + (cls || 'view'), 'data-tip': tip, 'data-key': key || null, 'data-side': 'right', onclick: onclick }, ic(icon)); self.tbtns[id] = b; return b; };
     this.dock = h('aside', { id: 'dock', class: 'hud glass hidden' },
@@ -157,7 +175,7 @@
       this.dockBtns[L.id] = b; this.dock.appendChild(b);
     }
     this.legendCard = h('aside', { id: 'legendCard', class: 'hud glass hidden' });
-    // 左下：镜头缩放 → 界面缩放 → 视图切换 → 全图（横向一排）
+    // 右下：镜头缩放 → 界面缩放 → 视图切换 → 全图（横向一排）
     const R = this.R;
     const zb = function (tip, key, onclick, icon) { return h('button', { class: 'zbtn', 'data-tip': tip, 'data-key': key || null, onclick: onclick }, ic(icon)); };
     this.zoomCtl = h('div', { id: 'zoomCtl', class: 'hud glass hidden' },
@@ -216,7 +234,7 @@
     this.statsEl = h('div', { id: 'stats', class: 'hidden' });
     this.fxLayer = h('div', { id: 'fxLayer' });
     this.jumpLayer = h('div', { id: 'jumpLayer', class: 'hidden' });
-    app.append(this.top, this.dock, this.legendCard, this.zoomCtl, this.right, this.toolbar, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.jumpLayer, this.screen);
+    app.append(this.top, this.toolbar, this.dock, this.legendCard, this.zoomCtl, this.right, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.jumpLayer, this.screen);
     this.initTips();
     this.initPress();
     this.renderDock();
@@ -269,7 +287,7 @@
     CM.Settings.set('uiScale', 1); snd('good');
     return true;
   };
-  // 界面大小按档位步进（25%–200%）：zoomCtl 的 + / − 两个按钮
+  // 界面大小按档位步进（25%–200%）
   UI.prototype.stepUiScale = function (dir) {
     const S = CM.Settings, cur = Math.round((S.get('uiScale') || 1) * 100);
     const next = dir > 0 ? Math.min(200, (Math.floor(cur / 10) + 1) * 10) : Math.max(25, (Math.ceil(cur / 10) - 1) * 10);
@@ -284,10 +302,13 @@
     b.setAttribute('data-tip', iso ? '切换到 2D 地图' : '切换到 2.5D 城市');
     b.classList.toggle('on', iso);
   };
-  // 指标栏放不下时，按优先级从低到高收起（经济 → 满意度 → 分担率 → 人口 → 拥堵）
+  // 指标栏放不下时，按优先级从低到高收起（经济 → 满意度 → 分担率 → 人口 → 拥堵）；
+  // 先放宽再收起：界面大小或窗口变化后，原先被收起的指标要能自己回来
   UI.prototype.fitHud = function () {
-    const m = this.top.querySelector('.cluster.metrics'); if (!m || !m.clientWidth) return;
-    for (const k of ['econ', 'sat', 'share', 'pop', 'cong', 'money']) {
+    const m = this.metricsGroup; if (!m || !m.clientWidth) return;
+    const keys = ['econ', 'sat', 'share', 'pop', 'cong', 'money'];
+    for (const k of keys) this.pills[k].el.classList.remove('squeezed');
+    for (const k of keys) {
       if (m.scrollWidth <= m.clientWidth + 1) break;
       const el = this.pills[k].el; if (getComputedStyle(el).display !== 'none') el.classList.add('squeezed');
     }
@@ -328,8 +349,10 @@
         y = below ? r.bottom + 9 : r.top - hh - 9;
         tipEl.classList.add(below ? 's-below' : 's-above');
       }
-      tipEl.style.left = U.clamp(x, 6, window.innerWidth - w - 6) + 'px';
-      tipEl.style.top = U.clamp(y, 6, window.innerHeight - hh - 6) + 'px';
+      // #uitip 按界面大小缩放过（zoom），定位值要除以缩放系数再夹到画面内
+      const zf = Math.max(0.25, Math.min(2, CM.Settings.get('uiScale') || 1));
+      tipEl.style.left = U.clamp(x / zf, 6, window.innerWidth / zf - w - 6) + 'px';
+      tipEl.style.top = U.clamp(y / zf, 6, window.innerHeight / zf - hh - 6) + 'px';
     };
     const hide = function () { clearTimeout(timer); cur = null; tipEl.className = ''; };
     document.addEventListener('pointerover', function (e) {
@@ -405,6 +428,7 @@
     this.save = { state: 'none', at: null, msg: '' };
     this.lastAuto = performance.now();
     this.showHUD(true);
+    this.renderMapBtn();
     this.renderToolbar();
     this.renderDraftbar();
     this.tick(0, true);
@@ -797,6 +821,31 @@
     if (t && t.closest && (t.closest('.foldbar') || t.closest('.foldarrow'))) return;
     this.fold = {}; this.applyFold();
   };
+  // 顶栏每个 bar 独立收起：收起后只留自身的小按钮，再点一次展开
+  // 默认全部收起；状态记进设置，下次打开保持上次的样子
+  UI.prototype.toggleBar = function (key) {
+    if (!this.barOff) this.barOff = {};
+    this.barOff[key] = !this.barOff[key];
+    const st = {};
+    for (const k in this.barOff) if (!this.barOff[k]) st[k] = 1;
+    CM.Settings.set('hudBars', st);
+    snd('toggle');
+    this.applyBarFold();
+  };
+  UI.prototype.applyBarFold = function () {
+    const off = this.barOff || {};
+    const bars = { city: this.citybar, metrics: this.metricsGroup, actions: this.actionsGroup };
+    const tips = { city: '时间栏', metrics: '指标栏', actions: '操作栏' };
+    for (const k in bars) {
+      const el = bars[k], b = this.barFold && this.barFold[k];
+      if (!el || !b) continue;
+      const on = !!off[k];
+      el.classList.toggle('collapsed', on);
+      b.classList.toggle('on', on);
+      b.setAttribute('data-tip', (on ? '展开' : '收起') + tips[k]);
+    }
+    if (this.onBarFold) this.onBarFold();
+  };
   UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); this.renderToolbar(); this.renderZoomCtl(); };
   UI.prototype.toggleView = function () { this.setView(this.R.cam.view !== 1); };
   UI.prototype.toggleUnder = function () { snd('swoosh'); this.R.setUnder(this.R.cam.tu !== 1); this.renderToolbar(); };
@@ -809,6 +858,11 @@
       b.innerHTML = ''; b.appendChild(ic(dark ? 'sun' : 'moon'));
       b.setAttribute('data-tip', dark ? '切换为浅色模式' : '切换为深色模式');
     }
+  };
+  UI.prototype.renderMapBtn = function () {
+    const b = this.hbtns && this.hbtns.mapinfo; if (!b) return;
+    const mp = CM.curMap(), s = '地图信息 · ' + (mp.title || mp.name || '');
+    b.setAttribute('data-tip', s); b.setAttribute('aria-label', s);
   };
   UI.prototype.toggleSound = function () { CM.Settings.set('sound', !CM.Settings.get('sound')); if (CM.Settings.get('sound')) snd('toggle'); this.toast(CM.Settings.get('sound') ? '音效已开启' : '音效已关闭', 'info'); };
   UI.prototype.openStats = function (tab) { if (CM.Stats && this.g()) { this.tools.cancelDrag(); snd('open'); CM.Stats.open(this, typeof tab === 'string' ? tab : null); } };
@@ -948,11 +1002,14 @@
       return true;
     };
     document.body.appendChild(box);
+    // 面板按界面大小缩放过（zoom），宽度与定位换算回未缩放坐标再夹到画面内
+    const zf = Math.max(0.25, Math.min(2, CM.Settings.get('uiScale') || 1));
     const R = this.R, q = R.P(s.x, s.y, 0), w = box.offsetWidth, hh = box.offsetHeight;
-    let x = q.x + 22, y = q.y - hh / 2;
-    if (x + w > window.innerWidth - 10) x = q.x - w - 22;
-    box.style.left = U.clamp(x, 8, window.innerWidth - w - 8) + 'px';
-    box.style.top = U.clamp(y, 70, window.innerHeight - hh - 90) + 'px';
+    const vw = window.innerWidth / zf, vh = window.innerHeight / zf;
+    let x = q.x / zf + 22, y = q.y / zf - hh / 2;
+    if (x + w > vw - 10) x = q.x / zf - w - 22;
+    box.style.left = U.clamp(x, 8, vw - w - 8) + 'px';
+    box.style.top = U.clamp(y, 70, vh - hh - 90) + 'px';
     this.linePicker = { el: box, sid: sid, pick: pick, btns: btns };
   };
   UI.prototype.closeLinePicker = function () {
@@ -1497,8 +1554,9 @@
       g ? item('book', '城市纪事', function () { self.openStats('milestones'); }) : null,
       item('help', '操作说明', function () { self.openPage('help', null, { root: true }); }),
       item('megaphone', '更新公告', function () { self.showNews(); }),
-      // 窄屏（手机）顶栏收起了深浅模式与设置按钮，在菜单里提供
+      // 窄屏（手机）顶栏收起了深浅模式、地图信息与设置按钮，在菜单里提供
       narrowItem(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', document.documentElement.dataset.theme === 'dark' ? '浅色模式' : '深色模式', function () { self.toggleTheme(); }),
+      g ? narrowItem('map', '地图信息', function () { self.showMapInfo(); }) : null,
       narrowItem('gear', '设置', function () { self.showSettings(); }),
       h('hr'),
       item('home', '返回主菜单', function () { self.backToMenu(); }),
@@ -1506,12 +1564,14 @@
     document.body.appendChild(dd);
     this.dropdown = dd;
     // 矮窗口内保留菜单自身的滚动区域；窗口或界面缩放后重新跟随菜单按钮定位。
+    // 菜单按界面大小缩放过（zoom），定位值要除以缩放系数换算回页面坐标
     dd._place = function () {
-      const r = anchor.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
-      const top = Math.max(8, Math.min(r.bottom + 8, vh / 2));
+      const z = Math.max(0.25, Math.min(2, CM.Settings.get('uiScale') || 1));
+      const r = anchor.getBoundingClientRect(), vw = window.innerWidth / z, vh = window.innerHeight / z;
+      const top = Math.max(8, Math.min(r.bottom / z + 8, vh / 2));
       dd.style.top = top + 'px';
       dd.style.maxHeight = Math.max(0, vh - top - 8) + 'px';
-      const x = r.left < vw / 2 ? r.left : r.right - dd.offsetWidth;
+      const x = r.left / z < vw / 2 ? r.left / z : r.right / z - dd.offsetWidth;
       dd.style.left = Math.max(8, Math.min(x, vw - dd.offsetWidth - 8)) + 'px';
     };
     dd._place();
@@ -1609,8 +1669,11 @@
     const input = h('input', { type: 'search', placeholder: '搜索车站、线路、道路、区域或地名', 'aria-label': '搜索车站、线路、道路、区域或地名', autocomplete: 'off' });
     const list = h('div', { class: 'srch-list', role: 'listbox' });
     const pop = h('div', { class: 'search-pop' }, h('div', { class: 'srch-in' }, ic('search'), input, h('kbd', null, 'Esc')), list);
+    // 搜索面板按界面大小缩放过（zoom），定位值要除以缩放系数换算回页面坐标
+    const zf = Math.max(0.25, Math.min(2, CM.Settings.get('uiScale') || 1));
     const r = this.hbtns.search.getBoundingClientRect();
-    pop.style.top = (r.bottom + 8) + 'px'; pop.style.right = Math.max(8, window.innerWidth - r.right - 40) + 'px';
+    pop.style.top = (r.bottom / zf + 8) + 'px';
+    pop.style.right = Math.max(8, (window.innerWidth - r.right) / zf - 40) + 'px';
     let items = [], cur = 0;
     // 地理条目（区域、城区、地标、道路、地名）：打开时生成一次
     const RANK = { lines: 0, stations: 1, region: 2, district: 2, landmark: 3, road: 4, place: 5 };
@@ -1896,7 +1959,7 @@
     const inGame = !!this.g();
     const desktop = !!(CM.desktop && CM.desktop.isDesktop());
     const title = '退出游戏？';
-    const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。';
+    const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本地，下次打开 index.html 可点击「继续游戏」。';
     // 桌面性要在点按钮时再判一次：卡片是在启动早期弹的，那时外壳可能还没把接口注进网页
     const go = function () {
       if (CM.desktop && CM.desktop.isDesktop()) {
@@ -2133,12 +2196,8 @@
       const games = CM.Save.list(mapId);
       if (!games.length) list.appendChild(h('div', { class: 'note' }, mapId ? '该地图暂无存档。' : '暂无存档。'));
       // 清单本身就读不到时，「暂无存档」会骗人：这时候要说清是清单出问题，并说明文件还在
-      if (!CM.Save.indexOk()) {
-        statusEl.textContent = '存档清单没有读出来';
-        CM.Save.describeFailure().then(function (text) { statusEl.textContent = text || '存档清单没有读出来'; });
-      } else {
-        statusEl.textContent = '';
-      }
+      if (!CM.Save.indexOk()) statusEl.textContent = CM.Save.describeFailure();
+      else statusEl.textContent = '';
       for (const gm of games) {
         const grp = h('div', { class: 'game-group', 'data-game-id': gm.gameId });
         const title = h('span', { class: 'save-name-title' }, gm.name);
@@ -2163,17 +2222,19 @@
             busy = true; input.readOnly = true; save.disabled = cancel.disabled = true;
             status.textContent = '正在保存名称…'; status.classList.remove('bad'); input.removeAttribute('aria-invalid');
             try {
-              // 已开始的自动或手动存档仍可能写入旧名称；等它们结束后再改索引。
+              // 改名只改清单，不需要等既有存档写完；但不能再有旧名称的快照在队列里
               while (self.saving || self._manualSaves.size) {
                 const pending = Array.from(self._manualSaves); if (self.saving) pending.push(self.saving);
                 await Promise.all(pending);
               }
               const current = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
               if (!current) throw new Error('该进度已不存在，请取消后刷新列表。');
-              if (current.name !== name) CM.Save.rename(gm.gameId, name);
-              await Promise.resolve(CM.Save.flush()).catch(function () {});
-              const saved = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
-              if (!saved || saved.name !== name) throw new Error('未能写入名称，请重试。');
+              if (current.name !== name) {
+                await CM.Save.rename(gm.gameId, name);
+                // 写入失败时还是旧名称：以清单为准，别让界面显示成已改
+                const saved = CM.Save.list().find(function (g) { return g.gameId === gm.gameId; });
+                if (!saved || saved.name !== name) throw new Error('未能写入名称，请重试。');
+              }
               const active = self.g();
               if (active && active.id === gm.gameId && active.name !== name) {
                 active.name = name; active.touch(); self.markUnsaved(); self.scheduleAutosave();
@@ -2200,7 +2261,7 @@
         } }, ic('pencil'), '重命名');
         grp.appendChild(h('div', { class: 'h save-name-heading' }, ic(gm.mode === 'free' ? 'sparkle' : 'trophy'), title, h('span', { class: 'tag' }, gm.mode === 'free' ? '自由建造' : '经营挑战'), mapId ? null : h('span', { class: 'tag info' }, (CM.MAPS[gm.map || 'gz'] || { name: gm.map }).name),
           h('div', { class: 'save-name-actions' }, rename,
-            h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { CM.Save.removeGame(gm.gameId); self.showSaveManager(inGame, mapId); }, true, 'trash'); } }, ic('trash'), '删除进度'))));
+            h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除整个进度？', '「' + gm.name + '」的全部 ' + gm.slots.length + ' 个存档将被永久删除。', '删除', function () { Promise.resolve(CM.Save.removeGame(gm.gameId)).then(function () { self.showSaveManager(inGame, mapId); }, function (e) { self.toast('删除失败：' + e.message, 'bad'); }); }, true, 'trash'); } }, ic('trash'), '删除进度'))));
         for (const sl of gm.slots) grp.appendChild(self.slotRow(sl, inGame));
         list.appendChild(grp);
       }
@@ -2209,7 +2270,7 @@
     this.screenRefresh = draw;
     const back = function () { if (inGame) self.closeOverlay(); else if (mapId) self.showMapSelect(mapId); else self.showStart(); };
     const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档' + (mapId && CM.MAPS[mapId] ? ' · ' + CM.MAPS[mapId].name : '')),
-      h('div', { class: 'note' }, '每个进度相互独立；自动存档在两个位置轮换写入，手动存档最多 ' + CFG.saves.maxManual + ' 个。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
+      h('div', { class: 'note' }, '自动存档最多保留 ' + CFG.saves.maxAuto + ' 份、手动存档最多 ' + CFG.saves.maxManual + ' 份，写满时自动删除最旧的一份。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
       statusEl, list, fileIn,
       h('div', { class: 'modal-actions' },
         h('button', { class: 'btn', onclick: function () { self.pickImportFile(true); } }, ic('import'), '导入存档文件'),
@@ -2222,7 +2283,7 @@
     const self = this;
     self.confirm('修复存档清单？', '会按存档目录里现有的文件重新登记所有存档。清单丢失、或清单里少了存档时可以这样找回；不会删除任何存档文件，但找回来的存档名称会变成进度编号。', '修复', function () {
       self.showLoading('正在按存档目录里的文件重建清单…');
-      CM.Save.rebuildIndex().then(function (idx) {
+      CM.Save.reload().then(function (idx) {
         const n = idx && idx.slots ? Object.keys(idx.slots).length : 0;
         self.toast(n ? '已重新登记 ' + n + ' 个存档' : '存档目录里没有找到存档文件', n ? 'info' : 'bad');
         self.showSaveManager(inGame, mapId);
@@ -2272,13 +2333,21 @@
       self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '无法载入'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档与当前进度未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
     });
   };
+  UI.prototype.loadLatest = function () {
+    const self = this;
+    CM.Save.loadLatest().then(function (data) { CM.loadGame(data); }, function (e) {
+      snd('error');
+      if (/存档文件丢失|存档不存在|清单没有读取成功|读取存档文件失败|记录可能是旧的|还没有存档/.test(String(e && e.message))) { self.showSaveDiagnosis(e.message); return; }
+      self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '无法载入'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档与当前进度未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
+    });
+  };
   // 读档失败时给用户一条可执行的出路：打开存档目录、重读清单、按存档文件重建清单
   UI.prototype.showSaveDiagnosis = function (reason) {
     const self = this;
     const btn = function (label, fn, primary) { return h('button', { class: 'btn' + (primary ? ' primary' : ''), onclick: fn }, label); };
     const rebuild = function () {
       self.showLoading('正在按存档目录里的文件重建清单…');
-      CM.Save.rebuildIndex().then(function (idx) {
+      CM.Save.reload().then(function (idx) {
         self.closeScreen();
         const n = idx && idx.slots ? Object.keys(idx.slots).length : 0;
         self.toast(n ? '已找回 ' + n + ' 个存档' : '存档目录里没有找到存档文件', n ? 'info' : 'bad');
@@ -2290,7 +2359,7 @@
     };
     self.openScreen(h('div', { class: 'card' }, self.cardHead('folder', 'b-red', '存档读不出来'),
       self.callout('bad', 'error', reason || '存档清单与存档目录里的文件对不上。'),
-      h('div', { class: 'note' }, '桌面版的存档全部写在存档目录里（index.json 是清单，slots 下每个文件是一份存档），与浏览器缓存无关。重建清单只会按已有文件重新登记，不会删除任何存档。'),
+      h('div', { class: 'note' }, '桌面版的存档全部写在存档目录的 slots 文件夹里：index.json 是清单，每个「时间_地图名.mksave」文件就是一份完整存档，与浏览器缓存无关。重建清单只会按已有存档文件重新登记，不会删除任何存档。'),
       h('div', { class: 'modal-actions' },
         btn('重建存档清单', rebuild, true),
         btn('打开存档目录', function () { CM.desktop.openDataDir(); }),
@@ -2378,15 +2447,12 @@
     if (g.pending || g.jumping) { this.toast('正在进行月度结算，请稍候再保存', 'info'); return Promise.resolve({ ok: false, error: '正在结算' }); }
     const self = this, snap = this.saveSnap(g);
     const pending = CM.Save.save(g, 'manual', { slotId: slotId, label: label || ('手动存档 ' + g.clock.y + '年' + g.clock.m + '月') }).then(function (r) {
-      // 存档索引是异步落盘的：等它写完再刷新列表，否则桌面版读到的还是旧清单
-      return Promise.resolve(CM.Save.flush()).then(function () {}, function () {}).then(function () {
-        if (self.g() !== g) return r;
-        if (r.ok) { self.markSaved(g, r.savedAt, snap); self.toast('已保存到本地（' + (r.size / 1024).toFixed(0) + ' KB）', 'good'); }
-        else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('保存失败：' + r.error, 'bad'); }
-        self.rerenderPage();
-        if (self.screenRefresh) self.screenRefresh();
-        return r;
-      });
+      if (self.g() !== g) return r;
+      if (r.ok) { self.markSaved(g, r.savedAt, snap); self.toast('已保存到本地（' + (r.size / 1024).toFixed(0) + ' KB）', 'good'); }
+      else { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: r.error }); self.toast('保存失败：' + r.error, 'bad'); }
+      self.rerenderPage();
+      if (self.screenRefresh) self.screenRefresh();
+      return r;
     }, function (e) {
       if (self.g() === g) { self.save = Object.assign({}, self.save, { state: 'error', at: Date.now(), msg: String(e && e.message || e) }); self.toast('保存失败：' + String(e && e.message || e), 'bad'); }
       return { ok: false, error: String(e && e.message || e) };

@@ -18,12 +18,19 @@
   // 步骤：title 目标、body 说明、hint 小提示、target 闪烁的按钮、hl 地图高亮、check 完成条件、manual 需点击按钮继续
   const STEPS = [
     { id: 'intro', title: '欢迎来到青湾', manual: '开始教程',
-      body: '青湾是一座约 42 万人的小城，青江从城中穿过，城市还没有地铁。接下来用 12 个小任务带你学会规划地铁：每完成一步会自动进入下一步，也可以随时跳过。' },
+      body: '青湾是一座约 42 万人的小城，青江从城中穿过，城市还没有地铁。接下来用 13 个小任务带你学会规划地铁：每完成一步会自动进入下一步，也可以随时跳过。' },
     { id: 'move', title: '移动地图',
       body: '按住左键拖动地图平移，滚动滚轮缩放（也可以用 + − 键）。按 T 在 2D 平面与 2.5D 立体之间切换。',
       hint: '试着拖动地图，再缩放一下。',
       enter: function () { const c = ui.R.cam; ctx.cam0 = { x: c.cx, y: c.cy, z: c.zoom }; },
       check: function () { const c = ui.R.cam, c0 = ctx.cam0; return U.dist(c.cx, c.cy, c0.x, c0.y) > 3 || Math.abs(Math.log(c.zoom / c0.z)) > 0.25; } },
+    { id: 'uiscale', title: '调整界面大小',
+      body: '界面大小在「设置」里调整，也可以按 O 键直接恢复成 100%。界面上按钮太小看不清时调大；想一屏看到更多内容就调小。',
+      hint: '界面大小可在 25%–200% 之间调整，设置里能手动输入百分比。试着调一下，完成后会自动恢复成 100%。',
+      target: function () { return ui.hbtns && ui.hbtns.settings; },
+      enter: function () { ctx.scale0 = Math.round((CM.Settings.get('uiScale') || 1) * 100); },
+      check: function () { return Math.round((CM.Settings.get('uiScale') || 1) * 100) !== ctx.scale0; },
+      exit: function () { if (Math.round((CM.Settings.get('uiScale') || 1) * 100) !== 100) CM.Settings.set('uiScale', 1); } },
     { id: 'pop', title: '看懂城市：人口密度',
       body: '左侧是分析图层。点击「人口密度」图层：颜色越深人口越多。钟楼一带的老城最密集，这里最需要地铁。',
       target: function () { return ui.dockBtns.pop; },
@@ -91,7 +98,7 @@
       body: '按 K 或点击左侧的「线路示意图」：换乘站标志与地图一致，可以平滑缩放，也可以导出 PNG 图片。',
       target: function () { return CM.Follow && CM.Follow.active() ? null : ui.tbtns.netmap; },
       check: function () { return !!(CM.NetMap && CM.NetMap.isOpen()); } },
-    // 经济小知识（可跳过、可回看，不计入 12 个任务；青湾为自由建造，不实际发行债券）
+    // 经济小知识（可跳过、可回看，不计入 13 个任务；青湾为自由建造，不实际发行债券）
     { id: 'money', title: '小知识：经营挑战的财政', info: true,
       body: '正式城市的「经营挑战」要自己管钱：每月有政府拨款与票款，建设和运营都要花钱；资金紧张时可以发行地方债或城投债，借来的钱只能用于地铁建设，每年付息、到期还本。',
       hint: '点「图文说明」查看详细介绍与操作方法；之后也可以在「菜单 → 操作说明」中回看。' },
@@ -113,6 +120,8 @@
     if (spec) R.setHighlight(Object.assign({ dur: 1e9, tutorial: true }, spec));
   }
   function go(i) {
+    const prev = STEPS[idx];
+    if (prev && prev.exit) prev.exit();
     idx = U.clamp(i, 0, STEPS.length - 1);
     g.tutorial.step = idx;
     doneAt = 0; ctx = {};

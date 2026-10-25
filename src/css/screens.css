@@ -106,7 +106,8 @@
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
 
 /* ---------- 下拉菜单 ---------- */
-.dropdown { position: fixed; z-index: 45; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 6px; min-width: 220px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; animation: cardIn .2s var(--ease); }
+/* 跟随界面大小缩放：尺寸按未缩放坐标算，缩放后仍贴边不溢出；定位由 showMenu 的 _place 重新算 */
+.dropdown { position: fixed; z-index: 45; zoom: var(--uiz, 1); background: var(--surface-solid); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 6px; min-width: 220px; max-width: calc(100vw / var(--uiz, 1) - 16px); max-height: calc(100dvh / var(--uiz, 1) - 16px); overflow-y: auto; overscroll-behavior: contain; animation: cardIn .2s var(--ease); }
 .dropdown button { display: flex; width: 100%; border: 0; background: transparent; padding: 9px 10px; border-radius: 9px; cursor: pointer; text-align: left; gap: 10px; align-items: center; }
 .dropdown button.dd-narrow { display: none; }
 @media (max-width: 760px) { .dropdown button.dd-narrow { display: flex; } }
@@ -117,7 +118,8 @@
 /* ---------- 统计面板 ---------- */
 #stats { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(8, 14, 26, 0.38); backdrop-filter: blur(6px); transition: opacity .3s var(--ease); }
 #stats.hidden { opacity: 0; pointer-events: none; }
-.stats-win { width: min(1180px, calc(100vw - 32px)); height: min(820px, calc(100vh - 40px)); display: flex; flex-direction: column; background: var(--bg); border-radius: 24px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35); overflow: hidden; border: 1px solid var(--line); animation: cardIn .4s var(--spring); }
+/* 统计窗口跟随界面大小缩放；视口尺寸换算回未缩放的坐标，铺满时也不会溢出 */
+.stats-win { zoom: var(--uiz, 1); width: min(1180px, calc(100vw / var(--uiz, 1) - 32px)); height: min(820px, calc(100vh / var(--uiz, 1) - 40px)); display: flex; flex-direction: column; background: var(--bg); border-radius: 24px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35); overflow: hidden; border: 1px solid var(--line); animation: cardIn .4s var(--spring); }
 .stats-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 12px 18px; background: var(--surface-solid); border-bottom: 1px solid var(--line); }
 .stats-head h2 { margin: 0; font-size: 18px; }
 .stats-tabs { display: flex; gap: 4px; margin-left: 18px; }

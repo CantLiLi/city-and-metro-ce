@@ -1527,7 +1527,7 @@
       h('button', { class: 'btn sm', onclick: function () { self.loadSlot(sl.slotId); } }, '载入'),
       h('button', { class: 'btn sm ghost', title: '导出为文件', onclick: function () { CM.Save.exportSlot(sl.slotId).catch(function (e) { self.toast('导出失败：' + e.message, 'bad'); }); } }, '导出'),
       inGame && sl.kind === 'manual' && sl.gameId === (self.g() && self.g().id) ? h('button', { class: 'btn sm ghost', title: '用当前进度覆盖此存档', onclick: function () { self.confirm('覆盖存档？', '将用当前进度覆盖「' + sl.label + '」（' + d[0] + '年' + d[1] + '月）。', '覆盖', function () { self.manualSave(sl.slotId, sl.label); }); } }, '覆盖') : null,
-      h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除存档？', '「' + sl.label + '」将被永久删除，无法恢复。', '删除', function () { CM.Save.remove(sl.slotId); Promise.resolve(CM.Save.flush()).then(function () { self.toast('已删除存档', 'info'); self.rerenderPage(); if (self.screenRefresh) self.screenRefresh(); }); }, true); } }, '删除'));
+      h('button', { class: 'btn sm ghost danger', onclick: function () { self.confirm('删除存档？', '「' + sl.label + '」（' + d[0] + '年' + d[1] + '月）将被永久删除，无法恢复。', '删除', function () { Promise.resolve(CM.Save.remove(sl.slotId)).then(function () { self.toast('已删除存档', 'info'); self.rerenderPage(); if (self.screenRefresh) self.screenRefresh(); }).catch(function (e) { self.toast('删除失败：' + e.message, 'bad'); }); }, true); } }, '删除'));
   };
 
   // ======================== 页面：帮助 ========================

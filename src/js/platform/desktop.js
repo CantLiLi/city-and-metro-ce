@@ -11,13 +11,31 @@
     if (!api || typeof api[name] !== 'function') return Promise.reject(new Error('桌面接口不可用'));
     return Promise.resolve(api[name].apply(api, args || []));
   };
-  const info = { isDesktop: isDesktop, call: call, name: '城市与地铁社区版', version: '' };
+  const info = { isDesktop: isDesktop, call: call, name: '城市与地铁社区版', version: '', platform: '' };
   CM.desktop = info;
+
+  // 让 CSS 能按平台分支：安卓壳的 app_info() 回 platform: 'android'，桌面壳回对应系统名。
+  // 只在 <html> 上打标记，浏览器里打开（没有壳）不打，网页版与 PC 布局完全不受影响
+  info.platform = function () { return info._platform || ''; };
+  info.detectPlatform = function () {
+    if (!isDesktop()) return Promise.resolve('');
+    return call('app_info').then(function (r) {
+      const p = (r && r.platform) || '';
+      info._platform = p;
+      if (p) document.documentElement.setAttribute('data-plat', p);
+      return p;
+    }, function () { return ''; });
+  };
+  info.detectPlatform();
+  // 外壳的注入晚于本脚本时靠事件补一次：桌面壳派 pywebviewready，安卓壳另派 __cmDesktopReady
+  ['pywebviewready', '__cmDesktopReady'].forEach(function (ev) {
+    window.addEventListener(ev, function () { info.detectPlatform(); });
+  });
 
   // 取消返回 null；打不开对话框、读不了文件一律 throw，调用方才能提示出来
   info.exportJSON = function (text, filename) {
     if (!isDesktop()) { CM.Save.download(text, filename); return Promise.resolve('download'); }
-    return call('export_to_file', [text]).then(function (r) {
+    return call('export_to_file', [text, filename || '']).then(function (r) {
       if (!r || (!r.ok && !r.error)) return 'cancel';
       if (!r.ok) throw new Error(r.error);
       return 'saved';
@@ -33,8 +51,11 @@
     });
   };
 
-  // 存档：正文与索引都由 Python 写进数据目录（见 js/platform/save.js）
-  const SAVE_METHODS = { save_index_get: 1, save_index_set: 1, save_index_rebuild: 1, save_slot_write: 1, save_slot_read: 1, save_slot_verify: 1, save_slot_delete: 1, save_dir: 1 };
+  // 存档：正文与清单都由外壳写进数据目录（见 js/platform/save.js）
+  const SAVE_METHODS = {
+    save_slot_write: 1, save_slot_read: 1, save_slot_verify: 1, save_slot_delete: 1,
+    save_index_get: 1, save_rebuild: 1, save_index_rebuild: 1, save_dir: 1, save_latest: 1,
+  };
   info.saveCall = function (name, args) {
     if (!isDesktop() || !SAVE_METHODS[name]) return Promise.reject(new Error('桌面接口不可用'));
     return call(name, args || []);

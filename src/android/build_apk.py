@@ -7,6 +7,13 @@
     python src/android/build_apk.py --no-deps       依赖已装好，跳过 SDK 检查提示
     python src/android/build_apk.py --version 2.1.1 覆盖 about.py 里的版本号
 
+流程固定五步，第一步一定是同步前端代码（不依赖 JDK / SDK / Gradle 检查，环境不全时也能先复制）：
+    1. 把 src/ 的 index.html + css/ + js/ + resources/ 复制进 app/src/main/assets/src
+    2. 检查 JDK、Android SDK、Gradle
+    3. Gradle 构建
+    4. 收集 APK
+    5. 完成
+
 前置条件（脚本会检查并给出提示）：
     - JDK 17 或更高（JAVA_HOME 或 PATH 里的 java）
     - Android SDK：优先用本目录的 sdk/（cmdline-tools 装的 platforms;android-34 +
@@ -164,7 +171,7 @@ def check_env(name: str, number: str, skip_deps: bool) -> tuple[list[str], str]:
     print(f"      版本:   {number}")
     print(f"      版本码: {version_code(number)}")
 
-    for path in (SYNC, HERE / "settings.gradle.kts", HERE / "app" / "build.gradle.kts"):
+    for path in (HERE / "settings.gradle.kts", HERE / "app" / "build.gradle.kts"):
         if not path.exists():
             raise SystemExit(f"缺少 {path.relative_to(ROOT)}")
 
@@ -237,6 +244,9 @@ def _sdk_dir_ok(local: Path) -> bool:
 
 
 def sync_assets():
+    """把 src/ 的前端代码复制进 assets/：每次打包都先跑，不能跳过。"""
+    if not SYNC.is_file():
+        raise SystemExit(f"缺少 {SYNC.relative_to(ROOT)}，无法同步前端代码")
     run([sys.executable, str(SYNC), "--docs"], cwd=ROOT)
 
 
@@ -292,13 +302,13 @@ def main(argv=None) -> int:
     print(f"  打包 {name} v{number}（{variant}）")
     print("=" * 56)
 
-    step(1, 5, "检查环境")
+    step(1, 5, "复制前端代码到 assets")
+    sync_assets()
+
+    step(2, 5, "检查环境")
     gradle_cmd, sdk = check_env(name, number, args.no_deps)
     java_home = find_java()
     write_local_properties(sdk)
-
-    step(2, 5, "同步前端资源")
-    sync_assets()
 
     step(3, 5, "Gradle 构建")
     build(gradle_cmd, variant, sdk, java_home)

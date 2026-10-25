@@ -10,6 +10,15 @@
   const VERSION = function () { return CFG.GAME_VERSION || '2.0.0'; };
   const REPO = 'https://github.com/CantLiLi/city-and-metro-ce/issues';
 
+  // 触屏设备（手机、平板）且当前是竖屏：界面在这个方向上太窄，值得提示转横屏。
+  // 用 pointer: coarse 判断触屏而不是只看 UA，安卓平板接鼠标、桌面开手机模拟器都能判对
+  const isTouchPortrait = function () {
+    try {
+      if (!window.matchMedia || !window.matchMedia('(pointer: coarse)').matches) return false;
+      return window.innerHeight > window.innerWidth;
+    } catch (e) { return false; }
+  };
+
   // 三种场景：启动、进入地图、退出地图。提示各自独立。
   // 时长不再固定：进度条先慢爬到 warmPct 等加载，加载一完成就快速跑满并关闭
   const SCENES = {
@@ -17,6 +26,8 @@
       warm: 3100, warmPct: 70, fin: 480,
       tips: [
         { t: '正在准备城市数据与地铁线路，请稍候' },
+        // 竖屏手机上提示横过来玩：只在触屏且竖屏时出现，桌面上不会多这一行
+        { t: '建议横屏游玩：把手机转过来，能同时看到更多线路与面板', only: isTouchPortrait },
         { t: '建议最大化或全屏窗口游玩' },
         { t: function () { return '本版本基于原版 v' + VERSION() + ' 修改'; } },
         { t: '有问题请反馈到本项目的 GitHub 仓库，而不是官方仓库。', link: REPO },
@@ -35,7 +46,7 @@
       warm: 2900, warmPct: 72, fin: 480,
       tips: [
         { t: '正在保存进度并返回主菜单…' },
-        { t: '进度已自动保存在本浏览器中，下次可点「继续游戏」' },
+        { t: '进度已自动保存在本地，下次可点「继续游戏」' },
         { t: '也建议定期导出存档文件，换设备时更放心' },
         { t: '感谢游玩，欢迎到 GitHub 反馈问题与建议', link: REPO },
       ],
@@ -120,7 +131,9 @@
 
   function setTips(tipEl, list) {
     tipEl.innerHTML = '';
-    tipEl.appendChild(h('div', { class: 'lp-tips' }, list.map(function (tip) {
+    // only：给了就只在条件成立时显示，条件不成立整行不出现（不占位、不留空行）
+    const shown = list.filter(function (tip) { return !tip.only || tip.only(); });
+    tipEl.appendChild(h('div', { class: 'lp-tips' }, shown.map(function (tip) {
       const line = [h('span', { class: 'lp-tip-i' }, typeof tip.t === 'function' ? tip.t() : tip.t)];
       if (tip.link) line.push(h('a', { class: 'lp-tip-a', href: tip.link, target: '_blank', rel: 'noopener' }, 'GitHub 仓库'));
       return h('div', { class: 'lp-tip-line' }, line);

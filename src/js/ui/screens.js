@@ -1,11 +1,10 @@
 'use strict';
-// 全屏界面：开始界面、选择地图（左侧预览与选择、右侧详情，搜索与筛选）、开局简报、更新公告
+// 全屏界面：开始界面、选择地图、地图信息、开局简报、更新公告
 (function (CM) {
   const U = CM.U, CFG = CM.CFG, UI = CM.UI;
   const h = U.h, ic = CM.icon;
   const snd = function (name) { if (CM.Sound) CM.Sound.play(name); };
   const LEVEL = ['入门', '普通', '进阶', '挑战'];
-  const REGION_ORDER = ['中国内地', '中国香港', '中国台湾', '日本', '虚构'];
 
   // 公告是否已读（本机记录；无法访问本地存储时视为已读，不打扰）
   const NEWS_KEY = 'cm1.newsSeen';
@@ -20,8 +19,6 @@
     d.appendChild(h('b', null, LEVEL[n - 1]));
     return d;
   };
-  const eraOf = function (mp) { return Math.floor(mp.cfg.START.y / 10) * 10; };
-  const eraName = function (e) { return e + ' 年代'; };
   const REPO_ISSUES = 'https://github.com/CantLiLi/city-and-metro-ce/issues';
 
   // ======================== 开始界面 ========================
@@ -34,12 +31,10 @@
   UI.prototype.showStart = function (opts) {
     const self = this;
     opts = opts || {};
-    const latest = CM.Save.latest();
-    // 清单里的槽位在磁盘上找不到时，「继续游戏」会点到一个已经丢了的存档；
-    // 桌面版启动时已经按存档目录补齐过，仍拿不到就退回最近一个能用的槽
-    const usable = function (sl) { return sl && CM.Save.hasSlot(sl.slotId); };
-    const cont = usable(latest) ? latest : CM.Save.latestUsable();
+    const latest = CM.Save.resume();
+    const cont = latest;
     const storageOk = CM.Save.available();
+    if (CM.Save.isDesktop() && !cont) console.warn('[存档] 没取到最新存档：', CM.Save.newestError() || '外壳返回空');
     const btn = function (icon, label, onclick, opts) {
       opts = opts || {};
       return h('button', { class: 'start-btn' + (opts.primary ? ' primary' : ''), disabled: opts.disabled ? true : null, onclick: onclick },
@@ -51,7 +46,7 @@
       title, edition, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
         btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),
-        btn('clock', '继续游戏', function () { if (cont) self.loadSlot(cont.slotId); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : '暂无存档' }),
+        btn('clock', '继续游戏', function () { if (cont) self.loadLatest(); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : '暂无存档' }),
         btn('gear', '设置', function () { self.showSettings(); }),
         btn('power', '退出', function () { self.quitGame(); })),
       CM.MAPS.tutorial ? h('button', { class: 'start-learn', onclick: function () { self.showMapSelect('tutorial'); } }, ic('help', 16), h('span', null, '第一次玩？先试试'), h('b', null, '新手教程 · 青湾'), ic('chev', 14)) : null,
@@ -70,222 +65,102 @@
   };
 
   // ======================== 选择地图 ========================
+  // 只负责挑一张地图：第一次点选中，再点一次才开局。地图的详细介绍在进入游戏后由右上角「地图信息」打开
   UI.prototype.showMapSelect = function (selId) {
     const self = this, all = CM.MAP_ORDER.slice();
-    let sel = selId && CM.MAPS[selId] ? selId : (this._mapSel && CM.MAPS[this._mapSel] ? this._mapSel : all[0]);
-    const F = this._mapFilter || (this._mapFilter = { q: '', era: 'all', region: 'all' });
-    if (selId) { F.q = ''; F.era = 'all'; F.region = 'all'; }
     const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-    const eras = Array.from(new Set(all.map(function (id) { return eraOf(CM.MAPS[id]); }))).sort();
-    const regions = REGION_ORDER.filter(function (r) { return all.some(function (id) { return CM.MAPS[id].region === r; }); });
     const back = function () { self.showStart(); };
+    let sel = selId && CM.MAPS[selId] ? selId : (this._mapSel && CM.MAPS[this._mapSel] ? this._mapSel : null);
 
-    // ---- 左侧：搜索、筛选、地图列表（数据层）----
-    const search = h('input', { type: 'search', class: 'msel-q', placeholder: '搜索城市、年代或特色', 'aria-label': '搜索地图', value: F.q, autocomplete: 'off' });
-    const clear = h('button', { class: 'iconbtn sm', 'data-tip': '清除', 'aria-label': '清除搜索', onclick: function () { search.value = ''; F.q = ''; clear.classList.add('gone'); drawList(); search.focus(); } }, ic('close', 15));
-    if (!F.q) clear.classList.add('gone');
-    search.addEventListener('input', function () { F.q = search.value.trim(); clear.classList.toggle('gone', !F.q); drawList(); });
-    const chipRow = function (label, icon, key, opts) {
-      const row = h('div', { class: 'msel-frow' }, h('span', { class: 'msel-fl' }, ic(icon, 14), label));
-      const chips = h('div', { class: 'fchips' });
-      for (const o of opts) {
-        const b = h('button', { class: 'fchip' + (F[key] === o[0] ? ' on' : ''), 'data-silent': '1', 'data-v': o[0], onclick: function () {
-          if (F[key] === o[0]) return;
-          F[key] = o[0]; snd('soft');
-          chips.querySelectorAll('.fchip').forEach(function (x) { x.classList.toggle('on', x.dataset.v === F[key]); });
-          drawList();
-        } }, o[1]);
-        chips.appendChild(b);
-      }
-      row.appendChild(chips);
-      return row;
-    };
-    const filters = h('div', { class: 'msel-filters' },
-      chipRow('年代', 'calYear', 'era', [['all', '全部']].concat(eras.map(function (e) { return [String(e), eraName(e)]; }))),
-      chipRow('地区', 'globe', 'region', [['all', '全部']].concat(regions.map(function (r) { return [r, r]; }))));
     const list = h('div', { class: 'msel-list', role: 'listbox', 'aria-label': '地图' });
-    const empty = h('div', { class: 'msel-empty hidden-el' }, ic('search', 22), h('b', null, '没有符合条件的地图'), h('span', null, '换个关键词，或把筛选改回「全部」。'),
-      h('button', { class: 'btn sm', onclick: function () { F.q = ''; F.era = 'all'; F.region = 'all'; self.showMapSelect(sel); } }, '清除筛选'));
-    const count = h('span', { class: 'msel-count' });
     const items = {};
-    const text = function (mp) { return [mp.title, mp.name, mp.sub, mp.tagline, mp.region, eraName(eraOf(mp)), String(mp.cfg.START.y), (mp.tags || []).join(' '), mp.data.city].join(' ').toLowerCase(); };
-    const match = function (id) {
-      const mp = CM.MAPS[id];
-      if (F.era !== 'all' && String(eraOf(mp)) !== F.era) return false;
-      if (F.region !== 'all' && mp.region !== F.region) return false;
-      if (F.q) { const t = text(mp); for (const w of F.q.toLowerCase().split(/\s+/)) if (w && t.indexOf(w) < 0) return false; }
-      return true;
+    const start = function (id) {
+      const mp = CM.MAPS[id], y0 = mp.cfg.START.y;
+      self._mapSel = id;
+      snd('build');
+      if (mp.tutorial) CM.newGame({ map: id, mode: 'free', tutorial: true, name: '新手教程 · ' + mp.data.city });
+      else CM.newGame({ map: id, mode: 'challenge', name: '经营挑战 · ' + mp.data.city + ' ' + y0 });
+    };
+    const mark = function () {
+      for (const id in items) { items[id].classList.toggle('on', id === sel); items[id].setAttribute('aria-selected', id === sel ? 'true' : 'false'); }
     };
     for (const id of all) {
       const mp = CM.MAPS[id], n = CM.Save.list(id).length;
-      const it = h('button', { class: 'msel-item', role: 'option', 'data-id': id, onclick: function () { pick(id); }, ondblclick: function () { pick(id); const p = detail.querySelector('.map-mode.primary'); if (p) p.click(); } },
+      const it = h('button', { class: 'msel-item', role: 'option', 'data-id': id, onclick: function () { if (sel === id) start(id); else { sel = id; mark(); } } },
         h('span', { class: 'msel-thumb' }, h('img', { alt: '', src: CM.mapThumb(id, theme) || '' }), mp.tutorial ? h('span', { class: 'msel-flag' }, '教程') : null),
         h('span', { class: 'msel-it' },
           h('b', null, mp.title || mp.name),
           h('small', null, mp.tagline || mp.sub),
-          h('span', { class: 'msel-meta' }, h('span', { class: 'tag' }, mp.region || ''), levelEl(mp.difficulty || 2), n ? h('span', { class: 'msel-prog' }, ic('save', 12), n + ' 个进度') : null)));
+          h('span', { class: 'msel-meta' }, h('span', { class: 'tag' }, mp.region || ''), levelEl(mp.difficulty || 2), n ? h('span', { class: 'msel-prog' }, ic('save', 12), n + ' 个进度') : null)),
+        ic('chev', 16));
       items[id] = it; list.appendChild(it);
     }
-    list.appendChild(empty);
-    const drawList = function () {
-      let shown = 0;
-      for (const id of all) { const ok = match(id); items[id].classList.toggle('hidden-el', !ok); if (ok) shown++; }
-      empty.classList.toggle('hidden-el', shown > 0);
-      count.textContent = shown === all.length ? '共 ' + all.length + ' 张地图' : '找到 ' + shown + ' / ' + all.length + ' 张';
-      // 当前选中的地图被筛掉时，选中第一张可见的地图
-      if (shown && items[sel].classList.contains('hidden-el')) { const first = all.find(function (id) { return !items[id].classList.contains('hidden-el'); }); if (first) pick(first, true); }
-    };
-
-    // ---- 右侧：详情 ----
-    const detail = h('div', { class: 'msel-detail' });
-    const fmtDate = function (sl) { return sl.date[0] + '年' + sl.date[1] + '月'; };
-    const buildDetail = function () {
-      const mp = CM.MAPS[sel], games = CM.Save.list(sel), latest = CM.Save.latest(sel), y0 = mp.cfg.START.y;
-      const start = function (mode) {
-        snd('build');
-        if (mp.tutorial) CM.newGame({ map: sel, mode: 'free', tutorial: true, name: '新手教程 · ' + mp.data.city });
-        else CM.newGame({ map: sel, mode: mode, name: (mode === 'free' ? '自由建造' : '经营挑战') + ' · ' + mp.data.city + ' ' + y0 });
-      };
-      const modeBtn = function (mode, icon, badge, title, desc, primary) {
-        return h('button', { class: 'map-mode' + (primary ? ' primary' : ''), onclick: function () { start(mode); } },
-          h('span', { class: 'badge ' + badge }, ic(icon)), h('span', { class: 'grow' }, h('b', null, title), h('small', null, desc)), ic('chev', 16));
-      };
-      const hero = h('div', { class: 'msel-hero' },
-        h('img', { alt: '', src: CM.mapThumb(sel, theme) || '' }),
-        h('div', { class: 'msel-hero-tx' },
-          h('div', { class: 'msel-kicker' }, h('span', null, mp.region || ''), h('i'), h('span', null, y0 + ' 年起'), h('i'), h('span', null, mp.kind === 'fictional' || mp.tutorial ? '虚构城市' : '真实地理')),
-          h('h2', null, mp.title || mp.name),
-          h('div', { class: 'msel-tagline' }, mp.tagline || mp.sub),
-          h('div', { class: 'msel-chips' }, levelEl(mp.difficulty || 2), (mp.tags || []).map(function (t) { return h('span', { class: 'tag glass-tag' }, t); }))));
-      // 要点：范围、起始、人口、货币等；真实城市另列开局时地图范围的经济规模（城市经济模拟的起点，估算）
-      const fl = (mp.facts || []).filter(function (f) { return f[0] !== '模式'; }).slice();
-      const mc = mp.cfg.macro && mp.cfg.macro !== 'auto' ? mp.cfg.macro : null;
-      if (mc && mc.gdp0) { const mo = mp.cfg.money, v = mc.gdp0; fl.push(['开局 GDP', '约 ' + (v >= 1e8 ? (v / 1e8).toFixed(2) + ' 万' + mo.yi : U.fmtMoney(v, 0, mo))]); }
-      const facts = h('div', { class: 'msel-facts' }, fl.map(function (f) { return h('div', null, h('span', null, f[0]), h('b', { title: f[1] }, f[1])); }));
-      const feats = h('div', { class: 'msel-feats' }, (mp.features || []).map(function (f, k) {
-        return h('div', { class: 'msel-feat', style: { animationDelay: (0.04 * k) + 's' } }, h('span', { class: 'badge ' + ['b-blue', 'b-teal', 'b-orange', 'b-violet'][k % 4] }, ic(f[0])), h('div', null, h('b', null, f[1]), h('small', null, f[2])));
-      }));
-      // 大事年表：开局 + 本地图的关键历史节点
-      const hl = [[y0, '开局']].concat(mp.highlights || []);
-      const tl = h('div', { class: 'msel-tl' }, hl.map(function (e, k) {
-        return h('div', { class: 'msel-ev' + (k === 0 ? ' start' : '') }, h('b', null, String(e[0])), h('i'), h('span', null, e[1]));
-      }));
-      const acts = h('div', { class: 'map-actions' });
-      if (mp.tutorial) acts.appendChild(modeBtn('free', 'play', 'b-teal', '开始教程', '从头开始 12 个引导任务（不限资金）', true));
-      else {
-        acts.appendChild(modeBtn('challenge', 'trophy', 'b-gold', '经营挑战', '新游戏 · 初始资金 ' + U.fmtMoney(mp.cfg.economy.startFunds, undefined, mp.cfg.money) + '，拨款随城市经济变化', true));
-        acts.appendChild(modeBtn('free', 'sparkle', 'b-teal', '自由建造', '新游戏 · 资金不限，任务仅供参考', false));
-      }
-      acts.appendChild(h('button', { class: 'map-mode sub', disabled: latest ? null : true, 'data-tip': latest ? latest.name + ' · ' + fmtDate(latest) : null, onclick: function () { if (latest) self.loadSlot(latest.slotId); } },
-        h('span', { class: 'badge b-blue' }, ic('clock')), h('span', { class: 'grow' }, h('b', null, mp.tutorial ? '继续教程' : '继续游戏'), h('small', null, latest ? latest.name + ' · ' + fmtDate(latest) : '该地图还没有存档')), ic('chev', 16)));
-      acts.appendChild(h('button', { class: 'map-mode sub', onclick: function () { self.showSaveManager(false, sel); } },
-        h('span', { class: 'badge b-slate' }, ic('folder')), h('span', { class: 'grow' }, h('b', null, '读取存档'), h('small', null, games.length ? games.length + ' 个进度 · 可导入存档文件' : '暂无存档 · 可导入存档文件')), ic('chev', 16)));
-      // 详情按区块分组：概况（介绍与要点）、地图特色、大事年表；底部为本图操作区
-      const block = function (icon, badge, title, kids, cls) { return h('section', { class: 'msel-block ' + (cls || '') }, h('div', { class: 'msel-bh' }, h('span', { class: 'badge ' + badge }, ic(icon, 15)), h('b', null, title)), kids); };
-      const progress = games.length ? games.length + ' 个进度 · 最近 ' + (latest ? fmtDate(latest) : '—') : (mp.tutorial ? '还没有开始教程' : '还没有进度');
-      return h('div', { class: 'msel-dwrap' },
-        h('div', { class: 'msel-scroll' }, hero,
-          block('info', 'b-blue', '城市概况', [h('p', { class: 'msel-intro' }, mp.intro || mp.desc), facts], 'intro'),
-          block('sparkle', 'b-violet', '地图特色', feats),
-          block('calYear', 'b-orange', '大事年表', tl)),
-        h('div', { class: 'msel-actbar' }, h('div', { class: 'msel-acth' }, h('b', null, mp.tutorial ? '开始教程' : '开始规划 ' + (mp.name || '')), h('span', { class: 'tiny muted' }, ic('save', 12), progress)), acts));
-    };
-    let first = true;
-    const drawDetail = function () {
-      self._mapSel = sel;
-      for (const id in items) { items[id].classList.toggle('on', id === sel); items[id].setAttribute('aria-selected', id === sel ? 'true' : 'false'); }
-      const nd = buildDetail();
-      if (!first) nd.classList.add('swap-in');
-      detail.replaceChildren(nd);
-      first = false;
-    };
-    const pick = function (id, quiet) {
-      if (sel === id) return;
-      sel = id; if (!quiet) snd('soft');
-      drawDetail();
-      const it = items[id]; if (it && it.scrollIntoView) it.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    };
-
     const left = h('div', { class: 'msel-left' },
-      h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图'), h('span', { class: 'grow' }), count),
-      h('div', { class: 'msel-filterbox' }, h('div', { class: 'msel-search' }, ic('search', 16), search, clear), filters),
-      h('div', { class: 'msel-lh' }, ic('map', 14), '地图', h('span', { class: 'tiny muted' }, '点击查看详情')),
+      h('div', { class: 'msel-head' }, h('button', { class: 'iconbtn', 'data-tip': '返回主菜单', 'data-key': 'Esc', onclick: back }, ic('back')), h('h2', null, '选择地图'), h('span', { class: 'grow' }), h('span', { class: 'msel-count' }, '共 ' + all.length + ' 张地图')),
+      h('div', { class: 'msel-lh' }, ic('map', 14), '地图', h('span', { class: 'tiny muted' }, '选中后再次点击进入')),
       list,
-      h('div', { class: 'msel-note' }, '每张地图的进度与存档各自独立；进入游戏时默认暂停，可以先规划线路。'));
-    drawDetail(); drawList();
-    this.openMapSheet(left, detail, back, items, all, sel, pick, search);
-  };
-
-  // 开始界面里选地图：主菜单留在左边，地图列表从右侧滑出；
-  // 点中某张图后，左侧的主菜单位置换成该图的详情
-  UI.prototype.openMapSheet = function (listPane, detail, back, items, all, sel, pick, search) {
-    const self = this;
-    const stage = this.screen.querySelector('.start-stage');
-    if (!stage) { back(); return; }
-    const menu = stage.querySelector('.start-wrap');
-    let cur = sel;
-    // 左侧舞台：主菜单和详情二选一，切换时交叉淡入
-    const showDetail = function () {
-      if (stage.querySelector('.msel-pane')) return;
-      if (menu) menu.classList.add('gone');
-      const pane = h('div', { class: 'msel-pane' }, detail);
-      stage.appendChild(pane);
-      requestAnimationFrame(function () { pane.classList.add('in'); });
-    };
-    const showMenu = function () {
-      const pane = stage.querySelector('.msel-pane');
-      if (!pane) return;
-      pane.classList.remove('in');
-      setTimeout(function () { pane.remove(); if (menu) menu.classList.remove('gone'); }, 220);
-    };
-    const pickWrapped = function (id) {
-      if (id === cur) { showDetail(); return; }
-      cur = id;
-      showDetail();
-      pick(id);
-    };
-    // h() 用 addEventListener 绑定点击，直接改 onclick 不会顶掉原监听；
-    // 列表项换成新节点，只保留「在左侧舞台查看详情」这一个点击行为
-    for (const id in items) {
-      const old = items[id];
-      const it = old.cloneNode(true);
-      it.addEventListener('click', function () { pickWrapped(id); });
-      old.replaceWith(it);
-      items[id] = it;
-    }
-    // 打开时先把当前选中项高亮出来，详情等内容第一次点选才展开
-    for (const id in items) { items[id].classList.toggle('on', id === cur); items[id].setAttribute('aria-selected', id === cur ? 'true' : 'false'); }
-    listPane.classList.add('msel-sheet');
-    const card = h('div', { class: 'card msel-card', tabindex: '-1' }, listPane);
+      h('div', { class: 'msel-note' }, '每张地图的进度与存档各自独立。'));
+    mark();
+    const card = h('div', { class: 'card msel-card', tabindex: '-1' }, left);
+    const ids = all.slice();
     card.addEventListener('keydown', function (e) {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
-      if (e.key === 'Enter') {
-        const p = detail.querySelector('.map-mode.primary');
-        if (p && stage.querySelector('.msel-pane')) { e.preventDefault(); p.click(); }
-        else if (cur) pickWrapped(cur);
-        return;
-      }
-      const vis = all.filter(function (id) { return !items[id].classList.contains('hidden-el'); });
-      if (!vis.length) return;
       e.preventDefault();
-      const k = vis.indexOf(cur), n = vis[(k + (e.key === 'ArrowDown' ? 1 : -1) + vis.length) % vis.length];
-      pickWrapped(n);
+      if (e.key === 'Enter') { if (sel) start(sel); return; }
+      const k = ids.indexOf(sel);
+      sel = ids[(k + (e.key === 'ArrowDown' ? 1 : -1) + ids.length) % ids.length];
+      mark();
+      if (items[sel].scrollIntoView) items[sel].scrollIntoView({ block: 'nearest' });
     });
-    this.openSheet(card, {
-      esc: function () {
-        // 详情展开时先退回主菜单，再按一次才关卡片
-        if (stage.querySelector('.msel-pane')) { showMenu(); return; }
-        self.closeSheet();
-      },
-      back: function () {
-        const pane = stage.querySelector('.msel-pane');
-        if (pane) pane.remove();
-        if (menu) menu.classList.remove('gone');
-        self.showStart({ noAnim: true });
-      },
-    });
+    this.openSheet(card, { esc: function () { self.closeSheet(); }, back: back });
     requestAnimationFrame(function () { card.focus({ preventScroll: true }); });
   };
+
+  // ======================== 地图信息 ========================
+  // 当前地图的来历、范围、特色与年表：进入游戏后从右上角「地图信息」打开
+  UI.prototype.showMapInfo = function () {
+    const self = this, id = (this.g() && this.g().mapId) || CM.mapId;
+    const mp = CM.MAPS[id]; if (!mp) return;
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    const fmtDate = function (sl) { return sl.date[0] + '年' + sl.date[1] + '月'; };
+    const y0 = mp.cfg.START.y;
+    const close = function () { self.closeScreen(); };
+
+    const fl = (mp.facts || []).filter(function (f) { return f[0] !== '模式'; }).slice();
+    const mc = mp.cfg.macro && mp.cfg.macro !== 'auto' ? mp.cfg.macro : null;
+    if (mc && mc.gdp0) { const mo = mp.cfg.money, v = mc.gdp0; fl.push(['开局 GDP', '约 ' + (v >= 1e8 ? (v / 1e8).toFixed(2) + ' 万' + mo.yi : U.fmtMoney(v, 0, mo))]); }
+    const facts = h('div', { class: 'msel-facts' }, fl.map(function (f) { return h('div', null, h('span', null, f[0]), h('b', { title: f[1] }, f[1])); }));
+    const feats = h('div', { class: 'msel-feats' }, (mp.features || []).map(function (f, k) {
+      return h('div', { class: 'msel-feat', style: { animationDelay: (0.04 * k) + 's' } }, h('span', { class: 'badge ' + ['b-blue', 'b-teal', 'b-orange', 'b-violet'][k % 4] }, ic(f[0])), h('div', null, h('b', null, f[1]), h('small', null, f[2])));
+    }));
+    const hl = [[y0, '开局']].concat(mp.highlights || []);
+    const tl = h('div', { class: 'msel-tl' }, hl.map(function (e, k) {
+      return h('div', { class: 'msel-ev' + (k === 0 ? ' start' : '') }, h('b', null, String(e[0])), h('i'), h('span', null, e[1]));
+    }));
+    const block = function (icon, badge, title, kids) { return h('section', { class: 'msel-block' }, h('div', { class: 'msel-bh' }, h('span', { class: 'badge ' + badge }, ic(icon, 15)), h('b', null, title)), kids); };
+    const games = CM.Save.list(id), latest = CM.Save.latest(id);
+    const progress = games.length ? games.length + ' 个进度 · 最近 ' + (latest ? fmtDate(latest) : '—') : (mp.tutorial ? '还没有开始教程' : '还没有进度');
+    const hero = h('div', { class: 'msel-hero' },
+      h('img', { alt: '', src: CM.mapThumb(id, theme) || '' }),
+      h('div', { class: 'msel-hero-tx' },
+        h('div', { class: 'msel-kicker' }, h('span', null, mp.region || ''), h('i'), h('span', null, y0 + ' 年起'), h('i'), h('span', null, mp.kind === 'fictional' || mp.tutorial ? '虚构城市' : '真实地理')),
+        h('h2', null, mp.title || mp.name),
+        h('div', { class: 'msel-tagline' }, mp.tagline || mp.sub),
+        h('div', { class: 'msel-chips' }, levelEl(mp.difficulty || 2), (mp.tags || []).map(function (t) { return h('span', { class: 'tag glass-tag' }, t); }))));
+
+    const card = h('div', { class: 'card mapinfo' },
+      h('div', { class: 'card-head' }, h('span', { class: 'badge b-blue' }, ic('map')),
+        h('div', { class: 'grow' }, h('h2', null, '地图信息'), h('div', { class: 'tiny muted' }, (mp.name || '') + ' · ' + progress)),
+        h('button', { class: 'iconbtn', 'data-tip': '关闭', 'data-key': 'Esc', onclick: close }, ic('close'))),
+      h('div', { class: 'msel-scroll' }, hero,
+        block('info', 'b-blue', '城市概况', [h('p', { class: 'msel-intro' }, mp.intro || mp.desc), facts]),
+        block('sparkle', 'b-violet', '地图特色', feats),
+        block('calYear', 'b-orange', '大事年表', tl)));
+    this.openScreen(card, close);
+    // 地图信息只做查看：点卡片外的空白处不关闭，只认关闭按钮与 Esc
+    this.screen.onpointerdown = null;
+  };
+
 
   // ======================== 开局简报 ========================
   // 新开存档时：这座城市当时的交通格局、你的起点与首批任务；之后可在日期面板或菜单中再次查看

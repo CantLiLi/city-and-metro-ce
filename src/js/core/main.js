@@ -296,13 +296,14 @@
   const mapIn = function () { canvas.classList.add('map-in'); if (R.lcv) R.lcv.classList.remove('lab-intro'); };
   CM.onLoadPageDone = mapIn;
   // 启动进度：加载页换成本脚本时才挂上遮罩，初始化写完就收尾，不等固定时长。
-  // 背景城市在 80ms 后才生成，但那只是背景，不该拖着加载页
-  if (CM.LoadPage && CM.LoadPage.initial) CM.LoadPage.initial.done();
+  // 存档要等外壳的桌面标志（最晚 2.5 秒），这段等待由加载页盖住，免得先露出空列表
+  const loadDone = function () { if (CM.LoadPage && CM.LoadPage.initial) CM.LoadPage.initial.done(); };
   // 清单没读到也要显示开始界面，但得说一声，否则用户只会看到空的存档列表
-  CM.Save.init().then(function () { ui.showStart(); }, function (e) {
+  CM.Save.init().then(function () { loadDone(); ui.showStart(); }, function (e) {
+    loadDone();
     ui.showStart();
     const msg = (e && e.message) || String(e);
-    if (/清单|读取失败|没有读到|索引/.test(msg)) ui.toast('存档清单没有读取成功，存档列表可能是空的：' + msg, 'bad');
+    if (/清单|读取|没有读到|存档/.test(msg)) ui.toast(msg + '（可点「修复存档清单」重新登记）', 'bad');
   });
   setTimeout(function () {
     if (!preview) { try { preview = makePreview(); } catch (e) { console.error(e); } }

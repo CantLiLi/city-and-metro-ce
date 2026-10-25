@@ -99,7 +99,7 @@ class Perf {
 /**
  * 桌面壳的数据目录，对应 Python 端的 storage.py + saves.py。
  *
- * 目录结构照搬桌面版：files/saves/index.json 是清单，files/saves/slots/ 下每个存档一个文件。
+ * 目录结构照搬桌面版：files/saves/slots/ 下每个存档一个文件，清单是 slots/mk-1.index。
  */
 class Store(root: File) {
     private val saves = File(root, "saves")
@@ -108,11 +108,11 @@ class Store(root: File) {
     private val exports = File(root, "exports")
     private val prof = File(root, "profile")
 
-    val indexFile = File(saves, "index.json")
+    val indexFile = File(slots, INDEX_KEY)
     val cacheDir: File get() = cache
     val exportDir: File get() = exports
     val profileDir: File get() = prof
-    val saveDir: File get() = saves
+    val saveDir: File get() = slots
 
     init {
         slots.mkdirs()
@@ -124,7 +124,8 @@ class Store(root: File) {
     companion object {
         const val KEY_MAX = 120
         const val BODY_MAX = 64L * 1024 * 1024
-        const val KEY_PREFIX = "cm1.slot."
+        const val INDEX_KEY = "index.json"
+        const val FILE_SUFFIX = ".mksave"
         const val CACHE_KEEP = 4000
         const val CACHE_KEY_MAX = 200
         const val CACHE_TEXT_MAX = 300_000
@@ -233,35 +234,56 @@ class ShellApi(
     // ---------------- 存档 ----------------
 
     fun save_index_get(): JSONObject {
-        val raw = store.readText(store.indexFile)
-        val data = raw?.let { runCatching { JSONObject(it) }.getOrNull() }
-        if (data != null && !isEmptyIndex(data)) {
-            return JSONObject().put("ok", true)
-                .put("index", data)
-                .put("count", data.optJSONObject("slots")?.length() ?: 0)
-                .put("files", countFiles())
-        }
-        val old = loadBackup()
-        if (old != null) {
-            return JSONObject().put("ok", true)
-                .put("index", old)
-                .put("count", old.optJSONObject("slots")?.length() ?: 0)
-                .put("files", countFiles())
-        }
-        return rebuildIndex(this)
+        val file = store.indexFile
+        if (!file.isFile) return JSONObject().put("ok", true).put("index", JSONObject.NULL)
+        val raw = store.readText(file) ?: return error("清单内容已损坏（不是合法的存档清单）")
+        val data = runCatching { JSONObject(raw) }.getOrNull()
+            ?: return error("清单内容已损坏（不是合法的存档清单）")
+        val norm = normalizeIndex(data) ?: return error("清单内容已损坏（不是合法的存档清单）")
+        return JSONObject().put("ok", true).put("index", norm)
     }
 
     fun save_index_set(index: Any?): JSONObject {
-        val obj = index as? JSONObject ?: return error("索引格式不对")
-        return setIndexLocked(obj)
+        val obj = normalizeIndex(index as? JSONObject ?: return error("清单格式不对")) ?: return error("清单格式不对")
+        return try {
+            store.writeAtomic(store.indexFile, obj.toString())
+            JSONObject().put("ok", true)
+        } catch (e: Exception) {
+            error(e.message ?: "写入存档清单失败")
+        }
     }
 
+    fun save_rebuild(): JSONObject = rebuildIndex(this)
+
     fun save_index_rebuild(): JSONObject = rebuildIndex(this)
+
+    fun save_latest(with_text: Boolean): JSONObject {
+        var best: Pair<File, JSONObject>? = null
+        for (file in slotFiles()) {
+            val entry = slotEntry(file) ?: continue
+            val cur = best
+            if (cur == null) { best = file to entry; continue }
+            val a = cur.second
+            val newer = when {
+                entry.optLong("savedAt") != a.optLong("savedAt") -> entry.optLong("savedAt") > a.optLong("savedAt")
+                else -> entry.optString("key") > a.optString("key")
+            }
+            if (newer) best = file to entry
+        }
+        val found = best ?: return JSONObject().put("ok", true).put("slot", JSONObject.NULL).put("text", JSONObject.NULL)
+        if (!with_text) return JSONObject().put("ok", true).put("slot", found.second).put("text", JSONObject.NULL)
+        return try {
+            JSONObject().put("ok", true).put("slot", found.second).put("text", found.first.readText(Charsets.UTF_8))
+        } catch (e: Exception) {
+            error("读取存档文件失败：" + (e.message ?: ""))
+        }
+    }
 
     fun save_slot_write(key: String?, text: String?): JSONObject {
         val file = store.slotFile(key) ?: return error("存档键不合法")
         if (text == null) return error("存档内容格式不对")
         if (text.length > Store.BODY_MAX) return error("存档过大（超过 64 MB）")
+        if (runCatching { JSONObject(text) }.isFailure) return error("存档内容不是合法的 JSON")
         return try {
             store.writeAtomic(file, text)
             JSONObject().put("ok", true)
@@ -337,11 +359,13 @@ class ShellApi(
 
     // ---------------- 外壳 ----------------
 
-    fun export_to_file(text: String?): JSONObject {
+    fun export_to_file(text: String?, filename: String? = null): JSONObject {
         if (text == null) return error("导出内容为空")
         return try {
-            val name = "城市与地铁社区版-进度-" + System.currentTimeMillis() + ".cmsave.json"
-            val file = File(store.exportDir, name)
+            val raw = (filename ?: "").trim()
+            val safe = if (raw.isEmpty()) "城市与地铁社区版-进度.cmsave.json"
+            else raw.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val file = File(store.exportDir, safe)
             store.writeAtomic(file, text)
             host.shareExport(file, "导出存档")
             JSONObject().put("ok", true).put("path", file.absolutePath)
@@ -388,114 +412,89 @@ class ShellApi(
         return JSONObject().put("ok", true)
     }
 
-    // ---------------- 索引实现（对应 saves.py 的 SaveStore） ----------------
+    // ---------------- 清单实现（对应 saves.py 的 SaveStore） ----------------
 
     private fun error(msg: String): JSONObject =
         JSONObject().put("ok", false).put("error", msg)
 
-    private fun isEmptyIndex(o: JSONObject): Boolean {
-        val g = o.optJSONObject("games")
-        val s = o.optJSONObject("slots")
-        return (g == null || g.length() == 0) && (s == null || s.length() == 0)
+    private fun normalizeIndex(o: JSONObject?): JSONObject? {
+        if (o == null) return null
+        val s = o.optJSONObject("slots") ?: JSONObject()
+        return JSONObject().put("v", 1).put("slots", s)
     }
 
-    private fun countFiles(): Int =
-        store.saveDir.let { d -> File(d, "slots").listFiles()?.count {
-            it.name.startsWith(Store.KEY_PREFIX) && !it.name.endsWith(".tmp")
-        } ?: 0 }
-
-    private fun loadBackup(): JSONObject? {
-        for (name in listOf("index.json.prev", "index.json.tmp")) {
-            val raw = store.readText(File(store.saveDir, name)) ?: continue
-            val old = runCatching { JSONObject(raw) }.getOrNull() ?: continue
-            if (!isEmptyIndex(old)) return old
-        }
-        return null
-    }
-
-    private fun setIndexLocked(index: JSONObject): JSONObject {
-        // 空清单不能覆盖非空清单：前端读清单失败后会把内存里的空清单写回，那会抹掉磁盘上所有进度
-        if (isEmptyIndex(index)) {
-            val old = store.readText(store.indexFile)?.let { runCatching { JSONObject(it) }.getOrNull() }
-            if (old != null && !isEmptyIndex(old)) return error("拒绝用空清单覆盖磁盘上已有的存档清单")
-            val backups = store.saveDir.listFiles()?.any { it.name.startsWith("index.json.") } ?: false
-            if (backups) return error("拒绝用空清单覆盖存档索引（索引备份还在，说明之前有过存档）")
-        }
-        return try {
-            val src = store.indexFile
-            if (src.exists()) {
-                val prev = File(store.saveDir, "index.json.prev")
-                prev.delete()
-                src.renameTo(prev)
-            }
-            store.writeAtomic(src, index.toString())
-            JSONObject().put("ok", true)
-        } catch (e: Exception) {
-            error(e.message ?: "写入存档索引失败")
-        }
-    }
+    private fun slotFiles(): List<File> =
+        store.saveDir.listFiles()?.filter {
+            it.isFile && it.name != Store.INDEX_KEY && it.name.endsWith(Store.FILE_SUFFIX)
+        } ?: emptyList()
 
     companion object {
-        /** 按 slots 里的文件重建清单；清单丢了或和文件对不上时用。 */
+        /** 按 slots 里的文件重建清单：清单丢了、或和文件对不上时用。 */
+        fun slotEntry(file: File): JSONObject? {
+            val name = file.name
+            val env = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull() ?: return null
+            if (env.optString("format").isEmpty()) return null
+            val body = if (env.has("body") && !env.isNull("body")) env.optString("body") else ""
+            val payload = if (body.isNotEmpty()) runCatching { JSONObject(body) }.getOrNull() else null
+            val meta = payload?.optJSONObject("meta") ?: return null
+            val slotId = meta.optString("slotId", "").ifEmpty {
+                meta.optString("gameId", "unknown") + "." + name.removeSuffix(Store.FILE_SUFFIX)
+            }
+            val clock = payload.optJSONObject("clock") ?: JSONObject()
+            val econ = payload.optJSONObject("econ") ?: JSONObject()
+            val net = payload.optJSONObject("net") ?: JSONObject()
+            val savedAt = if (env.has("savedAt")) env.optLong("savedAt", 0) else file.lastModified()
+            val rawKind = meta.optString("kind", "")
+            val kind = if (rawKind.isNotEmpty()) rawKind else if (slotId.contains(".bk")) "backup" else "manual"
+            val label = meta.optString("label", "").ifEmpty {
+                if (kind == "auto") "自动存档" else if (kind == "backup") "升级前备份" else "手动存档"
+            }
+            val date = meta.optJSONArray("date") ?: JSONArray()
+                .put(clock.optInt("y", 0))
+                .put(clock.optInt("m", 0))
+                .put(clock.optInt("d", 0))
+            return JSONObject()
+                .put("slotId", slotId)
+                .put("key", name)
+                .put("gameId", meta.optString("gameId", ""))
+                .put("kind", kind)
+                .put("label", label)
+                .put("mode", meta.optString("mode", "challenge"))
+                .put("name", meta.optString("name", "存档"))
+                .put("map", meta.optString("map", "gz"))
+                .put("scenario", meta.optString("scenario", ""))
+                .put("createdAt", meta.optLong("createdAt", 0))
+                .put("savedAt", savedAt)
+                .put("date", date)
+                .put("stations", (net.optJSONObject("stations") ?: JSONObject()).length())
+                .put("funds", if (econ.has("funds") && !econ.isNull("funds")) econ.optDouble("funds") else JSONObject.NULL)
+                .put("size", file.length())
+        }
+
         fun rebuildIndex(api: ShellApi): JSONObject {
-            val store = api.store
             val entries = JSONObject()
-            val dir = File(store.saveDir, "slots")
-            val names = dir.list() ?: emptyArray()
-            for (name in names) {
-                if (name.endsWith(".tmp") || !name.startsWith(Store.KEY_PREFIX)) continue
-                val tail = name.removePrefix(Store.KEY_PREFIX)
-                val gameId = tail.split(".", limit = 2).firstOrNull() ?: ""
-                if (gameId.isEmpty()) continue
-                val file = File(dir, name)
-                val env = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull() ?: JSONObject()
-                val body = if (env.has("body") && !env.isNull("body")) env.optString("body") else ""
-                val payload = if (body.isNotEmpty()) runCatching { JSONObject(body) }.getOrNull() else null
-                val meta = payload?.optJSONObject("meta") ?: JSONObject()
-                val clock = payload?.optJSONObject("clock") ?: JSONObject()
-                val date = JSONArray()
-                    .put(clock.optInt("y", 0))
-                    .put(clock.optInt("m", 0))
-                    .put(clock.optInt("d", 0))
-                val entry = JSONObject()
-                    .put("slotId", name)
-                    .put("key", name)
-                    .put("gameId", gameId)
-                    .put("kind", if (name.contains(".a1.") || name.contains(".a2.")) "auto" else "manual")
-                    .put("mode", meta.optString("mode", "challenge"))
-                    .put("name", meta.optString("name", gameId))
-                    .put("map", meta.optString("map", "gz"))
-                    .put("label", "恢复的存档")
-                    .put("savedAt", env.optLong("savedAt", file.lastModified()))
-                    .put("date", date)
-                    .put("size", file.length())
-                entries.put(name, entry)
-            }
-            if (entries.length() == 0) {
-                return JSONObject().put("ok", true).put("count", 0)
-            }
-            val games = JSONObject()
-            val keys = entries.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                val s = entries.optJSONObject(k) ?: continue
-                val gid = s.optString("gameId")
-                val cur = games.optJSONObject(gid)
-                val savedAt = s.optLong("savedAt")
-                if (cur == null || cur.optLong("updatedAt") < savedAt) {
-                    games.put(gid, JSONObject()
-                        .put("gameId", gid)
-                        .put("name", s.optString("name"))
-                        .put("mode", s.optString("mode"))
-                        .put("map", s.optString("map"))
-                        .put("createdAt", savedAt)
-                        .put("updatedAt", savedAt))
+            for (file in api.slotFiles()) {
+                val name = file.name
+                val entry = slotEntry(file) ?: continue
+                val slotId = entry.optString("slotId")
+                val savedAt = entry.optLong("savedAt")
+                val old = entries.optJSONObject(slotId)
+                if (old != null && old.optString("key") != name) {
+                    val newer = when {
+                        savedAt != old.optLong("savedAt") -> savedAt > old.optLong("savedAt")
+                        else -> name > old.optString("key")
+                    }
+                    if (!newer) continue
                 }
+                entries.put(slotId, entry)
             }
-            val index = JSONObject().put("games", games).put("slots", entries)
-            val res = api.setIndexLocked(index)
-            if (!res.optBoolean("ok")) return res
-            return JSONObject().put("ok", true).put("count", entries.length()).put("index", index)
+            val index = JSONObject().put("v", 1).put("slots", entries)
+            return try {
+                api.store.writeAtomic(api.store.indexFile, index.toString())
+                JSONObject().put("ok", true).put("index", index).put("count", entries.length())
+            } catch (e: Exception) {
+                api.error(e.message ?: "重建存档清单失败")
+            }
         }
     }
 }

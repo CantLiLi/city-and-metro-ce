@@ -59,7 +59,8 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .map-mode:active:not([disabled]), .msel-item:active, .ms-link:active, .start-learn:active { transform: scale(.98); }
 
 /* ---------- 开始界面：右上角按钮组、新手教程入口 ---------- */
-.start-corner { position: fixed; top: 18px; left: 18px; display: flex; gap: 8px; z-index: 2; }
+/* 固定定位不参与 zoom 的坐标系，用变量把 18px 的边距按缩放反向抵消，缩放后视觉边距不漂 */
+.start-corner { position: fixed; top: calc(18px / var(--uiz, 1)); left: calc(18px / var(--uiz, 1)); display: flex; gap: 8px; z-index: 2; }
 .corner-btn { width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform .2s var(--spring), background .2s, box-shadow .2s; }
 .corner-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 .corner-btn .ico { width: 20px; height: 20px; position: relative; z-index: 1; }
@@ -78,16 +79,6 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .msel-head { display: flex; align-items: center; gap: 8px; }
 .msel-head h2 { margin: 0; font-size: 19px; }
 .msel-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.msel-search { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 12px; border-radius: 12px; background: var(--surface-solid); border: 1px solid var(--line-strong); transition: border-color .18s, box-shadow .18s; flex: none; }
-.msel-search:focus-within { border-color: var(--accent); box-shadow: var(--ring); }
-.msel-search > .ico { color: var(--muted); }
-.msel-q { flex: 1; border: 0; outline: 0; background: transparent; font-size: 13.5px; min-width: 0; padding: 0; }
-.msel-q::-webkit-search-cancel-button { display: none; }
-.msel-filters { display: flex; flex-direction: column; gap: 8px; flex: none; }
-.msel-frow { display: flex; align-items: flex-start; gap: 6px; }
-.msel-fl { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 700; height: 28px; flex: none; width: 48px; }
-.msel-fl .ico { color: var(--accent); }
-.msel-frow .fchip { height: 28px; padding: 0 10px; font-size: 12px; }
 .msel-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 0 -8px; padding: 2px 8px 6px; }
 .msel-item { display: flex; gap: 12px; align-items: center; padding: 8px 10px 8px 8px; border-radius: 15px; border: 1.5px solid var(--line); background: var(--surface-solid); color: var(--text); text-align: left; cursor: pointer; transition: border-color .18s, box-shadow .2s, transform .22s var(--spring); flex: none; animation: riseIn .4s var(--ease) both; }
 .msel-item:nth-child(2) { animation-delay: .04s; } .msel-item:nth-child(3) { animation-delay: .08s; } .msel-item:nth-child(4) { animation-delay: .12s; } .msel-item:nth-child(n+5) { animation-delay: .16s; }
@@ -106,9 +97,6 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .lvl i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
 .lvl i.on { background: var(--gold); }
 .lvl b { font-weight: 600; margin-left: 2px; }
-.msel-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 10px; color: var(--muted); text-align: center; font-size: 12.5px; animation: riseIn .3s var(--ease) both; }
-.msel-empty .ico { color: var(--faint); }
-.msel-empty b { color: var(--text); font-size: 14px; }
 .msel-note { font-size: 11.5px; color: var(--faint); line-height: 1.5; flex: none; }
 .msel-detail { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface-solid); }
 .msel-dwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -172,6 +160,21 @@ button:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible,
 .brief-tasks .ico { color: var(--accent); flex: none; }
 .brief-tasks span { margin-left: auto; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .brief-acts { display: flex; align-items: center; gap: 8px; padding: 12px 22px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+
+/* ---------- 地图信息 ---------- */
+@keyframes mapinfoIn { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+.card.mapinfo { width: min(760px, calc(100vw - 32px)); padding: 0; display: flex; flex-direction: column; max-height: calc(100vh - 40px); overflow: hidden; animation: mapinfoIn .3s var(--spring) both; }
+.card.mapinfo .card-head { margin: 0; padding: 14px 16px 12px 20px; border-bottom: 1px solid var(--line); flex: none; }
+.card.mapinfo .msel-scroll { padding: 16px 18px 18px; }
+.card.mapinfo .msel-hero { height: 200px; }
+.card.mapinfo .msel-block { margin-top: 12px; }
+.card.mapinfo .msel-block:first-of-type { margin-top: 14px; }
+@media (max-width: 760px) {
+  .card.mapinfo .msel-hero { height: 150px; }
+  .card.mapinfo .msel-hero-tx { left: 14px; right: 14px; bottom: 12px; }
+  .card.mapinfo .msel-hero-tx h2 { font-size: 22px; }
+  .card.mapinfo .msel-scroll { padding: 12px 12px 16px; }
+}
 
 /* ---------- 更新公告 ---------- */
 .card.news { width: min(640px, calc(100vw - 32px)); }

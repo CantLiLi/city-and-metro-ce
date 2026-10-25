@@ -8,6 +8,10 @@
 python src/android/build_apk.py
 ```
 
+脚本第一步固定把前端代码（`src/index.html` + `css/` + `js/` + `resources/`）复制进
+`app/src/main/assets/src/`，再检查环境、跑 Gradle。所以改完 `src/` 直接打包就行，
+不用手动同步，也不会打出旧代码。
+
 产物在 `.tmp/build/android/output/CityAndMetroCE_v<版本>-debug.apk`（约 11.7 MB），
 装上就能用。版本号直接读 `src/python/citymetro/about.py`，跟桌面版同源。
 
@@ -76,7 +80,7 @@ Expand-Archive gradle.zip -DestinationPath src\android\gradle-tools
 | `app/src/main/java/com/cityandmetro/ce/MainActivity.kt` | WebView 外壳，加载 `assets/src/index.html`，注入 `__CM_DESKTOP__` |
 | `app/src/main/java/com/cityandmetro/ce/ShellApi.kt` | 桥 + 存档/缓存实现，方法名对齐 `bridge.py` |
 | `app/src/main/java/com/cityandmetro/ce/DocActivity.kt` | 查看许可与第三方声明（`open_doc`） |
-| `sync_assets.py` | 把 `src/` 拷进 `assets/src/`，构建前自动跑 |
+| `sync_assets.py` | 把 `src/` 拷进 `assets/src/`，构建前自动跑；也可以单独先跑 |
 | `make_icons.py` | 从 `src/resources/icon.png` 切各密度图标，图标变了才需要跑 |
 | `build_apk.py` | 一键打包 |
 | `sdk/` | 本地 Android SDK，`cmdline-tools` 装的，不进版本控制 |
