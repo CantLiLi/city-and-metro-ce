@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import TYPE_CHECKING, Any
 
 import webview
 
@@ -17,7 +18,9 @@ from citymetro import paths, prefs, storage, window
 from citymetro.about import APP_ID, APP_NAME, VERSION
 from citymetro.bridge import ShellApi, bridge_script
 from citymetro.single_instance import InstanceLock
-from citymetro.window import destroy_now
+
+if TYPE_CHECKING:
+    from citymetro.window import AppWindow
 
 WINDOW_TITLE = APP_NAME + ' v' + VERSION
 ENGINE_TIMEOUT = 15

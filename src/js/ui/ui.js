@@ -2180,7 +2180,8 @@
     CM.desktop.importJSON().then(function (picked) {
       if (!picked) return;
       if (picked.text.length > 30 * 1024 * 1024) { self.toast('文件过大，不是有效的存档', 'bad'); return; }
-      self.importText(picked.text, keepScreen);
+      // 桌面端点按钮时同步丢掉了事件上下文，不能把 keepScreen 留成缺失变量
+      self.importText(picked.text, keepScreen === undefined ? true : keepScreen);
     }, function (e) { self.toast('读取文件失败：' + (e && e.message || e), 'bad'); });
   };
   UI.prototype.importFile = function (file, keepScreen) {
