@@ -323,6 +323,23 @@ def _macos_pump_panels():
             request['event'].set()
 
 
+def _run_modal_for_window(panel, parent):
+    """以 sheet 形式把面板挂在父窗口上跑，返回 NSModalResponse。
+
+    曾报「NSKVONotifying_NSOpenPanel object has no attribute 'runModalForWindow_'」：
+    NSSavePanel/NSOpenPanel 是单例，AppKit 用过后会 KVO 换壳，PyObjC 在壳上找不到
+    父类方法。这里从父窗口（也是 NSWindow 子类，方法一模一样）上取未绑定实现，
+    用 panel 当 self 调用；取不到就直接开独立面板，别让「读取存档」整个失败。
+    """
+    try:
+        method = type(parent).runModalForWindow_
+        if callable(method):
+            return method(panel, parent)
+    except Exception:
+        log.debug('借用窗口的 runModalForWindow: 失败，改用独立面板', exc_info=True)
+    return panel.runModal()
+
+
 def _macos_run_panel(dialog_type, title, extensions):
     from AppKit import NSApp, NSOpenPanel, NSSavePanel, NSApplicationActivationPolicyRegular
 
@@ -359,8 +376,9 @@ def _macos_run_panel(dialog_type, title, extensions):
         except Exception:
             panel.setAllowedFileTypes_(list(extensions))
 
+    # 挂在窗口上（sheet）最贴合 macOS 习惯；取不到父窗口就开独立面板，两种情况都只处理这一个请求
     if parent is not None:
-        code = panel.runModalForWindow_(parent)
+        code = _run_modal_for_window(panel, parent)
     else:
         code = panel.runModal()
     if code != 1:
