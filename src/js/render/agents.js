@@ -250,11 +250,11 @@
     const tmp = {}, sp = {}, ph = {}, q = {};
     const width = U.clamp(z * 0.075, 2.4, 7.5);
     const v = R.view, hl = ui && ui.highlightLine, night = !!(R.th && R.th.night);
-    const tier = R.detail ? R.detail.tier : 0, carLen = CAR_M / CFG.CELL_M, carGap = GAP_M / CFG.CELL_M;
+    const carLen = CAR_M / CFG.CELL_M, carGap = GAP_M / CFG.CELL_M;
     const mq = R.modelQo ? R.modelQo() : null;
     const showWin = z >= (mq ? mq.winZ : 22), showDoor = z >= (mq ? mq.doorZ : 30);
-    const showPax = z >= (mq ? mq.paxZ : 30) && tier < 2 && (!game || game.speed <= 2);
-    let paxBudget = Math.round(CFG.perf.maxRiders * (mq ? mq.paxFrac : 1) * (tier === 1 ? 0.5 : 1));
+    const showPax = z >= (mq ? mq.paxZ : 30) && (!game || game.speed <= 2);
+    let paxBudget = Math.round(CFG.perf.maxRiders * (mq ? mq.paxFrac : 1));
     const UD = CM.RENDER_CONST.UNDER_DEPTH;
     const joints = this._joints || (this._joints = []);
     // 颜色、线宽、端点样式与透明度都相同的车厢描边合到同一条路径：
@@ -529,8 +529,7 @@
     const vis = 0.09 * U.clamp(z / 22, 0.25, 1.2);
     let budget = 60;
     const mqx = R.modelQo ? R.modelQo().agentMax : 1;
-    const density = z >= 28 || !R.detail ? 1 : (R.detail.tier === 2 ? 0.55 : R.detail.tier === 1 ? 0.8 : 1);
-    const maxCars = Math.round(CFG.perf.maxCars * density * mqx);
+    const maxCars = Math.round(CFG.perf.maxCars * mqx);
     let total = this.cars.length;
     const step = this.frameFlip = !this.frameFlip;
     const bk = this.carBuckets, viewKey = [Math.floor((v.x0 - margin) / bk.tile), Math.floor((v.y0 - margin) / bk.tile), Math.floor((v.x1 + margin) / bk.tile), Math.floor((v.y1 + margin) / bk.tile)].join(':');
@@ -546,7 +545,7 @@
         const ratio = model.arcRatioAt(a, W);
         const sp = CFG.road.speed[L.cls] / Math.min(8, ratio);
         const lenKm = L.lenM / 1000;
-        const target = Math.min(lenKm * 30, vol / sp * lenKm * vis) * density;
+        const target = Math.min(lenKm * 30, vol / sp * lenKm * vis);
         const list = idx.get(2 * a), slow = idx.get(2 * a + 1);
         const have = (list ? list.length : 0) + (slow ? slow.length : 0);
         if (have < target - 0.5 && budget > 0 && total < maxCars) {
@@ -672,7 +671,7 @@
     }
     if (list.some(function (w) { return w.dying && w.alpha <= 0; })) this.walkers = list.filter(function (w) { return !(w.dying && w.alpha <= 0); });
     if (!show || !road || !this.visibleRoads) { for (const w of this.walkers) w.dying = true; return; }
-    const tier = R.detail ? R.detail.tier : 0, maxW = Math.round(CFG.perf.maxWalkers * (tier === 2 ? 0.4 : tier === 1 ? 0.7 : 1) * (R.modelQo ? R.modelQo().agentMax : 1));
+    const maxW = Math.round(CFG.perf.maxWalkers * (R.modelQo ? R.modelQo().agentMax : 1));
     let active = 0;
     for (const w of this.walkers) if (!w.dying && ++active > maxW) w.dying = true;
     if (this.walkers.length >= maxW) return;
@@ -745,7 +744,7 @@
   Agents.prototype.drawList = function (ctx, R, list, alpha) {
     const z = R.z, iso = R.tEase > 0.5, night = !!(R.th && R.th.night);
     const mq = R.modelQo ? R.modelQo() : null, ad = mq ? mq.agentDetail : 1;
-    const fullDetail = ad > 0 && (z >= 28 || !R.detail || R.detail.tier === 0);
+    const fullDetail = ad > 0;
     const wcar = U.clamp(z * 0.038, 1.6, 4.2), lift = iso ? 1 : 0;
     const pa = {}, pb = {};
     // 同色、同粗细、同透明度的车辆合到一条路径，全屏车辆一次 stroke 画完

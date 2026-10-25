@@ -2003,7 +2003,7 @@
       compute: [
         row('bolt', 'GPU 加速', toggle('gpu', function () { self.toast('重启游戏后生效', 'info'); }), '使用GPU加速画面计算，无法使用GPU游玩时关闭此选项，可能会引起画面卡顿的问题'),
         row('pulse', '实时 LOD 修改', toggle('lodLive'), '视角变化时实时计算渲染质量和精度'),
-        row('layers', '绘制阴影', toggle('shadow'), '是否渲染建筑车辆人物阴影'),
+        row('layers', '绘制阴影', toggle('shadow'), '是否渲染建筑、桥梁与车辆阴影'),
         row('train', '计算进程', parSeg, '单进程：整套出行分配放进一个后台线程算完再交回主界面；多进程：人口、资金、地铁、土地、交通各占一个后台线程分头算，最后汇总成一份状态。多进程在核心数多的机器上更快，单进程占用更省'),
       ],
       info: [

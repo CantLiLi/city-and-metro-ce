@@ -127,13 +127,15 @@
   #hudTop > .spacer { display: block; }
   #hudTop { flex-wrap: nowrap; }
   /* 详情面板：右侧一列，不再是底部抽屉；关闭时向右侧收起 */
-  #rightPanel { top: calc(92px + env(safe-area-inset-top)); left: auto; right: calc(8px + env(safe-area-inset-right)); bottom: calc(60px + env(safe-area-inset-bottom)); width: min(360px, 54vw); max-height: none; padding-bottom: 0; border-radius: 16px; }
+  #rightPanel { top: calc(92px + env(safe-area-inset-top)); left: auto; right: calc(8px + env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); width: min(360px, 54vw); max-height: none; padding-bottom: 0; border-radius: 16px; }
   #rightPanel.closed { transform: translateX(calc(100% + 20px)); }
   #rightPanel::before { display: none; }
-  /* 时间条与建设工具栏、缩放条同处底部一行；宽度不足以放下 +1月 / +1年 / +N月 */
-  #timeBar { bottom: calc(8px + env(safe-area-inset-bottom)); right: calc(8px + env(safe-area-inset-right)); padding: 3px; gap: 3px; }
-  #timeBar .jumps { display: none; }
+  /* 时间条贴到底部右下角；一行放不下步进月份，改成上下两行右对齐 */
+  #timeBar { bottom: calc(8px + env(safe-area-inset-bottom)); right: calc(8px + env(safe-area-inset-right)); flex-direction: column; align-items: flex-end; padding: 3px; gap: 3px; }
+  #timeBar .jumps { display: flex; }
+  #timeBar .jbtn { height: 26px; min-width: 26px; padding: 0 5px; font-size: 11px; }
   #toolbar { bottom: calc(8px + env(safe-area-inset-bottom)); padding: 3px; }
+  #buildStack { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .tbtn { width: 40px; height: 40px; border-radius: 12px; }
   #toolbar .tind { top: 3px; height: calc(100% - 6px); border-radius: 12px; }
   #zoomCtl { bottom: calc(8px + env(safe-area-inset-bottom)); padding: 3px; }

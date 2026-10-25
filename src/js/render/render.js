@@ -20,6 +20,8 @@
   // 阴影；agentMax 为汽车、行人、步行者数量上限的系数；edge 为列车外廓描边。
   // 渲染精度决定光栅分辨率：lod 为栅格精度系数（越小模型画得越粗但越快），dprCap 为像素比上限，
   // maxTier 是自动降档的上限，hot/calm 为降档与恢复的耗时阈值（ms），pxMin 是内部渲染分辨率自适应的下限。
+  // 车、人与列车不在分块缓存里，按真实缩放直接画；自动降档只管分块与渲染分辨率，不增减它们的数量
+  // （以前会按档位打折，选了高质量帧率一掉车就少一片，画质设置看着没有效果）
   // 每一档比上一档低至少 30%（Ultra → High → Mid → Low → 超低 → potato），保证档位之间真的有可见、可测的差别
   const MODEL_DET = {
     ultra: { coarseLvl: 9, treeN: 5, winZ: 15, doorZ: 19, paxZ: 19, paxFrac: 1, agentDetail: 1, agentMax: 1.3, edge: 1 },
@@ -190,11 +192,11 @@
     return !!(o.tags && o.tags.indexOf(tag) >= 0);
   };
   // 阴影画在地面与建筑分块里，切换时同样需要重铺
+  // 车辆与行人阴影画在原生画布上、不落在分块里，切换阴影只需重画一帧，不必清缓存重铺
   Renderer.prototype.setShadows = function (on) {
     on = !!on;
     if (this.shadows === on) return;
     this.shadows = on;
-    this.clearImages(); this.dropMetroLayer();
     if (CM.Idle && CM.Idle.force) CM.Idle.force();
   };
   Renderer.prototype.adaptDetail = function (dt) {
@@ -216,12 +218,15 @@
     d.calm = d.ema < d.hold ? d.calm + elapsed : 0;
     if (d.busy > 0.35 && d.tier < mq.maxTier) { d.tier++; d.busy = 0; d.calm = 0; d.since = this.time; }
     if (d.tier !== lvl0) d.jitter = d.since != null && this.time - d.since < 8 ? d.jitter + 1 : 0;
-    if (d.jitter < 3) this.stats.detailTier = d.tier;
+    this.stats.detailTier = d.tier;
     this.stats.modelQuality = this.modelDetail + '/' + this.renderRes;
   };
   // 内部渲染分辨率自适应：整帧成本（全画布填充、分块放大贴图、地铁层与标注层整屏位图）都跟屏幕画布的
   // 后备像素数走，窗口越大越贵。全屏后像素量翻倍，原本刚好卡在预算内的帧就会掉；这里按实测出帧间隔
-  // 调低后备像素比，成本立刻落回窗口化时的水平。降过档的档位记进 _pxBad，之后不再尝试，避免来回抖
+  // 调低后备像素比，成本立刻落回窗口化时的水平。
+  // 两个方向都要有刹车：只往下试到底还是慢，说明瓶颈不在像素量（2.5D 远视野下建筑分块与标注才是大头），
+  // 再降只会更糊而不会更快，这时必须停手；否则每次降到最低->稳一会儿->又试着升->再判慢，画布每轮重建一次，
+  // 屏幕上看就是整幅画面在清晰和模糊之间来回闪
   Renderer.prototype.adaptRes = function () {
     const now = performance.now(), gap = this._frmAt ? now - this._frmAt : 0;
     this._frmAt = now;
@@ -236,12 +241,22 @@
     const dt = Math.min(0.25, gap / 1000);
     this._resBusy = gap > target * 1.15 ? this._resBusy + dt : Math.max(0, this._resBusy - dt * 2);
     this._resCalm = gap < target * 1.02 ? this._resCalm + dt : 0;
-    if (this._resBusy > 0.4 && this.pxScale > this._pxMin) {
+    const atFloor = this.pxScale <= this._pxMin + 1e-3;
+    // 最低档还判慢：这台机器的瓶颈不在后备像素数上（2.5D 远视野下建筑分块与标注才是大头），
+    // 再降只会更糊而不会更快。这时把升档上限收到最低，之后升档条件 _pxBad - pxScale > 0.12 永不成真，
+    // 不会再出现「降到底 -> 稳一会儿 -> 试探升一档 -> 又判慢 -> 再降」的循环
+    if (atFloor && this._pxBad > this._pxMin) {
+      if (this._resBusy > 0.4) { this._pxBad = this._pxMin; this._resBusy = 0; this._resCalm = 0; return; }
+      this._resBusy = 0; this._resCalm = 0; return;
+    }
+    if (this._resBusy > 0.4) {
       this._pxBad = Math.min(this._pxBad, this.pxScale);   // 这一档判定过慢，收住上限不再往上试
       this.setPxScale(Math.min(this.pxScale - 0.1, this._pxBad - 0.12));
       this._resBusy = 0; this._resCalm = 0;
-    } else if (this._resCalm > 2.5 && this._pxBad - this.pxScale > 0.12) {
-      this.setPxScale((this.pxScale + this._pxBad) / 2);   // 只在已知安全区间的中点试探，不直接顶上失败档
+    } else if (this._resCalm > 4 && this._pxBad - this.pxScale > 0.12) {
+      // 只在已知安全区间的中点试探，不直接顶上失败档。每次改 pxScale 都要重建画布与全部缓存，
+      // 试探太频繁即使不换 LOD 档位，画面也会一拍一糊，所以两次试探之间至少静 4 秒
+      this.setPxScale((this.pxScale + this._pxBad) / 2);
       this._resCalm = 0;
     }
   };
@@ -321,10 +336,13 @@
       else if (target < previous && need >= lo / 2 * 0.82) target = previous;
     }
     this.requestedTier = this.detail.tier;
-    this.requestedLevel = target;
-    if (this.displayedLevel == null || !target) this.displayedLevel = target;
     this.stats.targetLevel = target;
     this.stats.lodPreparing = false;
+    // 0 档不需要任何分块（只贴整城底图），直接算就绪
+    if (!target) { this.requestedLevel = 0; this.displayedLevel = 0; this.stats.rasterLevel = 0; return 0; }
+    // 迟滞只在「已经切过去的档位」上生效：requestedLevel 记的是上帧被采用的档位，不是上帧算出来的目标值。
+    // 若拿目标值当基准，档位一会儿要换一会儿不换，迟滞就只剩一帧的效果，等于没有
+    this.requestedLevel = this.displayedLevel;
     if (target === this.displayedLevel) { this.stats.rasterLevel = target; return target; }
     // 缩放缓动中不为「待切换档位」预建分块：缩放中途档位还会再变，建了大多作废，还要吃掉每帧的补块预算。
     // 显示中的档位有缺口由地面/建筑循环自己补（有低分辨率块可贴就先贴），缩放停下后这里再统一补建并换档。
@@ -338,6 +356,8 @@
     // 地面分块同理：一个档位在缩小到能看见全图时要铺三四十块，而每帧只补得进十块左右，只等铺满会一直等不到。
     // 先有地面才谈得上建筑，所以这里也按时限放行，缺的由后面的补块循环接着补
     const waitMs = CFG.perf.lodWaitMs || 650;
+    // 换档等待从目标档位第一次出现时起算，并按当前显示档位重置：原来只比较 _lgLvl，
+    // 而它在 setModelOpts/resize 时不会被清，换城市后同一档位会沿用上一次的时间戳，一上来就直接放行
     if (this._lgLvl !== target) { this._lgLvl = target; this._lgAt = performance.now(); }
     let lack = 0;
     const ci0 = Math.max(0, Math.floor(bounds.x0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(bounds.x1 / C));
@@ -2081,10 +2101,14 @@
     ctx.imageSmoothingEnabled = true;
     const setWorld = () => ctx.setTransform(dpr * M[0] * z, dpr * M[2] * z, dpr * M[1] * z, dpr * M[3] * z, dpr * this.px, dpr * this.py);
     const mq = this.modelQo();
-    // 注意这里不能再乘自动降档系数（detail.tier 那套 0.85 / 0.68）：档位是随帧耗时来回变的，
-    // 一旦它参与算精度，档位抖一下背景就要整体换档重铺，看起来就是地图在高低两种质量之间闪。
-    // 自动降档只管车辆与行人的密度、地铁细节，不碰地面与建筑的分块精度
-    const baseEff = z * Math.min(dpr, mq.dprCap) * (1 - 0.28 * t);
+    // 注意这里不能用 this.dpr 算精度：dpr 里含 pxScale（内部渲染分辨率的自适应倍数），而 pxScale 是随帧耗时
+    // 每 0.1 一档来回调的。把它算进来，pxScale 每动一档 eff 就跟着动一档，LOD 档位跟着跳——
+    // 于是「画得慢 -> 降分辨率 -> 档位变 -> 整屏分块重建 -> 更慢」形成闭环，屏幕上看就是背景在糊与清晰之间来回闪。
+    // 分块精度只跟设备像素比（决定屏幕上的实际缩放）与视角有关，跟内部渲染分辨率无关：
+    // 分块被缩小贴图时本来就按当前像素密度重采样，内部缓冲低了只会整体变糊一点，不需要跟着换档
+    const deviceDpr = Math.min(2, window.devicePixelRatio || 1);
+    // 自动降档系数（detail.tier 那套 0.85 / 0.68）同样不进这里：档位随帧耗时来回变，参与算精度就会整体换档重铺
+    const baseEff = z * Math.min(deviceDpr, mq.dprCap) * (1 - 0.28 * t);
     const lodMul = mq.lod;
     // 高性能模式按较低的精度铺地面与模型分块；最远视野仍保底一层分块，避免整城建筑直接消失
     let eff = Math.max(baseEff * lodMul, Math.min(baseEff, 6));
@@ -2207,7 +2231,7 @@
         const lks = lmBy.get(ci + ':' + cj);
         if (lks) for (const k of lks) {
           let landmarkLvl = 64;
-          const landmarkEff = z * Math.min(dpr, mq.dprCap) * (1 - 0.28 * t) * lodMul;
+          const landmarkEff = z * Math.min(deviceDpr, mq.dprCap) * (1 - 0.28 * t) * lodMul;
           for (const L of LEVELS) if (L >= landmarkEff * 0.85) { landmarkLvl = L; break; }
           const sp = this.landmarkSprite(k, landmarkLvl), lm = D.landmarks[k], a = this.P(lm.x, lm.y, 0), ls = z / landmarkLvl;
           if (!this.screenVisible(a.x - sp.ax * ls, a.y - sp.ay * ls, sp.cv.width * ls, sp.cv.height * ls, 2)) { sp.used = this.frame - 1; continue; }

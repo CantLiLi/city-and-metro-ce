@@ -195,7 +195,7 @@
 
     saves: { maxAuto: 5, maxManual: 8 },
     // 动态对象上限（代表性展示）：汽车、车站行人、街道行人、列车上下车乘客（每帧）；声音：列车声部与同时播放的环境短音
-    perf: { solverBudgetMs: 5, chunkBudgetMs: 6, cacheMaxPx: 24e6, maxCars: 320, maxPeds: 180, maxWalkers: 120, maxRiders: 120, trainVoices: 3, maxOneShots: 6, chunkPerFrame: 12 },
+    perf: { solverBudgetMs: 5, chunkBudgetMs: 6, cacheMaxPx: 24e6, maxCars: 320, maxPeds: 180, maxWalkers: 120, maxRiders: 120, trainVoices: 3, maxOneShots: 6, chunkPerFrame: 12, lodWaitMs: 650 },
   };
   // 桌面版：Python 外壳注入的 about.py 版本号为准，浏览器直接打开时才用上面的 GAME_VERSION
   window.addEventListener('__cmDesktopReady', function (e) {
