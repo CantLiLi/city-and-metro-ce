@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 index.html 的 theme-color 同色，避免载入瞬间闪白 -->
+    <color name="launch_bg">#eaf1f7</color>
+    <color name="ic_launcher_background">#1f6feb</color>
+</resources>

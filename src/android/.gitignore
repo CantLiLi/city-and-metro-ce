@@ -1,0 +1,5 @@
+# Android 构建产物
+app/build/
+.gradle/
+local.properties
+app/src/main/assets/

@@ -153,8 +153,8 @@
         throw e;
       }
       pyIndex = normalizeIndex(r.index);
-      // 清单能读但内容不全（文件比清单多）时照样自动补：只靠用户去点「修复」是不够的，
-      // 重启后点「继续游戏」就该直接回到上次的存档
+      // 外壳发现清单漏登记时会当场补好并标记 rebuilt：它已经写盘，这里马上重读，
+      // 否则「继续游戏」还指在旧清单的槽位上
       return fillFromDir(r).then(function () { return readIndex(); });
     }, function (e) {
       // 桥还没注入或 IPC 失败：绝不能当成「没有存档」，否则下一次写入会覆盖磁盘清单
@@ -165,24 +165,18 @@
       throw err;
     });
   };
-  // 清单漏登记了存档文件（文件数比清单条数多）时自动按文件补齐，返回补齐后的清单。
-  // 只在「重建结果比原来多」时才换掉内存里的清单，避免把用户手动删掉的记录又加回来
+  // 清单漏登记了存档文件时自动按文件补齐，返回补齐后的清单。
+  // 外壳读到清单与存档目录对不上时会当场补好并把补齐结果一起返回（r.rebuilt），这里不再自己比对
+  // 「文件数 > 条数」：存档轮换会留下旧文件，条数与文件数天然会差，按它判断会每次启动都重建一次清单
   function fillFromDir(r) {
+    if (!r || !r.rebuilt) return Promise.resolve(readIndex());
     const before = Object.keys(readIndex().slots).length;
-    const files = r && typeof r.files === 'number' ? r.files : 0;
-    if (!(files > before)) return Promise.resolve(readIndex());
-    // 重建期间用户可能已经存过一次档，写新清单会把那份刚存的记录挤掉：
-    // 等排队中的写入都落盘，重建完再用磁盘上最新的清单覆盖内存
     return (Save.flush ? Save.flush() : Promise.resolve()).then(function () {
-      return deskCall('save_index_rebuild', []);
-    }).then(function (res) {
-      const rebuilt = res && res.ok ? (Number(res.count) || 0) : 0;
-      if (rebuilt <= before) return readIndex();
-      idxFailed = '';
-      return Save.sync().then(function (idx) {
-        if (typeof console !== 'undefined') console.info('存档清单漏了存档，已按目录补齐：' + before + ' → ' + rebuilt);
-        return idx;
-      }, function () { return readIndex(); });
+      return Save.sync();
+    }).then(function (idx) {
+      const after = Object.keys(idx.slots).length;
+      if (typeof console !== 'undefined' && after !== before) console.info('存档清单漏了存档，已按目录补齐：' + before + ' → ' + after);
+      return idx;
     }, function () { return readIndex(); });
   }
   // 存档位置说明：桌面版是数据目录，网页版是浏览器本地存储
@@ -253,11 +247,12 @@
   };
   // 槽位是否真的在清单里：界面据此判断「继续游戏」能不能点
   Save.hasSlot = function (slotId) { return !!(slotId && readIndex().slots[slotId]); };
-  // 最近一个真实存在、且存档文件也在的槽位：清单里的记录指向不存在的文件时跳过
+  // 最近一个真能读到的槽位：清单里的记录指向已不在目录里的文件时跳过，
+  // 别让「继续游戏」指在一个读不出来的槽位上
   Save.latestUsable = function (mapId) {
     for (const g of Save.list(mapId)) {
       for (const sl of g.slots) {
-        if (readIndex().slots[sl.slotId]) return sl;
+        if (sl.key) return sl;
       }
     }
     return null;

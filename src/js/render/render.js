@@ -302,10 +302,12 @@
     const need = eff * 0.85;
     let target = 0;
     if (eff > 5) { target = 64; for (const level of LEVELS) if (level >= need) { target = level; break; } }
+    // 迟滞带不跟着自动降档走：档位在相邻两档之间来回跳时，每跳一次都要重建视口内全部分块，
+    // 上一档的块全成垃圾。这里只在跨过一整档时才换，同样的缩放抖动不会让 target 逐帧变化
     const previous = this.requestedLevel;
-    if (previous && target && this.requestedTier === this.detail.tier) {
-      if (target > previous && need <= previous * 1.12) target = previous;
-      else if (target < previous && need >= previous / 2 * 0.88) target = previous;
+    if (previous && target) {
+      if (target > previous && need <= previous * 1.35) target = previous;
+      else if (target < previous && need >= previous / 2 * 0.82) target = previous;
     }
     this.requestedTier = this.detail.tier;
     this.requestedLevel = target;
@@ -318,6 +320,9 @@
     // 平移时档位不变，补的块之后还要用，照常预建。开了实时 LOD 就照常预建——档位本来就跟着缩放走。
     const staging = this.lodLive || !this.zoomEasing;
     let ready = true;
+    // 每帧入队的补块有硬上限：档位在抖动或视口很大时，一帧把上百块全排进来就会连着重建上百张分块位图，
+    // 上一帧刚建好这一帧又换档，分配量按帧翻倍。剩下的留给后面几帧，画面慢一点但内存不失控
+    let room = CFG.perf.chunkPerFrame || 12;
     const C = CHUNK_PX / target;
     const ci0 = Math.max(0, Math.floor(bounds.x0 / C)), ci1 = Math.min(Math.ceil(CFG.W / C) - 1, Math.floor(bounds.x1 / C));
     const cj0 = Math.max(0, Math.floor(bounds.y0 / C)), cj1 = Math.min(Math.ceil(CFG.H / C) - 1, Math.floor(bounds.y1 / C));
@@ -327,7 +332,7 @@
       if (e) e.used = this.frame; // Protect completed staging tiles until the atomic handover.
       if (!e || e.stale) {
         ready = false;
-        if (staging) queue.push({ kind: 'g', key: key, lvl: target, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - this.cam.cx) + Math.abs((cj + 0.5) * C - this.cam.cy) - 1 });
+        if (staging && room > 0) { room--; queue.push({ kind: 'g', key: key, lvl: target, ci: ci, cj: cj, d: Math.abs((ci + 0.5) * C - this.cam.cx) + Math.abs((cj + 0.5) * C - this.cam.cy) - 1 }); }
       }
     }
     const staged = [];
@@ -341,7 +346,7 @@
         if (e) { e.used = this.frame; staged.push(e); }
         if (!e || e.stale) {
           ready = false;
-          if (staging) queue.push({ kind: 'i', key: key, lvl: target, ci: ci, cj: cj, C: size, d: Math.abs((ci + 0.5) * size - this.cam.cx) + Math.abs((cj + 0.5) * size - this.cam.cy) - 1.5 });
+          if (staging && room > 0) { room--; queue.push({ kind: 'i', key: key, lvl: target, ci: ci, cj: cj, C: size, d: Math.abs((ci + 0.5) * size - this.cam.cx) + Math.abs((cj + 0.5) * size - this.cam.cy) - 1.5 }); }
         }
       }
     }
@@ -688,12 +693,16 @@
     this.ground.forEach(function (e, k) { all.push([e, k, 'g']); });
     this.iso.forEach(function (e, k) { all.push([e, k, 'i']); });
     all.sort(function (a, b) { return a[0].used - b[0].used; });
+    let freed = 0;
     for (const it of all) {
       if (this.cachePx + big <= total * 0.8) break;
-      if (it[0].used >= this.frame) continue;
+      // 本帧刚用过的块通常不能丢（还要贴），但全都本帧用过时就得丢最久没用的那批，
+      // 否则缓存会一直卡在上限之上，下一轮又全建一遍
+      if (it[0].used >= this.frame && freed > 0) continue;
       (it[2] === 'g' ? this.ground : this.iso).delete(it[1]);
       this.cachePx -= it[0].px;
       it[0].cv.width = it[0].cv.height = 1;
+      freed++;
     }
   };
   function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; }
@@ -2210,8 +2219,11 @@
     if (this.zoomEasing) budget = Math.min(budget, 4.5);
     const queueStart = performance.now();
     let n = 0;
+    const cap = CFG.perf.cacheMaxPx;
     for (const q of queue) {
       if (n > 0 && performance.now() - queueStart >= (this.game.preview ? Math.min(3, budget) : budget)) break;
+      // 建块之前先看总账：这一块建出来会顶破上限就先回收一轮，别把分配堆到帧末
+      if (this.cachePx + this.bigPx() + (CHUNK_PX + 2) * (CHUNK_PX + 2) > cap) this.evict();
       const t1 = performance.now();
       if (q.kind === 'g') {
         const old = this.ground.get(q.key);

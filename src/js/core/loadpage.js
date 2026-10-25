@@ -57,7 +57,7 @@
     mobile: 'resources/favicon.png',
   };
 
-  let root = null, finished = false, onKey = null, pctRaf = 0;
+  let root = null, finished = false, onKey = null, pctRaf = 0, dropTimer = 0;
 
   function mount(title) {
     if (root) return null;
@@ -138,6 +138,7 @@
 
   function dropFading() {
     const el = fading;
+    if (dropTimer) { clearTimeout(dropTimer); dropTimer = 0; }
     if (!el) return;
     fading = null;
     el.removeEventListener('transitionend', el._lpEnd);
@@ -154,13 +155,16 @@
       el.classList.add('is-out');
       const drop = function () {
         el.removeEventListener('transitionend', onEnd);
+        if (dropTimer) { clearTimeout(dropTimer); dropTimer = 0; }
         if (fading === el) fading = null;
         if (el.parentNode) el.parentNode.removeChild(el);
       };
       const onEnd = function (e) { if (e.target === el && e.propertyName === 'opacity') drop(); };
       el._lpEnd = onEnd;
       el.addEventListener('transitionend', onEnd);
-      setTimeout(drop, OUT_MS + 180);
+      // 不依赖 transitionend：减速动效、后台标签页、暂停的动画都可能让它永远不来，
+      // 那样这层 z-index 300 的遮罩会一直盖在游戏画面上
+      dropTimer = setTimeout(drop, OUT_MS + 180);
     }
     if (onKey) { document.removeEventListener('keydown', onKey, true); onKey = null; }
   }
@@ -218,8 +222,8 @@
         requestAnimationFrame(function () {
           if (closed) return;
           let after = null;
-          try { after = opts.onReady(); } catch (e) { console.error(e); }
-          if (typeof after === 'function') { const prev = closing; closing = function () { if (prev) prev(); after(); }; }
+          try { after = opts.onReady(); } catch (e) { console.error('[LoadPage] onReady 抛错:', e); }
+          if (typeof after === 'function') { const prev = closing; closing = function () { if (prev) try { prev(); } catch (e) { console.error('[LoadPage] 收尾抛错:', e); } try { after(); } catch (e) { console.error('[LoadPage] 进入游戏抛错:', e); } }; }
           done();
         });
       });

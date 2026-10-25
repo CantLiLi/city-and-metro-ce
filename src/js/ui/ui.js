@@ -208,7 +208,8 @@
     this.screen = h('div', { id: 'screen', class: 'hidden' });
     this.statsEl = h('div', { id: 'stats', class: 'hidden' });
     this.fxLayer = h('div', { id: 'fxLayer' });
-    app.append(this.top, this.dock, this.legendCard, this.zoomCtl, this.right, this.toolbar, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.screen);
+    this.jumpLayer = h('div', { id: 'jumpLayer', class: 'hidden' });
+    app.append(this.top, this.dock, this.legendCard, this.zoomCtl, this.right, this.toolbar, this.bstack, this.feed, this.tip, this.uitip, this.fxLayer, this.statsEl, this.jumpLayer, this.screen);
     this.initTips();
     this.initPress();
     this.renderDock();
@@ -335,7 +336,7 @@
       setTimeout(function () { rp.remove(); }, 600);
     }, true);
   };
-  UI.prototype.blocking = function () { return !this.screen.classList.contains('hidden') || !this.statsEl.classList.contains('hidden') || !!(CM.NetMap && CM.NetMap.isOpen()) || !!(this.g() && this.g().jumping); };
+  UI.prototype.blocking = function () { return !this.screen.classList.contains('hidden') || !this.statsEl.classList.contains('hidden') || !!(CM.NetMap && CM.NetMap.isOpen()); };
 
   // ======================== 游戏接入 ========================
   UI.prototype.attachGame = function (g) {
@@ -2210,7 +2211,7 @@
     // 不弹旧式「正在读取存档」白卡：读盘完成后紧接着就是加载页，两张卡会连续闪
     CM.Save.load(slotId).then(function (data) { CM.loadGame(data); }, function (e) {
       snd('error');
-      if (/存档文件丢失|清单没有读取成功|读取存档文件失败|记录可能是旧的/.test(String(e && e.message))) { self.showSaveDiagnosis(e.message); return; }
+      if (/存档文件丢失|存档不存在|清单没有读取成功|读取存档文件失败|记录可能是旧的/.test(String(e && e.message))) { self.showSaveDiagnosis(e.message); return; }
       self.openScreen(h('div', { class: 'card' }, self.cardHead('error', 'b-red', '无法载入'), self.callout('bad', 'error', e.message), h('div', { class: 'note' }, '原有存档与当前进度未受影响。'), h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', onclick: function () { if (self.g()) self.closeScreen(); else self.showStart(); } }, '确定'))));
     });
   };
@@ -2340,11 +2341,13 @@
   // ======================== 跳月/跳年 与 失败 ========================
   UI.prototype.showJump = function () {
     const g = this.g(), j = g.jumping, t = j.target;
-    // 先收起旧界面：closeSheet 收尾时会清掉 jumpBar/jumpPct 引用，所以进度元素必须在它之后再建
-    this.closeSheet();
+    // 进度卡单独放在 #jumpLayer，不占用 #screen：推进期间打开再关闭设置/统计等浮层，不会把它一起清掉
+    this.closeOverlay();
     this.jumpBar = h('i', { style: { width: '2%' } });
     this.jumpPct = h('b', { class: 'jump-pct' }, '2%');
-    this.openScreen(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)), null, 'jumping');
+    this.jumpLayer.innerHTML = '';
+    this.jumpLayer.appendChild(h('div', { class: 'card' }, this.cardHead('calYear', 'b-teal', '时间推进中'), h('div', { class: 'note' }, g.clock.y + '年' + g.clock.m + '月 → ' + t[0] + '年' + t[1] + '月：逐日结算票款与运营费用，按月处理拨款、城市发展、区域开放与任务。'), h('div', { class: 'jump-prog' }, h('div', { class: 'progress' }, this.jumpBar), this.jumpPct)));
+    this.jumpLayer.classList.remove('hidden');
   };
   UI.prototype.updateJump = function (p) {
     const v = Math.max(0, Math.min(100, Math.round((p || 0) * 100)));
@@ -2358,6 +2361,12 @@
     this.screen.innerHTML = '';
     this.screenEsc = null;
     this.screenRefresh = null;
+    // 推进期间打开的浮层若还没关就留着它，这里只收起进度卡
+    this.clearFloat();
+  };
+  UI.prototype.clearFloat = function () {
+    this.jumpLayer.innerHTML = '';
+    this.jumpLayer.classList.add('hidden');
     this.jumpBar = this.jumpPct = null;
   };
   // 推进完成报告：推进一个月给出简短消息（可展开完整报告）；推进一年直接显示报告。
@@ -2365,7 +2374,7 @@
   UI.prototype.showJumpResult = function (r) {
     const g = this.g(), self = this, a = r.after;
     const months = (r.to[0] - r.from[0]) * 12 + (r.to[1] - r.from[1]);
-    this.clearJump();
+    this.clearFloat();
     if (months <= 1 && !r.failed) {
       const d = a.pop - r.before.pop;
       this.toast('已推进到 ' + r.to[0] + '年' + r.to[1] + '月：人口 ' + U.fmtPeople(a.pop) + '（' + (d >= 0 ? '+' : '−') + U.fmtPeople(Math.abs(d)) + '），地铁分担率 ' + U.fmtPct(a.share) + (g.econ.isFree() ? '' : '，资金 ' + U.fmtMoney(a.funds)), 'good', { label: '查看报告', fn: function () { self.showReport(r); } });

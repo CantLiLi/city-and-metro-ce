@@ -62,6 +62,7 @@
   // 第二根手指按下时进入缩放：取消单指的点击 / 拖动，按两指距离缩放、按中点平移；返回 true 表示事件已处理
   Tools.prototype.touchDown = function (e) {
     if (e.pointerType !== 'touch') return false;
+    if (this.ui.blocking()) return true;   // 时间推进等期间触屏也不响应
     const T = this.touches || (this.touches = new Map());
     T.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (T.size < 2) return false;
@@ -97,8 +98,8 @@
     const g = this.game(); if (!g) return;
     try { if (this.R.cv.setPointerCapture) this.R.cv.setPointerCapture(e.pointerId); } catch (err) { /* 指针已失效时忽略 */ }
     this.ptr = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: false, shift: e.shiftKey, alt: e.altKey, t: performance.now() };
-    // 结算动画、统计/网络图等遮挡期间：仍允许平移地图，只是不响应点击与建设
-    if (this.ui.blocking()) { this.ptr.blocked = true; return; }
+    // 时间推进、结算动画、统计/网络图等遮挡期间：指针一律不生效（点击、拖动、延长手柄都不响应）
+    if (this.ui.blocking()) { this.ptr.blocked = true; this.ptr.locked = true; return; }
     if (e.button === 1) { this.ptr.pan = true; e.preventDefault(); return; }
     // 延长手柄：进入绘线，拖到目标位置松开即连线（只点击则从该端点开始逐站绘制）
     const ext = e.button === 0 ? this.pickExtend(e.clientX, e.clientY) : null;
@@ -112,6 +113,7 @@
     const g = this.game(); if (!g) return;
     const R = this.R;
     this.mouse = { x: e.clientX, y: e.clientY };
+    if (this.ptr && this.ptr.locked) return;
     if (this.ptr) {
       const dx = e.clientX - this.ptr.x, dy = e.clientY - this.ptr.y;
       if (!this.ptr.moved && Math.hypot(e.clientX - this.ptr.sx, e.clientY - this.ptr.sy) > (e.pointerType === 'touch' ? 10 : 4)) this.ptr.moved = true;
@@ -127,7 +129,7 @@
   Tools.prototype.onUp = function (e) {
     const g = this.game(); const p = this.ptr; this.ptr = null;
     if (!g || !p) return;
-    if (p.blocked) return;
+    if (p.blocked || p.locked) return;
     if (this.drag) { const ch = this.drag.changed; this.drag = null; g.endLive(ch); if (ch) sfx('place'); return; }
     if (p.extend) { if (p.moved && this.tool === 'line' && this.chain) this.onClick(e.clientX, e.clientY, false); return; }
     if (p.pan && p.moved) return;
@@ -525,7 +527,7 @@
       t.blur();
       if (textual) return;
     }
-    if (!g || this.ui.blocking()) { if (e.key === 'Escape') this.ui.escape(); return; }
+    if (!g || this.ui.blocking() || g.jumping) { if (e.key === 'Escape') this.ui.escape(); return; }
     const k = e.key.toLowerCase();
     // 线路选择框打开时：数字键选择对应线路，Esc 关闭（保留当前选择）
     if (this.ui.linePicker && !e.ctrlKey && !e.metaKey && !e.altKey) {
