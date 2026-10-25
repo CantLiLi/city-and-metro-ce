@@ -50,7 +50,7 @@
     const wrap = h('div', { class: 'start-wrap' },
       title, edition, h('div', { html: TITLE_DECO }),
       h('div', { class: 'start-menu' },
-        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),        btn('clock', '继续游戏', function () { if (cont) self.loadSlot(cont.slotId); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : '暂无存档' }),
+        btn('play', '开始游戏', function () { self.showMapSelect(); }, { primary: true, sub: '选择地图' }),        btn('clock', '继续游戏', function () { if (cont) self.loadSlot(cont.slotId); else self.showSaveManager(); }, { disabled: !cont, sub: cont ? ((CM.MAPS[cont.map || 'gz'] || {}).name || '') + ' · ' + cont.date[0] + '年' + cont.date[1] + '月' : (CM.Save.indexOk() ? '暂无存档' : '存档清单没读到，点开存档页可修复') }),
         btn('gear', '设置', function () { self.showSettings(); }),
         btn('power', '退出', function () { self.quitGame(); })),
       CM.MAPS.tutorial ? h('button', { class: 'start-learn', onclick: function () { self.showMapSelect('tutorial'); } }, ic('help', 16), h('span', null, '第一次玩？先试试'), h('b', null, '新手教程 · 青湾'), ic('chev', 14)) : null,

@@ -255,6 +255,36 @@
     return true;
   }
 
+  // 并行求解时主线程只留零号片的完整快照，其余片的结果按自己的数据装进 odBuffer 带回来。
+  // 记录格式：dest 里依次是 [编号, 起, 止] 三个一组，六个目的的值放在 t[q] 的同一段位置上，
+  // 主线程按同样的区间取出来写回。区间以外的数各片本来都写在自己的成员上、合并时没用。
+  // 编号顺序和下面的 ODSLOT 一致。totStat（全网 14 项统计）、pT、pM 是跨起点累加的全局量，各片带回自己的部分和。
+  // carDem 走另一条路（按行的偏移拷回），不进记录。
+  const ODSLOT = ['totStat', 'pT', 'pM', 'hasCar', 'zTrips', 'zMetro', 'zAccess', 'desTot', 'desMetro', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP', 'DS'];
+  // 记录里的编号就是 ODSLOT 的下标，主线程按它对回数组名，两边必须一一对应
+  function odDump(K, i, o) {
+    const Z = K.Z, B = K.B, F = K.fIn.length, N = K.N;
+    let at = 0;
+    const totStat = K.totStat;
+    const put = function (arr, f0, f1) {
+      const n = f1 - f0;
+      if (o.cap - o.n < n) return;
+      o.dest[o.n] = at; o.dest[o.n + 1] = f0; o.dest[o.n + 2] = f1; o.n += 3;
+      for (let q = 0; q < 6; q++) o.t[q].set(arr.subarray(f0, f1), o.n);
+      o.n += n;
+      at++;
+    };
+    put(totStat, 0, 14);
+    put(K.pT, 0, 6);
+    put(K.pM, 0, 6);
+    put(K.hasCar, 0, K.hasCar.length);
+    put(K.zTrips, i, i + 1); put(K.zMetro, i, i + 1); put(K.zAccess, i, i + 1);
+    const blo = K.blocks[i] * B, bhi = blo + B;
+    put(K.desTot, blo, bhi); put(K.desMetro, blo, bhi);
+    put(K.zDest, 0, 6 * Z); put(K.zDestM, 0, 6 * Z);
+    put(K.fIn, 0, F); put(K.fInM, 0, F); put(K.fOut, 0, F); put(K.fOutM, 0, F); put(K.fP, 0, 6 * F);
+    put(K.DS, 0, Math.min(N * N, Math.min(K.NZ, Z) * N));
+  }
   // 需求表的输出缓冲区：目的地编号与六个目的的往返次数
   function odBuffer(cap) { return { cap: cap, dest: new Int32Array(cap), t: [0, 1, 2, 3, 4, 5].map(function () { return new Float32Array(cap); }) }; }
   function odGrow(b, n, cap) {
@@ -542,7 +572,7 @@
     const per = 240 + F + hubs.length;
     if (!ob || ob.cap < Z * 120) ob = this._odBufs[this._odFlip] = odBuffer(Z * 160);
     const D = { Z: Z, F: F, A: A, Ls: Ls, fA: fA, fL: fL, rate: rate, rw: rate.map(function (r) { return r / rsum; }), zPop: this.zPop, zJobs: this.zJobs, zAsum: zAsum,
-      zCx: this.zCx, zCy: this.zCy, nx: fn.nx, ny: fn.ny, hostZ: fn.hostZ, kmPerCell: kmPerCell, hubs: new Int32Array(hubs), hubTours: hubTours,
+      zCx: this.zCx, zCy: this.zCy, nx: fn.nx, ny: fn.ny, hostZ: fn.hostZ, kmPerCell: kmPerCell, hubs: hubs, hubTours: hubTours,
       w: [new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z), new Float64Array(Z)],
       wf: [null, new Float64Array(F), new Float64Array(F), new Float64Array(F), new Float64Array(F)],
       scores: new Float64Array(Z), s: new Float64Array(5), kk: new Float64Array(5), cand: new Int32Array(Z), candF: new Int32Array(Math.max(1, F)),
@@ -550,7 +580,7 @@
     // 各起点之间互相独立，可以分给 Worker 池并行算；A 分支在池里算，B 分支同样交给人口那一片
     const pm = CM.SimPar ? this.parMode() : null;
     if (par && pm) {
-      const r = yield { par: CM.SimPar.demand(D, Z) };
+      const r = yield { par: pm === 'A' ? CM.SimPar.demandAll(D, Z) : CM.SimPar.demand(D) };
       if (r) {
         this.od = { start: r.start, dest: r.dest, t: r.t, tot: r.tot, F: F, NZ: NZ, key: fn.key };
         this.version++;
@@ -977,11 +1007,6 @@
     const acc = hasMetro ? net.acc : null;
     const accOk = acc && acc.NZ === NZ && acc.facKey === fn.key;   // 接驳表与设施节点一致（城市刷新与网络同步之间的过渡状态下只用小区部分）
     const kmPerCell = CFG.CELL_M / 1000;
-    const pmB = CM.SimPar ? this.parMode() : null;
-    if (pmB === 'B' && opts.par && CM.SimPar.ready()) {
-      const q = yield { par: CM.SimPar.request(this.segInput(dt, p, P, opts, null), null) };
-      if (q && q.per && q.per[0]) { this.adopt(P, q.per[0]); this.computeDaily(); return; }
-    }
     P.desTot.fill(0); P.desMetro.fill(0); P.zTrips.fill(0); P.zMetro.fill(0); P.zAccess.fill(0);
     P.zDest.fill(0); P.zDestM.fill(0); P.fIn.fill(0); P.fInM.fill(0); P.fOut.fill(0); P.fOutM.fill(0); P.fP.fill(0);
     const BW = this.BW, ZW = this.ZW;
@@ -1003,12 +1028,21 @@
       perMin: IND.perMin, capSh: IND.cap.sh, capLz: IND.cap.lz,
       carDem: carDem, hasCar: hasCar, totStat: totStat, pT: pT, pM: pM, zTrips: P.zTrips, zMetro: P.zMetro, zAccess: P.zAccess, zJ: this.zJobs, blocks: blocks, desTot: P.desTot, desMetro: P.desMetro,
       zDest: P.zDest, zDestM: P.zDestM, fIn: P.fIn, fInM: P.fInM, fOut: P.fOut, fOutM: P.fOutM, fP: P.fP, task: dt + p };
-    // 多进程这一时段整段在池里算（见上面的分流），走到这里只剩串行：整套就地主算，池不可用时结果完全一致
+    // 起点这一趟怎么算，由设置里的「计算进程」决定（见 parMode）：
+    //   B 多进程 —— 起点这一段交给池里各片并行，回来时把跨起点需要求和的那几项并进 K；地铁加载与调度也由池里另一片算好送回；
+    //   A 单进程 —— 整套分配都在一个 Worker 里跑，主线程不进这个函数，这里只在池失效时兜底；
+    //   null     —— 池不可用（还在建、已休眠、出错回退），就地串行算，结果完全一致。
     let cnt = 0;
+    const pm = CM.SimPar ? this.parMode() : null;
+    const par = pm === 'B' && opts.par && CM.SimPar.ready() ? CM.SimPar.run(K, Z) : null;
     if (opts.tok) yield { tok: 1 };
-    for (let i = 0; i < Z; i++) {
-      odOrigin(K, i);
-      if ((++cnt & 7) === 0) yield;
+    if (par) {
+      yield { par: par };
+    } else {
+      for (let i = 0; i < Z; i++) {
+        odOrigin(K, i);
+        if ((++cnt & 7) === 0) yield;
+      }
     }
     st.trips = totStat[0]; st.metro = totStat[1]; st.car = totStat[2]; st.timeSum = totStat[3]; st.carTime = totStat[4]; st.metroTime = totStat[5]; st.fare = totStat[6]; st.metroPkm = totStat[7]; st.carPkm = totStat[8]; st.vkt = totStat[9];
     st.commTrips = totStat[10]; st.commTime = totStat[11]; st.ind = totStat[12]; st.indM = totStat[13];
@@ -1095,97 +1129,15 @@
       st.congDen += v * road.arcLen[a];
     }
     P.iters++;
-    P.facKey = fn.key;   // 数组下标只属于本次迭代使用的设施表，不能按新的设施顺序解读。
-    this.smoothStats(P, st, opts, stable);
-  };
-
-  // 统计平滑（显示更平稳）与不动点判定
-  Model.prototype.smoothStats = function (P, st, opts, stable) {
+    // 统计平滑（显示更平稳）
     if (P.stats && !opts.noSmooth) {
       const o = P.stats;
       for (const k in st) if (o[k] !== undefined) st[k] = o[k] * 0.4 + st[k] * 0.6;
     }
     if (stable && P.stats) for (const k in st) if (st[k] !== P.stats[k]) { stable = false; break; }
     P.stats = st;
+    P.facKey = fn.key;   // 数组下标只属于本次迭代使用的设施表，不能按新的设施顺序解读。
     P.stable = stable;
-    return st;
-  };
-
-  // 时段这一整段的纯输入：迭代输入（K 的纯数据部分）、方案参数、道路与网络、各路网源码。
-  // 多进程每轮只发这一份，片里就地组装 K，算完把整个时段交回来。
-  const NETK = ['N', 'nNodes', 'nE', 'R', 'eFrom', 'eTo', 'eType', 'eRoute', 'eSt', 'eKm', 'eT0', 'outStart', 'outEdge', 'rideEdge', 'boardEdge', 'routeKey', 'platBase'];
-  const ACCK = ['NZ', 'facKey', 'zl', 'zCov'];
-  const CARK = ['nN', 'nA', 'arcCap', 'arcT0', 'arcLen', 'arcFrom', 'arcTo', 'outStart', 'outArc', 'nZones'];
-  Model.prototype.statOf = function () {
-    const fn = this.fn, net = this.net, road = this.road, prm = this.params();
-    const od = this.od, C = CFG.trips, M = CFG.metro, fm = this.fareFor(0), ph = this.pHours, cf = this.capF;
-    const now = [od, net, this.roadData, fn, fn.F, this.zJobs, road, prm, fm, C, M, ph, cf];
-    let same = this._statAt && now.length === this._statAt.length;
-    if (same) for (let i = 0; i < now.length; i++) if (now[i] !== this._statAt[i]) { same = false; break; }
-    if (!same || !this._statO) {
-      const o = { NZ: fn.NZ, F: fn.F, Z: this.Z, B: this.B, bw: this.BW, zw: this.ZW, od: od, zJ: this.zJobs, hostZ: fn.hostZ, nx: fn.nx, ny: fn.ny, facWe: fn.we, facKey: fn.key, kmPerCell: CFG.CELL_M / 1000,
-        prm: null, fareFlat: fm, perMin: C.induced.perMin, capSh: C.induced.cap.sh, capLz: C.induced.cap.lz, capF: cf || 1,
-        cfg: null, road: null, roadData: this.roadData, net: null };
-      // prm 与 cfg 按值装：片里接到的一份和上次同引用就不推，所以这两份必须每次是新对象
-      o.prm = Object.assign({}, prm);
-      o.cfg = { trips: C, metro: M, wk: this.weekendMult(this.year), pHours: ph, bprA: CFG.road.bprA, rm: CFG.road.msa };
-      o.frame = { cfg: Object.assign({}, o.cfg), prm: Object.assign({}, o.prm) };
-      if (road) { o.road = {}; for (const k of CARK) o.road[k] = road[k]; }
-      if (net && net.R > 0) {
-        o.net = {}; for (const k of NETK) o.net[k] = net[k];
-        o.net.C = { stations: net.C.stations.map(function (s) { return { size: s.size }; }),
-          routes: net.C.routes.map(function (r) { return { cap: r.cap, lenM: r.lenM, cars: r.cars, loop: r.loop, cycleSec: r.cycleSec, nSt: r.stIdx.length }; }) };
-        o.net.acc = null;
-        if (net.acc) { o.net.acc = {}; for (const k of ACCK) o.net.acc[k] = net.acc[k]; }
-      }
-      this._statAt = now; this._statO = o;
-      return o;
-    }
-    return this._statO;
-  };
-  // 一个 P 交出去的那组数组
-  const PARRS = ['arcVol', 'arcTime', 'skimT', 'skimK', 'desTot', 'desMetro', 'zTrips', 'zMetro', 'zAccess', 'zDest', 'zDestM', 'fIn', 'fInM', 'fOut', 'fOutM', 'fP',
-    'load', 'freq', 'crowd', 'stIn', 'stOut', 'stXfer', 'stBoard', 'stDelay', 'pT', 'pM', 'choices'];
-  Model.prototype.perArrays = function (P) {
-    const o = {};
-    for (const k of PARRS) if (P[k]) o[k] = P[k];
-    if (!P.choices && this.fn.NZ) P.choices = new Int8Array(this.fn.NZ * this.fn.NZ);
-    // 这两份是片里的私货：按需求表尺寸自己留着复用，主线程只借用，不跟着当状态
-    if (!P.carDem || P.carDem.length !== this.Z * this.Z) P.carDem = new Float64Array(this.Z * this.Z);
-    if (!P.hasCar || P.hasCar.length !== this.Z) P.hasCar = new Uint8Array(this.Z);
-    o.carDem = P.carDem; o.hasCar = P.hasCar;
-    return o;
-  };
-  // 片里算完的时段接回主线程这份：数组按值拷回，统计与标记照搬
-  Model.prototype.adopt = function (P, r) {
-    if (r) {
-      for (let i = 0; i < PARRS.length; i++) { const k = PARRS[i], a = P[k], b = r.arr[i]; if (a && b && a !== b) a.set(b); else if (b) P[k] = b; }
-      P.iters = r.iters | 0;
-      P.facKey = r.facKey;
-      P.stats = r.stats;
-      P.stable = !!r.stable;
-      return;
-    }
-    for (let p = 0; p < NP; p++) this.perArrays(P.per[p]);
-  };
-  // 一段交给片里的那份：静态部分（statOf 缓存，按引用判重后只推一次）+ 这一段自己的动态值与数组。
-  // 每个 st 字段都是单值或数组，控制消息按值深拷，只有这段的数组也跟着走一次。
-  Model.prototype.segInput = function (dt, p, P, opts, slot) {
-    const s = this.statOf(), o = Object.assign({}, s);
-    o.dt = dt; o.p = p; o.iters = P.iters; o.fullSkim = !!opts.fullSkim; o.noSmooth = !!opts.noSmooth;
-    o.facW = dt === 'we'; o.lam = opts.lam; o.capF = s.capF; o.metroLam = opts.metroLam;
-    const fr = s.frame; o.cfg = fr.cfg; o.prm = fr.prm;
-    o.carSlot = slot; o.arr = this.perArrays(P);
-    const od = this.od;
-    if (od && od.start) o.od2 = { start: od.start, dest: od.dest, t: od.t, F: od.F, key: od.key };
-    return o;
-  };
-  // 汽车分配的辅助数组按片分配（键为时段）：同一时刻只有一片用它
-  Model.prototype.carSlotOf = function (key, need) {
-    if (!need) return null;
-    const S = this.carSlots || (this.carSlots = {}), road = this.road;
-    if (!S[key] || S[key].aux.length !== road.nA) S[key] = { aux: new Float32Array(road.nA), dist: new Float64Array(road.nN), dkm: new Float64Array(road.nN), pred: new Int32Array(road.nN), order: new Int32Array(road.nN), accN: new Float64Array(road.nN) };
-    return S[key];
   };
 
   // ---------------- 实时求解循环 ----------------
@@ -1195,13 +1147,6 @@
   //              Worker 那支算好的状态装回主线程这份，再继续算后面的汇总与输出。
   Model.prototype.parMode = function () {
     return CM.SimPar && CM.SimPar.ready() ? (CM.SimPar.multi() ? 'B' : 'A') : null;
-  };
-  // 静置超过一天多就拆掉池子：再回来时按当前片数重建，片里的静态输入反正会重推一次
-  Model.prototype.touchPool = function () {
-    const now = Date.now();
-    const stale = this.poolUsed && now - this.poolUsed > 864e5;
-    this.poolUsed = now;
-    if (stale && CM.SimPar) CM.SimPar.stop();
   };
 
   // 迭代里的 yield 有两种：不带值的节奏点、带 par 的等待点（这段已经交给 Worker 算，要等它回来）。
@@ -1236,80 +1181,35 @@
     }
     return list.map(function (s) { return s.value; });
   };
-  // 退回到主线程串行：先把片里可能还在算的时段收回来再算
-  Model.prototype.syncSegs = function* (dts) {
-    const ps = [];
-    for (const dt of dts) for (let p = 0; p < NP; p++) {
-      const P = this.ctxs[dt].per[p];
-      if (P.parBusy) { ps.push(P.parWait); P.parBusy = false; P.parWait = null; }
-    }
-    if (ps.length) yield { par: Promise.all(ps) };
-  };
-  // A 单进程：所有时段的几轮一起打包送进唯一那片，片里一轮接一轮算完再交回。
-  // 片里改的就是主线程这份 P（同一进程里按共享内存改），回来只需把各段的标记接过去。
-  Model.prototype.solveGenA = function* (cycles, dts) {
+  Model.prototype.solveGenA = function* (cycles, dts, noDaily) {
     this.wake();
-    this.touchPool();
     dts = dts || DT;
-    const c = Math.max(1, cycles | 0);
-    for (const dt of dts) this.handoff(this.ctxs[dt]);
-    const K = this.segInput(dts[0], 0, this.ctxs[dts[0]].per[0], { fullSkim: this.sinceChange < 1 }, null);
-    const got = yield { par: CM.SimPar.solveAll(K, { dts: dts, cycles: c, NP: NP }) };
-    // 池没接住：交回 false，调用方按串行补一遍
-    if (!got || !got.per) return false;
-    for (let i = 0; i < got.per.length; i++) {
-      const r = got.per[i];
-      if (!r) continue;
-      const P = this.ctxs[dts[(i / NP) | 0]].per;
-      const Q = P[i % NP];
-      if (!Q) continue;
-      Q.iters = r.iters | 0; Q.stable = !!r.stable; if (r.stats) Q.stats = r.stats;
-    }
-    return dts.every(function (dt) { return this.ctxs[dt].per.every(function (P) { return P.stable; }); }, this);
-  };
-  // 一段（dt+p）交给池里算一轮：主线程的 P 照样被片里按共享内存改着，所以这段标记为在池里
-  Model.prototype.startSeg = function (dt, p, P, opts) {
-    const slot = this.carSlotOf(dt + p, !!this.net && this.net.R > 0);
-    const pm = CM.SimPar.request(this.segInput(dt, p, P, opts, slot), slot);
-    if (!pm) return null;
-    P.parBusy = true; P.parWait = pm;
-    return { dt: dt, p: p, P: P, slot: slot, pm: pm };
-  };
-  // 各段一起算：一轮里所有段都交出去，等这一轮全回来再起下一轮。
-  // 每段都带自己那份状态在片里推进，只可能改自己这份，所以先后与串行一致。
-  Model.prototype.solveGenB = function* (cycles, dts) {
-    this.wake();
-    this.touchPool();
-    dts = dts || DT;
-    const c = Math.max(1, cycles | 0), list = [];
+    const req = { cycles: cycles, dts: dts, per: [], net: null };
     for (const dt of dts) {
       const ctx = this.ctxs[dt];
-      // 刚改过输入：先全量走一遍（与串行首个周期一致），之后只按变化的部分走
-      this.handoff(ctx);
       for (let p = 0; p < NP; p++) {
-        const g = this.startSeg(dt, p, ctx.per[p], { fullSkim: this.sinceChange < 1 });
-        if (g) list.push(g);
+        const P = ctx.per[p], o = { dt: dt, p: p, arr: {} };
+        for (const k of PERARR) if (P[k]) o.arr[k] = P[k];
+        o.iters = P.iters | 0;
+        req.per.push(o);
       }
     }
-    for (let round = 0; round < c; round++) {
-      const run = list.filter(function (g) { return !g.P.parBusy; });
-      if (!run.length) break;
-      yield { par: Promise.all(run.map(function (g) { return g.pm; })) };
-      for (const g of run) { g.P.parBusy = false; g.P.parWait = null; g.pm = null; }
-      // 刚改过输入时主线程这份也要跟上，下一轮交接的是片里刚算完的那份
-      if (this.sinceChange < 1) for (const g of run) this.perArrays(g.P);
-      if (round + 1 >= c) break;
-      for (const g of run) {
-        const pm = CM.SimPar.request(this.segInput(g.dt, g.p, g.P, {}, g.slot), g.slot);
-        if (!pm) continue;
-        g.pm = pm; g.P.parBusy = true; g.P.parWait = pm;
+    const r = yield { par: CM.SimPar.solveAll(req, this) };
+    if (!r) return false;
+    let i = 0;
+    for (const dt of dts) {
+      const ctx = this.ctxs[dt];
+      for (let p = 0; p < NP; p++) {
+        const P = ctx.per[p], q = r.per ? r.per[i++] : null;
+        if (!P || !q) continue;
+        for (const k of PERARR) if (P[k] && q[k] && P[k].set) P[k].set(q[k]);
+        P.iters = q.__iters | 0;
+        P.stable = !!q.__stable;
       }
     }
-    return dts.every(function (dt) { return this.ctxs[dt].per.every(function (P) { return P.stable; }); }, this);
-  };
-  // 交接给片里之前，确保主线程这份 P 有片里要的整套数组
-  Model.prototype.handoff = function (ctx) {
-    for (let p = 0; p < NP; p++) this.perArrays(ctx.per[p]);
+    if (!noDaily) this.computeDaily();
+    this.gen = null;
+    return true;
   };
   // 工作日与周末两套结果都保持收敛：先算当天的日类型，再算另一类；两套都到达精确不动点后停止
   Model.prototype.liveLoop = function* () {
@@ -1317,23 +1217,19 @@
       const order = this.dayType === 'we' ? ['we', 'wd'] : ['wd', 'we'];
       // A 单进程：整个循环打包送进唯一那个 Worker，结果装回来后再走后面的收敛判断
       if (this.parMode() === 'A') {
-        let okA = false;
-        try { okA = !!(yield* this.solveGenA(1, order)); } catch (e) { console.error(e); }
-        // 池没接住：这一轮按串行补一遍，别让收敛计数空转
-        if (!okA) {
-          yield* this.syncSegs(order);
-          for (const dt of order) for (let p = 0; p < NP; p++) yield* this.iterate(this.net, this.ctxs[dt].per[p], p, { fullSkim: this.sinceChange < 1, par: true });
-        }
+        const okA = yield* this.solveGenA(1, order, true);
         if (!okA) for (const dt of order) this.computeDaily();
       } else {
-        let okB = false;
-        try { okB = yield* this.solveGenB(1, order); } catch (e) { console.error(e); okB = false; }
-        // 同上：串行补这一轮，统计照常出
-        if (!okB) {
-          yield* this.syncSegs(order);
-          for (const dt of order) for (let p = 0; p < NP; p++) yield* this.iterate(this.net, this.ctxs[dt].per[p], p, { fullSkim: this.sinceChange < 1, par: true });
-        }
-        for (const dt of order) this.computeDaily();
+        const tasks = order.map(function (dt) {
+          const ctx = this.ctxs[dt];
+          return (function* () {
+            for (let p = 0; p < NP; p++) {
+              yield* this.iterate(this.net, ctx.per[p], p, { fullSkim: this.sinceChange < 1, par: true });
+              this.computeDaily();
+            }
+          }).call(this);
+        }, this);
+        yield* this.solveDrain(tasks);
       }
       this.cycles++; this.sinceChange++;
       const allStable = DT.every(function (dt) { return this.ctxs[dt].per.every(function (P) { return P.stable; }); }, this);
@@ -1343,10 +1239,7 @@
       if (this.quietCycles >= 2) {
         this.settled = true;
         this.settledAt = { year: this.year, fare: this.fare.flat, city: this.city.version, road: this.city.roadVersion, net: this.net, od: this.od };
-        // 收敛就结束这个生成器：留在 for(;;) 里只 yield 一次，被谁 next() 一下就又转一整轮，
-        // 而每轮都重建 statOf 并往池里推一份静态输入。gen 置空后 step 不再推进它
-        this.gen = null;
-        return;
+        yield;
       }
     }
   };
@@ -1367,15 +1260,7 @@
       this.wake();
     }
     if (!this.gen) this.gen = this.liveLoop();
-    // 生成器可能已被外部置空（重入或上一处异常清掉了），每一轮都重新确认一次，别对 null 调 next。
-    // 生成器抛错后置空并跳出：下一帧由 !this.gen 重建，不会在一帧里反复抛。
-    while (!this.settled && performance.now() - t0 < budget) {
-      if (!this.gen) this.gen = this.liveLoop();
-      const g = this.gen;
-      let r = null;
-      try { r = g.next(); } catch (e) { console.error(e); if (this.gen === g) this.gen = null; break; }
-      if (r.done) { if (this.gen === g) this.gen = null; break; }
-    }
+    while (!this.settled && performance.now() - t0 < budget) this.gen.next();
   };
   // 快速收敛（读档、跳月等场合），同步执行；dts 为要求解的日类型（默认工作日与周末）
   Model.prototype.solveNow = function (cycles, dts) {
@@ -1393,17 +1278,9 @@
     const jobs = [];
     for (let c = 0; c < cycles; c++) for (const dt of dts) jobs.push(run.call(this, dt, c));
     const pm = par ? this.parMode() : null;
-    // 池子失败（起不来、算错）时退回串行：一轮一轮地跑 jobs，别把整局卡在这里
-    // 池在算时片里按共享内存改主线程这份，结果本来就落在这里，不算“失败”：pool 为 true
-    let hit = false, pool = false;
-    if (pm === 'A') {
-      try { hit = !!(yield* this.solveGenA(cycles, dts)); } catch (e) { console.error(e); hit = false; }
-      pool = hit;
-    }
-    if (!hit && pm === 'B') { hit = !!(yield* this.solveGenB(cycles, dts)); pool = hit; }
-    // 池起不来或片崩了才退回串行；本来就在池里算完了的不要再跑一遍
-    if (!hit) for (const j of jobs) yield* j;
-    if (pool) for (const dt of dts) this.handoff(this.ctxs[dt]);
+    if (pm === 'A' && (yield* this.solveGenA(cycles, dts))) return;
+    if (pm === 'B') yield* this.solveDrain(jobs);
+    else for (const j of jobs) yield* j;
     this.computeDaily();
     this.gen = null;
   };
@@ -1573,13 +1450,6 @@
     if (!rt.loop && rt.cycleSec > 0) f = Math.max(f, 2 * 3600 / rt.cycleSec);
     return Math.min(f, mc.fMax);
   };
-  // Worker 里跑的是同一段逻辑，参数取片里那份配置
-  Model.serviceFloorSrc = function () {
-    return 'function serviceFloor(rt,p){var mc=S.cfg.metro;if(!rt)return mc.fMin[p];' +
-      'var ns=rt.nSt,sp=rt.lenM/1000/Math.max(1,rt.loop?ns:ns-1);' +
-      'var fs=U.clamp(1.5-0.35*sp,0.7,1.3),fn=U.clamp(0.82+ns/45,0.85,1.3);var f=mc.fMin[p]*fs*fn;' +
-      'if(!rt.loop&&rt.cycleSec>0)f=Math.max(f,2*3600/rt.cycleSec);return Math.min(f,mc.fMax);}';
-  };
   Model.prototype.freqAt = function (r, W) {
     if (!this.net || !W.svc) return 0;
     return this.live.per[W.p0].freq[r] * W.w0 + this.live.per[W.p1].freq[r] * W.w1;
@@ -1743,7 +1613,5 @@
   };
   Model.prototype.cancelPredict = function () { this.predJob = null; this.freePredPool(); };
   // 多核并行：把需求生成与出行分配的源码交给 sim-par.js，Worker 里跑的是同一份实现
-  if (CM.SimPar) CM.SimPar.setKernel({ od: odOrigin.toString(), dem: demandOrigin.toString(), buf: odBuffer.toString(),
-    grow: odGrow.toString(), car: carOrigin.toString(), rt: roadTree.toString(), load: metroLoadFrom.toString(), tree: metroTree.toString(),
-    svc: Model.serviceFloorSrc() });
+  if (CM.SimPar) CM.SimPar.setKernel(odOrigin.toString(), demandOrigin.toString(), odBuffer.toString(), odGrow.toString(), odDump.toString(), ODSLOT.join(','));
 })(window.CM);

@@ -38,6 +38,7 @@
     const cv = document.createElement('canvas');
     cv.className = 'perf-spark';
     cv.style.height = SPARK_H + 'px';
+    cv.width = 128; cv.height = SPARK_H;   // 先给个固定尺寸，画布不会把父级宽度顶大
     wrap.appendChild(t); wrap.appendChild(cv);
     return { wrap: wrap, cv: cv };
   }
@@ -87,7 +88,7 @@
     drawAll();
   }
   function drawSpark(cv, data, color, fill) {
-    const cssW = cv.clientWidth || 96;
+    const cssW = cv.clientWidth || 128;
     const zoom = (cv.getBoundingClientRect().width / cssW) || 1;
     const dpr = Math.min(3, (window.devicePixelRatio || 1) * zoom);
     const W = Math.max(1, Math.round(cssW * dpr)), H = Math.max(1, Math.round(SPARK_H * dpr));

@@ -148,23 +148,47 @@
       if (!r || !r.ok) {
         idxFailed = (r && r.error) || '读取失败';
         pyIndex = emptyIndex();
-        const e = new Error(idxFailed);
-        e.soft = true;
-        throw e;
+        return recoverIndex().then(function (idx) {
+          if (idx) return idx;
+          const e = new Error(idxFailed);
+          e.soft = true;
+          throw e;
+        });
       }
       pyIndex = normalizeIndex(r.index);
       // 外壳发现清单漏登记时会当场补好并标记 rebuilt：它已经写盘，这里马上重读，
       // 否则「继续游戏」还指在旧清单的槽位上
       return fillFromDir(r).then(function () { return readIndex(); });
     }, function (e) {
-      // 桥还没注入或 IPC 失败：绝不能当成「没有存档」，否则下一次写入会覆盖磁盘清单
+      // 桥还没注入或 IPC 失败：绝不能当成「没有存档」，否则下一次写入会覆盖磁盘清单。
+      // 但也不能直接把空清单摆给用户看：「继续游戏」会变成「暂无存档」，看起来就像存档没了
       idxFailed = errMsg(e);
       pyIndex = emptyIndex();
-      const err = new Error('存档清单没有读到：' + idxFailed);
-      err.soft = true;
-      throw err;
+      return recoverIndex().then(function (idx) {
+        if (idx) return idx;
+        const err = new Error('存档清单没有读到：' + idxFailed);
+        err.soft = true;
+        throw err;
+      });
     });
   };
+  // 清单读不出来时按存档目录里的文件把清单重建出来（只读桥：磁盘上还有存档文件才敢动手）。
+  // 存档文件还在、清单丢了或对不上，走这一条就能把进度找回来，不必让用户自己去存档页点修复
+  function recoverIndex() {
+    return deskCall('save_dir', []).then(function (d) {
+      if (!d || !(d.files > 0)) return null;
+      return deskCall('save_index_rebuild', []).then(function (r) {
+        if (!r || !r.ok) return null;
+        return deskCall('save_index_get', []).then(function (r2) {
+          if (!r2 || !r2.ok) return null;
+          pyIndex = normalizeIndex(r2.index);
+          idxFailed = '';
+          if (typeof console !== 'undefined') console.warn('存档清单没有读到，已按存档目录里的 ' + d.files + ' 个文件重建');
+          return fillFromDir(r2).then(function (idx) { return idx; });
+        });
+      });
+    }, function () { return null; });
+  }
   // 清单漏登记了存档文件时自动按文件补齐，返回补齐后的清单。
   // 外壳读到清单与存档目录对不上时会当场补好并把补齐结果一起返回（r.rebuilt），这里不再自己比对
   // 「文件数 > 条数」：存档轮换会留下旧文件，条数与文件数天然会差，按它判断会每次启动都重建一次清单
@@ -434,6 +458,17 @@
   // 清单是否真正读到了：界面据此决定能不能写盘
   Save.indexOk = function () { return !desk() || (!!pyIndex && !idxFailed); };
   Save.dir = function () { return desk() ? deskCall('save_dir', []).then(function (r) { return (r && r.dir) || ''; }, function () { return ''; }) : Promise.resolve(''); };
+  // 清单没读出来时，界面要说清「文件还在、有几个」，不能只写「暂无存档」
+  Save.describeFailure = function () {
+    if (!idxFailed) return '';
+    return deskCall('save_dir', []).then(function (d) {
+      const n = d && typeof d.files === 'number' ? d.files : 0;
+      if (!n) return '存档清单没有读出来（' + idxFailed + '），存档目录里也没有存档文件';
+      return '存档清单没有读出来（' + idxFailed + '），但存档目录里还有 ' + n + ' 个存档文件，点「修复存档清单」可以找回';
+    }, function () {
+      return '存档清单没有读出来（' + idxFailed + '）';
+    });
+  };
   // 按存档目录里的文件重建清单：清单丢了或对不上时，用它是能把进度找回来的
   Save.rebuildIndex = function () {
     if (!desk()) return Promise.reject(new Error('网页版没有存档目录，无法重建清单'));

@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 WINDOW_TITLE = APP_NAME + ' v' + VERSION
 ENGINE_TIMEOUT = 15
 SAVE_TIMEOUT = 20
+# 关窗前的存档等待上限：必须远小于 QUIT_FORCE_DELAY，否则时间全耗在等存档上，
+# 窗口还没被销毁就被强制结束，用户看到的是「点了退出，卡几秒才没」
+FLUSH_TIMEOUT = 4
+QUIT_FORCE_DELAY = 12
 APP_USER_MODEL_ID = 'CityAndMetro.' + APP_ID
 
 # 与 index.html 的 theme-color 同色，避免载入瞬间闪白；深色值取自页面深色背景
@@ -71,8 +75,9 @@ def wait_for_engine(win):
 
 def flush_and_destroy(win):
     """先等正在写的存档落盘，再销毁窗口；销毁后窗口仍没退出就强制结束进程。"""
-    # 存档等待与销毁共用这一个期限：evaluate_js 自己也可能卡住，不能只给等待存档计时
-    deadline = time.time() + SAVE_TIMEOUT
+    # 存档等待与销毁共用这一个期限：evaluate_js 自己也可能卡住，不能只给等待存档计时。
+    # 这个等待必须短于 force_exit_after 的兜底，否则时间全花在等存档上，窗口还没碰就被强杀。
+    deadline = time.time() + min(SAVE_TIMEOUT, FLUSH_TIMEOUT)
     try:
         win.evaluate_js(FLUSH_JS)
     except Exception:
@@ -82,20 +87,21 @@ def flush_and_destroy(win):
             if win.evaluate_js(WAIT_SAVED_JS) != 'busy':
                 break
         except Exception:
+            log.debug('等待存档状态失败', exc_info=True)
             break
         time.sleep(0.1)
     else:
-        log.warning('等待存档超时 %ss，仍然关闭', SAVE_TIMEOUT)
-    force_exit_after()
+        log.warning('等待存档超时 %ss，仍然关闭', FLUSH_TIMEOUT)
     if win is None:
-        return
+        os._exit(0)
     try:
         # 不能用 win.destroy()：它带 _shown_call，窗口没显示出来时会一直等 shown 事件；
-        # destroy_now 直接调底层 destroy_window，卡住的情况交给上面定的强制退出
+        # destroy_now 直接调底层 destroy_window，关不掉时再按句柄兜底
         window.destroy_now(win)
     except Exception:
         log.debug('销毁窗口失败，交给强制退出', exc_info=True)
-        destroy_and_quit(win)
+    # 关窗后 GUI 线程收尾还要一会儿；这里只是把兜底再往后推一点，别提前结束进程
+    force_exit_after(QUIT_FORCE_DELAY)
 
 
 # 关窗只有一条路径：主线程只做登记，存档等待与销毁都放在后台线程，
@@ -105,6 +111,15 @@ def request_quit(win, state):
     if state['closing']:
         return
     state['closing'] = True
+    # 兜底必须先设：写盘那一步会调 evaluate_js，它同步等 GUI 线程回调，
+    # 窗口卡住时这次调用可能永远不返回，等它后面的 force_exit 就永远等不到
+    force_exit_after(QUIT_FORCE_DELAY)
+    # 关窗也不能等存档：evaluate_js 一旦挂起，负责关窗的线程就再也走不到 destroy。
+    # 给它一个独立期限，到点不管存档写没写完都直接销毁窗口。
+    guard = threading.Timer(min(SAVE_TIMEOUT, FLUSH_TIMEOUT) + 1,
+                            lambda: window.destroy_now(win))
+    guard.daemon = True
+    guard.start()
     threading.Thread(target=lambda: flush_and_destroy(win), daemon=True).start()
 
 
@@ -126,9 +141,6 @@ def watch_quit_request(win, api, state):
 # 兜底退出：pywebview 的 cocoa 后端先建窗口、再注入 window.pywebview.api 与 ready 事件，
 # 启动早期（加载页、开始界面）点「退出」时 quit_app 常常还没暴露给网页，或 evaluate_js 直接失败。
 # 写盘与销毁仍走上面那一条路径，那条路径走不通时不再依赖界面，直接结束进程。
-QUIT_FORCE_DELAY = 12
-
-
 def force_exit_after(seconds=QUIT_FORCE_DELAY):
     def run():
         log.warning('%ss 内窗口没有关掉，强制结束进程', seconds)
@@ -138,7 +150,6 @@ def force_exit_after(seconds=QUIT_FORCE_DELAY):
     timer.daemon = True
     timer.start()
     return timer
-
 
 def destroy_and_quit(win):
     """窗口没关掉（或窗口对象本身就不在了）时的兜底：能销毁就销毁，销毁完仍没退出就结束进程。"""
@@ -274,7 +285,7 @@ def main():
     webview.start(
         private_mode=False,
         storage_path=storage.profile_dir(),
-        debug=True,
+        debug=False,
         localization={'global.quitConfirmation': '确定要退出城市与地铁社区版吗？'},
         icon=window.window_icon(),
     )

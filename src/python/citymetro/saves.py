@@ -353,4 +353,8 @@ class SaveStore:
 
     # ---------------- 目录信息 ----------------
     def info(self):
-        return {'ok': True, 'dir': self.root()}
+        # 清单读不出来时界面要给用户说清「存档文件还在」，这里顺带把磁盘上的存档数报上去
+        try:
+            return {'ok': True, 'dir': self.root(), 'files': self.files()}
+        except OSError:
+            return {'ok': True, 'dir': self.root(), 'files': 0}

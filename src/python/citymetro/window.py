@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -79,20 +80,79 @@ def destroy_now(win):
 
     Window.destroy 带 _shown_call 装饰，它会把 destroyed 事件提前置为已触发，所以再去等窗口关闭就等不到了；
     退出线程要等的是窗口真的关掉，这里直接调底层 destroy_window。
+
+    底层 destroy_window 是同步的：它要 Invoke 到 GUI 线程执行 Close()，而 Close() 会触发
+    on_closing / on_close 事件回调——回调若跑在调用方线程，就和这次的 Invoke 互相等待，两边都卡死，
+    窗口永远不关。所以关窗前先把 pywebview 自己那几个事件的回调线程锁摘掉，让回调在 GUI 线程里跑完。
     """
     if win is None:
         return
+    _unlock_events(win)
     try:
         import webview.guilib as guilib
 
         guilib.initialize(guilib.forced_gui_)
+        hwnd = window_handle()
         guilib.guilib.destroy_window(win.uid)
+        wait_gone(hwnd, 2)
     except Exception:
         log.debug('底层销毁窗口失败，退回 window.destroy', exc_info=True)
         try:
             win.destroy()
         except Exception:
             log.debug('销毁窗口失败', exc_info=True)
+    _kill_window(win)
+
+
+def _unlock_events(win):
+    events = getattr(win, 'events', None)
+    if events is None:
+        return
+    for name in dir(events):
+        if name.startswith('_'):
+            continue
+        try:
+            setattr(getattr(events, name), '_should_lock', False)
+        except Exception:
+            pass
+
+
+def _kill_window(win):
+    """兜底：按句柄结束本进程的可见窗口。
+
+    destroy_window 走不通（窗口对象已不在表里、GUI 线程已经退出）时，窗口还留在屏幕上；
+    这时直接结束它，比让用户对着关不掉的白窗口等十几秒强。
+    """
+    if win is None or sys.platform != 'win32':
+        return
+    hwnd = window_handle()
+    if not hwnd:
+        return
+    try:
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        WM_CLOSE = 0x0010
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        if not wait_gone(hwnd, 1.5):
+            user32.SendMessageW(hwnd, WM_CLOSE, 0, 0)
+        if not wait_gone(hwnd, 0.5):
+            user32.DestroyWindow(hwnd)
+    except Exception:
+        log.debug('结束窗口失败', exc_info=True)
+
+
+def wait_gone(hwnd, seconds):
+    """等窗口句柄消失；句柄为 0（非 Windows 或本来就没有窗口）当作已关掉。"""
+    if not hwnd:
+        return True
+    if sys.platform != 'win32':
+        return True
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not user32.IsWindow(hwnd):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def window_size():

@@ -44,13 +44,13 @@
 #perf .perf-row.hide { display: none; }
 #perf .perf-k { opacity: .6; letter-spacing: .04em; }
 #perf .perf-v { min-width: 52px; text-align: right; font-weight: 600; }
-#perf .perf-spark { display: block; width: 100%; margin-top: 2px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); }
-#perf .perf-chart { margin-top: 3px; }
+#perf .perf-spark { display: block; width: 100%; min-width: 0; margin-top: 2px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); }
+#perf .perf-chart { margin-top: 3px; width: 128px; }
 #perf .perf-chart.hide { display: none; }
 #perf .perf-cap { display: block; font-size: 10px; opacity: .5; letter-spacing: .05em; }
 /* 浮动小窗：可拖动、可收回；标题栏只在浮动时出现 */
 #perf .perf-bar { display: none; align-items: center; justify-content: space-between; gap: 10px; margin: -4px -9px 4px; padding: 2px 4px 2px 9px; border-bottom: 1px solid rgba(255, 255, 255, .1); }
-#perf.float { pointer-events: auto; right: auto; bottom: auto; z-index: 60; width: 148px; padding-top: 2px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 0 0 1px rgba(255, 255, 255, .08); }
+#perf.float { pointer-events: auto; right: auto; bottom: auto; z-index: 60; width: 146px; box-sizing: border-box; padding-top: 2px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 0 0 1px rgba(255, 255, 255, .08); }
 #perf.float .perf-bar { display: flex; cursor: grab; }
 #perf.float .perf-bar:active { cursor: grabbing; }
 #perf .perf-title { font-size: 11px; opacity: .65; letter-spacing: .06em; }

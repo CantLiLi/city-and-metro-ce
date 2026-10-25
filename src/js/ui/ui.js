@@ -1870,8 +1870,15 @@
     const text = desktop ? '当前进度会先保存，然后关闭窗口。下次打开可点击「继续游戏」。' : '进度已自动保存在本浏览器中，下次打开 index.html 可点击「继续游戏」。';
     // 桌面性要在点按钮时再判一次：卡片是在启动早期弹的，那时外壳可能还没把接口注进网页
     const go = function () {
-      if (CM.desktop && CM.desktop.isDesktop()) CM.desktop.quit();
-      else { try { window.close(); } catch (e) { /* ignore */ } }
+      if (CM.desktop && CM.desktop.isDesktop()) {
+        // 桌面版由外壳负责关窗：它要先等存档落盘，可能远超 120ms。
+        // 这里只处理「外壳明确拒绝」的情况，绝不能按时间猜——窗口没关掉是正常现象，不是失败。
+        CM.desktop.quit().then(function (ok) {
+          if (!ok) self.showQuitFallback();
+        }, function () { self.showQuitFallback(); });
+        return;
+      }
+      try { window.close(); } catch (e) { /* ignore */ }
       setTimeout(function () { if (!window.closed) self.showQuitFallback(); }, 120);
     };
     // 主界面：滑出一张确认卡片；游戏内：同样的悬浮面板
@@ -2075,6 +2082,7 @@
     const fileIn = h('input', { type: 'file', accept: '.json,.cmsave,application/json', style: { display: 'none' }, onchange: function (e) { const f = e.target.files[0]; if (f) self.importFile(f, true); e.target.value = ''; } });
     this._importInput = fileIn;
     const list = h('div');
+    const statusEl = h('div', { class: 'note bad', role: 'status', 'aria-live': 'polite' });
     const editing = new Set();
     const draw = function () {
       // 保存、导入等后台操作可能要求刷新列表；编辑结束前保留原输入框，避免丢字、焦点或打断中文输入。
@@ -2082,6 +2090,13 @@
       list.innerHTML = '';
       const games = CM.Save.list(mapId);
       if (!games.length) list.appendChild(h('div', { class: 'note' }, mapId ? '该地图暂无存档。' : '暂无存档。'));
+      // 清单本身就读不到时，「暂无存档」会骗人：这时候要说清是清单出问题，并说明文件还在
+      if (!CM.Save.indexOk()) {
+        statusEl.textContent = '存档清单没有读出来';
+        CM.Save.describeFailure().then(function (text) { statusEl.textContent = text || '存档清单没有读出来'; });
+      } else {
+        statusEl.textContent = '';
+      }
       for (const gm of games) {
         const grp = h('div', { class: 'game-group', 'data-game-id': gm.gameId });
         const title = h('span', { class: 'save-name-title' }, gm.name);
@@ -2153,7 +2168,7 @@
     const back = function () { if (inGame) self.closeOverlay(); else if (mapId) self.showMapSelect(mapId); else self.showStart(); };
     const card = h('div', { class: 'card wide' }, this.cardHead('folder', 'b-blue', '读取存档' + (mapId && CM.MAPS[mapId] ? ' · ' + CM.MAPS[mapId].name : '')),
       h('div', { class: 'note' }, '每个进度相互独立；自动存档在两个位置轮换写入，手动存档最多 ' + CFG.saves.maxManual + ' 个。导入的存档会作为新的存档加入，不会覆盖已有进度。'),
-      list, fileIn,
+      statusEl, list, fileIn,
       h('div', { class: 'modal-actions' },
         h('button', { class: 'btn', onclick: function () { self.pickImportFile(true); } }, ic('import'), '导入存档文件'),
         CM.desktop.isDesktop() ? h('button', { class: 'btn', onclick: function () { self.confirmRebuildIndex(inGame, mapId); } }, ic('folder'), '修复存档清单') : null,
